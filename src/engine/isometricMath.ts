@@ -32,6 +32,141 @@ export interface ObstacleBox {
   itemId?: string;
 }
 
+export const WALL_DECOR_IDS = new Set([
+  'wall_sconce_lamp',
+  'anatomy_poster',
+  'ac_nesma',
+  'ac_lg',
+]);
+
+export function isWallDecorId(catalogId: string): boolean {
+  return WALL_DECOR_IDS.has(catalogId);
+}
+
+/**
+ * Grassy side lawn directly beside the clinic opposite the Doctor's House
+ * (z = 23..25, x = 3..20) reserved for ground-mounted solar panel placement.
+ */
+export const SOLAR_ZONE = { minX: 3, maxX: 20, minY: 23, maxY: 25 } as const;
+
+export function isInSolarZone(gx: number, gy: number, effW = 1, effD = 1): boolean {
+  return (
+    gx >= SOLAR_ZONE.minX &&
+    gy >= SOLAR_ZONE.minY &&
+    gx + effW - 1 <= SOLAR_ZONE.maxX &&
+    gy + effD - 1 <= SOLAR_ZONE.maxY
+  );
+}
+
+export function clampToSolarZone(
+  gx: number,
+  gy: number,
+  effW = 1,
+  effD = 1
+): { gx: number; gy: number } {
+  return {
+    gx: Math.max(SOLAR_ZONE.minX, Math.min(SOLAR_ZONE.maxX - effW + 1, gx)),
+    gy: Math.max(SOLAR_ZONE.minY, Math.min(SOLAR_ZONE.maxY - effD + 1, gy)),
+  };
+}
+
+/**
+ * Returns all valid wall-mount orientations (0..3) at grid tile (gx, gy)
+ * inside unlocked rooms, excluding door openings and built-in wall signage.
+ */
+export function getValidWallRotationsForTile(
+  gx: number,
+  gy: number,
+  rooms: ClinicRoom[]
+): Array<0 | 1 | 2 | 3> {
+  const room = rooms.find(
+    (r) => r.unlocked && gx >= r.minX && gx <= r.maxX && gy >= r.minY && gy <= r.maxY
+  );
+  if (!room) return [];
+
+  const rots: Array<0 | 1 | 2 | 3> = [];
+
+  // 0 = West face (x = gx, facing +X into room)
+  if (gx === 2 && gy >= 2 && gy <= 21) {
+    // Built-in anatomy chart sits at x=2.175, z=15.8 (gy=15)
+    if (gy !== 15) rots.push(0);
+  } else if (gx === 12 && gy >= 2 && gy <= 21) {
+    // Exclude doors (gy=5, 14) and built-in plaques (cert z=12.0, logo z=18.6)
+    const isDoor = gy === 5 || gy === 14;
+    const isBuiltIn = gy === 11 || gy === 12 || gy === 17 || gy === 18 || gy === 19;
+    if (!isDoor && !isBuiltIn) rots.push(0);
+  }
+
+  // 1 = North face (z = gy, facing +Z into room)
+  if (gy === 2 && gx >= 2 && gx <= 21) {
+    rots.push(1);
+  } else if (gy === 10 && gx >= 2 && gx <= 21) {
+    const isDoor = gx === 6 || gx === 16;
+    if (!isDoor) rots.push(1);
+  }
+
+  // 2 = East face (x = gx + 1, facing -X into room)
+  if (gx === 11 && gy >= 2 && gy <= 21) {
+    const isDoor = gy === 5 || gy === 14;
+    if (!isDoor) rots.push(2);
+  }
+
+  // 3 = South face (z = gy + 1, facing -Z into room)
+  if (gy === 9 && gx >= 2 && gx <= 21) {
+    const isDoor = gx === 6 || gx === 16;
+    if (!isDoor) rots.push(3);
+  }
+
+  return rots;
+}
+
+export function isValidWallMount(
+  gx: number,
+  gy: number,
+  rotation: 0 | 1 | 2 | 3,
+  rooms: ClinicRoom[]
+): boolean {
+  return getValidWallRotationsForTile(gx, gy, rooms).includes(rotation);
+}
+
+export function getWallMountEdgeCenter(
+  gx: number,
+  gy: number,
+  rotation: 0 | 1 | 2 | 3
+): { x: number; z: number } {
+  if (rotation === 0) return { x: gx + 0.12, z: gy + 0.5 };
+  if (rotation === 1) return { x: gx + 0.5, z: gy + 0.12 };
+  if (rotation === 2) return { x: gx + 0.88, z: gy + 0.5 };
+  return { x: gx + 0.5, z: gy + 0.88 };
+}
+
+export function snapToNearestValidWallSlot(
+  rawX: number,
+  rawZ: number,
+  preferredRot: 0 | 1 | 2 | 3,
+  rooms: ClinicRoom[]
+): { gx: number; gy: number; rotation: 0 | 1 | 2 | 3 } | null {
+  let best: { gx: number; gy: number; rotation: 0 | 1 | 2 | 3; score: number } | null = null;
+
+  for (let gx = 2; gx <= 21; gx++) {
+    for (let gy = 2; gy <= 21; gy++) {
+      const rots = getValidWallRotationsForTile(gx, gy, rooms);
+      if (rots.length === 0) continue;
+      for (const rot of rots) {
+        const edge = getWallMountEdgeCenter(gx, gy, rot);
+        const distSq = (rawX - edge.x) * (rawX - edge.x) + (rawZ - edge.z) * (rawZ - edge.z);
+        const rotBonus = rot === preferredRot ? -0.02 : 0;
+        const score = distSq + rotBonus;
+        if (!best || score < best.score) {
+          best = { gx, gy, rotation: rot, score };
+        }
+      }
+    }
+  }
+
+  return best ? { gx: best.gx, gy: best.gy, rotation: best.rotation } : null;
+}
+
 /**
  * Builds world-space AABB collision boxes matching the 3D walls, doors, fences,
  * fountain, doctor villa, locked wings, and placed furniture.
@@ -42,49 +177,51 @@ export function buildObstacleBoxes(
   itemFootprints: Map<string, { w: number; d: number }>
 ): ObstacleBox[] {
   const boxes: ObstacleBox[] = [];
-  const halfWall = 0.11;
+  const halfBackWall = 0.15;
+  const halfFrontWall = 0.12;
+  const halfInteriorWall = 0.1;
 
   const unlockedSet = new Set(rooms.filter((r) => r.unlocked).map((r) => r.id));
 
   // Outer Perimeter Walls (x: 2..22, z: 2..22)
   // North back wall z = 2
-  boxes.push({ minX: 1.88, maxX: 22.12, minZ: 2 - halfWall, maxZ: 2 + halfWall });
+  boxes.push({ minX: 1.85, maxX: 22.15, minZ: 2 - halfBackWall, maxZ: 2 + halfBackWall });
   // West back wall x = 2
-  boxes.push({ minX: 2 - halfWall, maxX: 2 + halfWall, minZ: 1.88, maxZ: 22.12 });
+  boxes.push({ minX: 2 - halfBackWall, maxX: 2 + halfBackWall, minZ: 1.85, maxZ: 22.15 });
   // South front knee wall z = 22
-  boxes.push({ minX: 1.88, maxX: 22.12, minZ: 22 - halfWall, maxZ: 22 + halfWall });
+  boxes.push({ minX: 1.88, maxX: 22.12, minZ: 22 - halfFrontWall, maxZ: 22 + halfFrontWall });
   // East storefront wall x = 22 with automatic double-door opening z = 14.08..15.92
-  boxes.push({ minX: 22 - halfWall, maxX: 22 + halfWall, minZ: 1.88, maxZ: 14.08 });
-  boxes.push({ minX: 22 - halfWall, maxX: 22 + halfWall, minZ: 15.92, maxZ: 22.12 });
+  boxes.push({ minX: 22 - halfFrontWall, maxX: 22 + halfFrontWall, minZ: 1.88, maxZ: 14.08 });
+  boxes.push({ minX: 22 - halfFrontWall, maxX: 22 + halfFrontWall, minZ: 15.92, maxZ: 22.12 });
 
   // Interior horizontal partition z = 10
   // Doors at x = 6.08..6.92 (door_bay_west) and x = 16.08..16.92 (door_rec_east)
   const bayNorthOpen = unlockedSet.has('room_gym');
   const recNorthOpen = unlockedSet.has('room_specialty_2');
   if (bayNorthOpen) {
-    boxes.push({ minX: 2.0, maxX: 6.08, minZ: 10 - 0.09, maxZ: 10 + 0.09 });
-    boxes.push({ minX: 6.92, maxX: 12.0, minZ: 10 - 0.09, maxZ: 10 + 0.09 });
+    boxes.push({ minX: 2.0, maxX: 6.08, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
+    boxes.push({ minX: 6.92, maxX: 12.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   } else {
-    boxes.push({ minX: 2.0, maxX: 12.0, minZ: 10 - 0.09, maxZ: 10 + 0.09 });
+    boxes.push({ minX: 2.0, maxX: 12.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   }
   if (recNorthOpen) {
-    boxes.push({ minX: 12.0, maxX: 16.08, minZ: 10 - 0.09, maxZ: 10 + 0.09 });
-    boxes.push({ minX: 16.92, maxX: 22.0, minZ: 10 - 0.09, maxZ: 10 + 0.09 });
+    boxes.push({ minX: 12.0, maxX: 16.08, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
+    boxes.push({ minX: 16.92, maxX: 22.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   } else {
-    boxes.push({ minX: 12.0, maxX: 22.0, minZ: 10 - 0.09, maxZ: 10 + 0.09 });
+    boxes.push({ minX: 12.0, maxX: 22.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   }
 
   // Interior vertical partition x = 12
   // Doors at z = 5.08..5.92 (door_west_east) and z = 14.08..14.92 (door_reception_bay)
   const northLinkOpen = unlockedSet.has('room_gym') && unlockedSet.has('room_specialty_2');
   if (northLinkOpen) {
-    boxes.push({ minX: 12 - 0.09, maxX: 12 + 0.09, minZ: 2.0, maxZ: 5.08 });
-    boxes.push({ minX: 12 - 0.09, maxX: 12 + 0.09, minZ: 5.92, maxZ: 10.0 });
+    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 2.0, maxZ: 5.08 });
+    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 5.92, maxZ: 10.0 });
   } else {
-    boxes.push({ minX: 12 - 0.09, maxX: 12 + 0.09, minZ: 2.0, maxZ: 10.0 });
+    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 2.0, maxZ: 10.0 });
   }
-  boxes.push({ minX: 12 - 0.09, maxX: 12 + 0.09, minZ: 10.0, maxZ: 14.08 });
-  boxes.push({ minX: 12 - 0.09, maxX: 12 + 0.09, minZ: 14.92, maxZ: 22.0 });
+  boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 10.0, maxZ: 14.08 });
+  boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 14.92, maxZ: 22.0 });
 
   // Locked Rooms as solid keep-out zones
   for (const r of rooms) {
@@ -142,26 +279,24 @@ export function buildObstacleBoxes(
 
   // Placed furniture & medical equipment AABBs (inset slightly so movement flows past edges cleanly)
   for (const item of placedItems) {
-    // Walkable carpets/rugs never block movement
-    if (item.catalogId === 'floor_rug') continue;
+    // Walkable rugs and elevated wall-mounted items never block floor movement
+    if (item.catalogId === 'floor_rug' || WALL_DECOR_IDS.has(item.catalogId)) continue;
 
     const fp = itemFootprints.get(item.catalogId) || { w: 1, d: 1 };
     const w = item.rotation % 2 === 0 ? fp.w : fp.d;
     const d = item.rotation % 2 === 0 ? fp.d : fp.w;
     const inset =
-      item.catalogId === 'wall_sconce_lamp'
-        ? 0.38
-        : item.catalogId === 'exercise_mat'
-          ? 0.25
-          : item.catalogId === 'waste_bin' ||
-              item.catalogId === 'doctor_stool' ||
-              item.catalogId === 'sanitizing_kiosk'
-            ? 0.24
-            : item.catalogId === 'flower_bed' ||
-                item.catalogId === 'garden_lamp' ||
-                item.catalogId === 'garden_spot_lamp'
-              ? 0.14
-              : 0.1;
+      item.catalogId === 'exercise_mat'
+        ? 0.25
+        : item.catalogId === 'waste_bin' ||
+            item.catalogId === 'doctor_stool' ||
+            item.catalogId === 'sanitizing_kiosk'
+          ? 0.24
+          : item.catalogId === 'flower_bed' ||
+              item.catalogId === 'garden_lamp' ||
+              item.catalogId === 'garden_spot_lamp'
+            ? 0.14
+            : 0.1;
     boxes.push({
       minX: item.gridX + inset,
       maxX: item.gridX + w - inset,
@@ -499,6 +634,7 @@ export function findGridPath(
   // Build blocked set for furniture, exterior doctor villa pad, and courtyard fountain
   const blocked = new Set<string>(['24,7', '25,7', '24,8', '25,8']);
   for (const item of placedItems) {
+    if (item.catalogId === 'floor_rug' || WALL_DECOR_IDS.has(item.catalogId)) continue;
     const fp = itemFootprints.get(item.catalogId) || { w: 1, d: 1 };
     const w = item.rotation % 2 === 0 ? fp.w : fp.d;
     const d = item.rotation % 2 === 0 ? fp.d : fp.w;

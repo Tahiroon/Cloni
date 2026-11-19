@@ -26,6 +26,13 @@ export interface TextureBundle {
   certificateFrame: THREE.CanvasTexture;
   sconceWash: THREE.CanvasTexture;
   sconcePool: THREE.CanvasTexture;
+  lgAcFront: THREE.CanvasTexture;
+  nesmaPad: THREE.CanvasTexture;
+  nesmaBadge: THREE.CanvasTexture;
+  solarCell: THREE.CanvasTexture;
+  palmFrond: THREE.CanvasTexture;
+  roseFoliage: THREE.CanvasTexture;
+  blossomFoliage: THREE.CanvasTexture;
   dispose: () => void;
 }
 
@@ -750,6 +757,330 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, 1, 1, 1, true, true));
   })();
 
+  // 17. LG Dual Inverter modern AC dark display strip (LG logo + DUAL Inverter + glowing 22°C readout)
+  const lgAcFront = (() => {
+    const [c, ctx] = makeCanvas(512, 128);
+    const bg = ctx.createLinearGradient(0, 0, 512, 128);
+    bg.addColorStop(0, '#0f172a');
+    bg.addColorStop(0.5, '#1e293b');
+    bg.addColorStop(1, '#0b1322');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 512, 128);
+
+    // Subtle metallic top trim line
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillRect(0, 0, 512, 4);
+
+    // LG signature burgundy emblem circle
+    ctx.fillStyle = '#a50034';
+    ctx.beginPath();
+    ctx.arc(62, 64, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(62, 64, 21, -Math.PI * 0.45, Math.PI * 1.15);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(62, 46);
+    ctx.lineTo(62, 68);
+    ctx.lineTo(76, 68);
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(54, 56, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // LG & DUAL Inverter text
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '800 32px "Plus Jakarta Sans", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LG', 104, 54);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '700 15px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText('DUAL Inverter', 105, 84);
+
+    // Right-side digital temperature LED window
+    ctx.fillStyle = '#020617';
+    ctx.beginPath();
+    ctx.roundRect(356, 28, 122, 72, 12);
+    ctx.fill();
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = '800 36px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('22°C', 417, 65);
+
+    ctx.fillStyle = '#34d399';
+    ctx.beginPath();
+    ctx.arc(332, 64, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 18. Nesma evaporative water AC recessed honeycomb celdek cooling pad texture
+  const nesmaPad = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#4c3824';
+    ctx.fillRect(0, 0, 256, 256);
+    ctx.strokeStyle = '#755739';
+    ctx.lineWidth = 3;
+    for (let i = -256; i < 512; i += 14) {
+      ctx.beginPath();
+      ctx.moveTo(i, 0);
+      ctx.lineTo(i + 256, 256);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(i + 256, 0);
+      ctx.lineTo(i, 256);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(14, 165, 233, 0.14)';
+    ctx.fillRect(0, 0, 256, 256);
+    return track(finalizeTexture(c, aniso, 2, 2, true));
+  })();
+
+  // 19. Nesma water AC front control/nameplate badge
+  const nesmaBadge = (() => {
+    const [c, ctx] = makeCanvas(256, 96);
+    ctx.fillStyle = '#0f365c';
+    ctx.fillRect(0, 0, 256, 96);
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(4, 4, 248, 88);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 26px "Cairo", "Plus Jakarta Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('NESMA · نسمة', 128, 36);
+    ctx.fillStyle = '#7dd3fc';
+    ctx.font = '700 14px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText('HYDRO EVAPORATIVE COOLER', 128, 68);
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 20. High-efficiency half-cut monocrystalline photovoltaic solar panel texture
+  const solarCell = (() => {
+    const [c, ctx] = makeCanvas(512, 768);
+    const w = 512;
+    const h = 768;
+
+    // Bright EVA/tedlar backsheet substrate visible cleanly between cells
+    ctx.fillStyle = '#dce4ee';
+    ctx.fillRect(0, 0, w, h);
+
+    // Subtle dark outer anti-glare perimeter border inside frame
+    ctx.fillStyle = '#091529';
+    ctx.fillRect(4, 4, w - 8, h - 8);
+
+    const cols = 6;
+    const rows = 12;
+    const padX = 12;
+    const padY = 14;
+    const midSplit = 10; // central horizontal half-cut string busbar zone
+    const cellW = (w - padX * 2) / cols;
+    const cellH = (h - padY * 2 - midSplit) / rows;
+    const gap = 3.5;
+
+    for (let r = 0; r < rows; r++) {
+      const extraY = r >= rows / 2 ? midSplit : 0;
+      for (let col = 0; col < cols; col++) {
+        const x = padX + col * cellW;
+        const y = padY + r * cellH + extraY;
+
+        // Monocrystalline chamfered silicon wafer polygon
+        const cx0 = x + gap * 0.5;
+        const cy0 = y + gap * 0.5;
+        const cw = cellW - gap;
+        const ch = cellH - gap;
+        const chf = 6;
+
+        // Exposed white tedlar diamond backdrop under chamfer corners
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillRect(cx0, cy0, cw, ch);
+
+        const cellGrad = ctx.createLinearGradient(cx0, cy0, cx0 + cw, cy0 + ch);
+        cellGrad.addColorStop(0, '#0a1f47');
+        cellGrad.addColorStop(0.5, '#12336e');
+        cellGrad.addColorStop(1, '#071734');
+        ctx.fillStyle = cellGrad;
+        ctx.beginPath();
+        ctx.moveTo(cx0 + chf, cy0);
+        ctx.lineTo(cx0 + cw - chf, cy0);
+        ctx.lineTo(cx0 + cw, cy0 + chf);
+        ctx.lineTo(cx0 + cw, cy0 + ch - chf);
+        ctx.lineTo(cx0 + cw - chf, cy0 + ch);
+        ctx.lineTo(cx0 + chf, cy0 + ch);
+        ctx.lineTo(cx0, cy0 + ch - chf);
+        ctx.lineTo(cx0, cy0 + chf);
+        ctx.closePath();
+        ctx.fill();
+
+        // Subtle silicon collector fingers
+        ctx.strokeStyle = 'rgba(148, 197, 255, 0.18)';
+        ctx.lineWidth = 1;
+        for (let f = 1; f <= 4; f++) {
+          const fy = cy0 + (ch * f) / 5;
+          ctx.beginPath();
+          ctx.moveTo(cx0 + 2, fy);
+          ctx.lineTo(cx0 + cw - 2, fy);
+          ctx.stroke();
+        }
+
+        // 5 fine silver MBB (multi-busbar) ribbons per half-cut wafer
+        ctx.fillStyle = 'rgba(226, 232, 240, 0.58)';
+        for (let b = 1; b <= 5; b++) {
+          const bx = cx0 + (cw * b) / 6;
+          ctx.fillRect(bx - 0.6, cy0 + 1, 1.3, ch - 2);
+        }
+      }
+    }
+
+    // Center metallic string interconnect bar
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillRect(padX, padY + (rows / 2) * cellH + 2, w - padX * 2, midSplit - 4);
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(padX, padY + (rows / 2) * cellH + midSplit * 0.5 - 1, w - padX * 2, 2);
+
+    // Subtle specular tempered-glass reflection gradient
+    const sheen = ctx.createLinearGradient(0, 0, w, h * 0.62);
+    sheen.addColorStop(0, 'rgba(186, 230, 253, 0.26)');
+    sheen.addColorStop(0.4, 'rgba(186, 230, 253, 0.05)');
+    sheen.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(0, 0, w, h);
+
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 21. Alpha-cutout feathery pinnate palm frond texture
+  const palmFrond = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.clearRect(0, 0, 256, 256);
+    // Central rachis stem
+    ctx.strokeStyle = '#658f36';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(128, 252);
+    ctx.quadraticCurveTo(132, 130, 128, 12);
+    ctx.stroke();
+
+    // Pinnate leaflets radiating along both sides
+    for (let i = 0; i < 22; i++) {
+      const t = i / 21;
+      const sy = 236 - t * 214;
+      const len = Math.sin(Math.pow(t, 0.72) * Math.PI) * 102 + 16;
+      for (const side of [-1, 1]) {
+        const tipX = 128 + side * len;
+        const tipY = sy - 26 - t * 14;
+        const grad = ctx.createLinearGradient(128, sy, tipX, tipY);
+        grad.addColorStop(0, '#2d5a24');
+        grad.addColorStop(0.6, '#4c8532');
+        grad.addColorStop(1, '#79ad46');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(128, sy - 3);
+        ctx.quadraticCurveTo(128 + side * len * 0.5, sy - 16, tipX, tipY);
+        ctx.quadraticCurveTo(128 + side * len * 0.48, sy - 4, 128, sy + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor
+  const roseFoliage = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.clearRect(0, 0, 256, 256);
+    const leafColors = ['#264f21', '#356c2a', '#488435', '#2e5d24'];
+    for (let i = 0; i < 42; i++) {
+      const lx = 128 + Math.cos(i * 2.4) * (20 + (i % 5) * 16);
+      const ly = 128 + Math.sin(i * 1.9) * (20 + (i % 4) * 17);
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(i * 1.15);
+      ctx.fillStyle = leafColors[i % leafColors.length];
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 22, 11, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    const roseShades = [
+      ['#be123c', '#fb7185', '#ffe4e6'],
+      ['#e11d48', '#fda4af', '#fff1f2'],
+      ['#d97706', '#fcd34d', '#fef9c3'],
+      ['#c026d3', '#f0abfc', '#fdf4ff'],
+    ];
+    for (let b = 0; b < 9; b++) {
+      const bx = 64 + ((b * 47) % 128);
+      const by = 58 + ((b * 61) % 136);
+      const [outerCol, midCol, coreCol] = roseShades[b % roseShades.length];
+      for (let p = 0; p < 5; p++) {
+        const pa = (p / 5) * Math.PI * 2 + b;
+        ctx.fillStyle = outerCol;
+        ctx.beginPath();
+        ctx.arc(bx + Math.cos(pa) * 9, by + Math.sin(pa) * 9, 9, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = midCol;
+      ctx.beginPath();
+      ctx.arc(bx, by, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = coreCol;
+      ctx.beginPath();
+      ctx.arc(bx - 1.5, by - 1.5, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 23. Alpha-cutout rich flowering courtyard tree foliage card
+  const blossomFoliage = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.clearRect(0, 0, 256, 256);
+    const leafTones = ['#234f20', '#2f6828', '#428336', '#569c41', '#69ab4b'];
+    for (let i = 0; i < 64; i++) {
+      const ang = i * 2.399;
+      const rad = Math.sqrt(i / 64) * 92;
+      const lx = 128 + Math.cos(ang) * rad;
+      const ly = 128 + Math.sin(ang) * rad;
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(ang + 0.6);
+      ctx.fillStyle = leafTones[i % leafTones.length];
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 21, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    // Delicate ivory-cream & warm gold tree blossoms nestled in outer canopy
+    for (let k = 0; k < 12; k++) {
+      const ang = k * 2.1 + 0.4;
+      const rad = 36 + (k % 3) * 24;
+      const bx = 128 + Math.cos(ang) * rad;
+      const by = 128 + Math.sin(ang) * rad;
+      ctx.fillStyle = k % 3 === 0 ? '#fef3c7' : '#ffffff';
+      for (let p = 0; p < 5; p++) {
+        const pa = (p / 5) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(bx + Math.cos(pa) * 5.5, by + Math.sin(pa) * 5.5, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(bx, by, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
   return {
     tileBlue,
     tileBlueRough,
@@ -776,6 +1107,13 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     certificateFrame,
     sconceWash,
     sconcePool,
+    lgAcFront,
+    nesmaPad,
+    nesmaBadge,
+    solarCell,
+    palmFrond,
+    roseFoliage,
+    blossomFoliage,
     dispose: () => {
       created.forEach((t) => t.dispose());
     },

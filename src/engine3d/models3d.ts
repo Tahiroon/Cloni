@@ -122,13 +122,40 @@ export function updateDoors3D(
 
 // Lightweight exterior & clinic architecture builder (vehicle-free for clean mobile FPS)
 
+export interface WorldTreeDef {
+  id: string;
+  x: number;
+  z: number;
+  scale: number;
+  rotY: number;
+  removeCost: number;
+}
+
+export const WORLD_TREES: WorldTreeDef[] = [
+  { id: 'tree_01', x: -0.2, z: 0.2, scale: 1.24, rotY: 0.4, removeCost: 80 },
+  { id: 'tree_02', x: 0.2, z: 9.4, scale: 1.04, rotY: 1.8, removeCost: 80 },
+  { id: 'tree_03', x: 0.1, z: 18.4, scale: 1.18, rotY: 3.1, removeCost: 80 },
+  { id: 'tree_04', x: 0.5, z: 25.0, scale: 1.22, rotY: 0.9, removeCost: 80 },
+  { id: 'tree_05', x: 8.2, z: 27.8, scale: 1.02, rotY: 2.5, removeCost: 80 },
+  { id: 'tree_06', x: 16.6, z: 27.8, scale: 1.12, rotY: 4.2, removeCost: 80 },
+  { id: 'tree_07', x: 13.4, z: -0.4, scale: 1.08, rotY: 1.2, removeCost: 80 },
+  { id: 'tree_08', x: 2.6, z: -4.6, scale: 1.28, rotY: 2.1, removeCost: 80 },
+  { id: 'tree_09', x: 12.4, z: -5.0, scale: 1.18, rotY: 5.0, removeCost: 80 },
+  { id: 'tree_10', x: 24.4, z: 0.3, scale: 0.94, rotY: 3.6, removeCost: 80 },
+  { id: 'tree_11', x: 25.2, z: 24.4, scale: 1.14, rotY: 0.6, removeCost: 80 },
+  { id: 'tree_12', x: 39.4, z: 3.4, scale: 1.22, rotY: 2.9, removeCost: 80 },
+  { id: 'tree_13', x: 39.6, z: 19.8, scale: 1.16, rotY: 4.7, removeCost: 80 },
+  { id: 'tree_14', x: 40.2, z: 11.4, scale: 0.94, rotY: 1.5, removeCost: 80 },
+];
+
 /**
  * Builds the realistic architectural clinic, sky dome, distant horizon,
  * paved avenue + cars, fountain courtyard, and natural multi-branch trees.
  */
 export function buildClinicWorld3D(
   rooms: ClinicRoom[],
-  textures: TextureBundle
+  textures: TextureBundle,
+  removedTreeIds: string[] = []
 ): ClinicWorldHandle {
   const root = new THREE.Group();
   const disposables: Array<{ dispose: () => void }> = [];
@@ -197,7 +224,7 @@ export function buildClinicWorld3D(
       `,
     })
   );
-  const skyDome = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(140, 24, 16)), skyMat);
+  const skyDome = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(140, 18, 12)), skyMat);
   skyDome.position.set(14, 0, 12);
   root.add(skyDome);
 
@@ -231,13 +258,18 @@ export function buildClinicWorld3D(
         `#include <color_fragment>
         float nMacro = gNoise(vGrassWorldXZ * 0.14);
         float nMid = gNoise(vGrassWorldXZ * 0.55 + vec2(11.3, 4.7));
-        float mixFactor = nMacro * 0.65 + nMid * 0.35;
+        float nFine = gNoise(vGrassWorldXZ * 1.65 + vec2(23.1, 9.4));
+        float mixFactor = nMacro * 0.62 + nMid * 0.38;
+        float nPatch = gNoise(vGrassWorldXZ * 0.44 + vec2(5.2, 17.8)) * 0.6 + nFine * 0.4;
+        float bareEarth = smoothstep(0.68, 0.85, nPatch);
         vec3 lushTone = vec3(0.76, 0.96, 0.68);
-        vec3 dryStraw = vec3(1.06, 1.02, 0.78);
-        vec3 deepShade = vec3(0.68, 0.82, 0.62);
+        vec3 dryStraw = vec3(1.08, 1.02, 0.76);
+        vec3 deepShade = vec3(0.66, 0.80, 0.60);
+        vec3 soilColor = vec3(0.45, 0.38, 0.26);
         vec3 tint = mix(deepShade, lushTone, smoothstep(0.2, 0.58, mixFactor));
-        tint = mix(tint, dryStraw, smoothstep(0.62, 0.95, mixFactor) * 0.55);
-        diffuseColor.rgb *= tint;`
+        tint = mix(tint, dryStraw, smoothstep(0.58, 0.92, mixFactor) * 0.64);
+        diffuseColor.rgb *= tint;
+        diffuseColor.rgb = mix(diffuseColor.rgb, soilColor * (0.86 + 0.28 * nFine), bareEarth * 0.78);`
       );
   };
   const asphaltMat = trackMat(
@@ -322,16 +354,16 @@ export function buildClinicWorld3D(
   const aoPlaneGeom = trackGeom(new THREE.PlaneGeometry(1, 1));
 
   // 1. Natural Botanical Rolling Terrain (Flat building pads + undulating meadow + 3D grass tufts)
-  const lawnGeom = trackGeom(new THREE.PlaneGeometry(190, 190, 56, 56));
+  const lawnGeom = trackGeom(new THREE.PlaneGeometry(190, 190, 40, 40));
   lawnGeom.rotateX(-Math.PI / 2);
   const posAttr = lawnGeom.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < posAttr.count; i++) {
     const wx = posAttr.getX(i) + GRID_SIZE / 2;
     const wz = posAttr.getZ(i) + GRID_SIZE / 2;
-    const inClinicPad = wx >= -1.0 && wx <= 42.5 && wz >= -0.5 && wz <= 24.5;
+    const inClinicPad = wx >= -1.0 && wx <= 42.5 && wz >= -0.5 && wz <= 27.6;
     const inHousePad = wx >= 2.5 && wx <= 12.5 && wz >= -10.5 && wz <= -0.5;
     if (!inClinicPad && !inHousePad) {
-      const distClinic = Math.max(0, Math.hypot(Math.max(0, Math.abs(wx - 15) - 16), Math.max(0, Math.abs(wz - 10) - 14)));
+      const distClinic = Math.max(0, Math.hypot(Math.max(0, Math.abs(wx - 15) - 16), Math.max(0, Math.abs(wz - 11.5) - 15.5)));
       const blend = Math.min(1, distClinic / 6.0);
       const undulate =
         (Math.sin(wx * 0.14 + wz * 0.09) * 0.24 + Math.cos(wx * 0.07 - wz * 0.16) * 0.18) * blend;
@@ -353,6 +385,7 @@ export function buildClinicWorld3D(
     const gx = (Math.sin(i * 73.1 + 0.4) * 0.5 + 0.5) * 44 - 8;
     const gz = (Math.cos(i * 41.7 + 1.9) * 0.5 + 0.5) * 42 - 11;
     if (gx >= 1.6 && gx <= 39.2 && gz >= 1.6 && gz <= 22.6) continue; // keep clinic/courtyard/street clean
+    if (gx >= 2.8 && gx <= 21.0 && gz >= 22.8 && gz <= 26.1) continue; // keep solar placement tiles unobstructed while grass stays wild around edges
     if (gx >= 3.8 && gx <= 11.2 && gz >= -8.2 && gz <= -1.6) continue; // keep house plinth clean
     const scY = 0.65 + (i % 5) * 0.22;
     const scW = 0.8 + (i % 4) * 0.18;
@@ -571,7 +604,7 @@ export function buildClinicWorld3D(
   }
   const cobbleInst = new THREE.InstancedMesh(cobbleGeom, cobbleMat, cobbleCoords.length);
   cobbleInst.receiveShadow = true;
-  cobbleInst.castShadow = true;
+  cobbleInst.castShadow = false;
   const cobbleTones = [0xb3a895, 0x9f9482, 0xc2b7a3, 0x8d8573];
   cobbleCoords.forEach(([cx, cy, cz, rot, scZ], idx) => {
     _tPos.set(cx, cy, cz);
@@ -824,7 +857,9 @@ export function buildClinicWorld3D(
     [26.45, 3.8, 'bush_1'],
     [26.45, 20.6, 'bush_2'],
     [1.4, 22.6, 'bush_2'],
-    [20.8, 22.6, 'bush_1'],
+    [21.4, 22.6, 'bush_1'],
+    [5.6, 26.8, 'bush_1'],
+    [19.4, 26.7, 'bush_2'],
     [38.8, 5.5, 'bush_1'],
     [38.8, 17.5, 'bush_2'],
   ];
@@ -838,10 +873,12 @@ export function buildClinicWorld3D(
   for (const [gx, gz] of [
     [0.8, 4.2],
     [0.9, 12.2],
+    [1.8, 25.4],
     [4.4, 0.9],
     [14.4, 0.9],
     [23.2, 0.9],
-    [11.4, 23.2],
+    [12.4, 26.8],
+    [22.2, 24.8],
     [38.6, 10.8],
   ]) {
     const grassClump = glbRegistry.cloneNormalized('grass_clump', { targetHeight: 0.34, rotY: gx * 2 });
@@ -991,17 +1028,17 @@ export function buildClinicWorld3D(
     northFloorPool.rotation.x = -Math.PI / 2;
 
     if (room.minY === 2) {
-      wallBar.position.set(cx, 2.72, 2.16);
-      barHousing.position.set(cx, 2.78, 2.15);
-      northWash.position.set(cx, 1.62, 2.14);
+      wallBar.position.set(cx, 2.74, 2.18);
+      barHousing.position.set(cx, 2.8, 2.17);
+      northWash.position.set(cx, 1.62, 2.165);
       northWash.scale.set(3.8, 2.25, 1);
       northFloorPool.position.set(cx, 0.092, 3.25);
       northFloorPool.scale.set(4.4, 2.5, 1);
     } else {
-      wallBar.position.set(cx, 1.62, room.minY + 0.12);
-      barHousing.position.set(cx, 1.68, room.minY + 0.11);
-      northWash.position.set(cx, 0.88, room.minY + 0.1);
-      northWash.scale.set(3.4, 1.48, 1);
+      wallBar.position.set(cx, 1.74, room.minY + 0.135);
+      barHousing.position.set(cx, 1.8, room.minY + 0.125);
+      northWash.position.set(cx, 0.94, room.minY + 0.115);
+      northWash.scale.set(3.4, 1.56, 1);
       northFloorPool.position.set(cx, 0.092, room.minY + 1.15);
       northFloorPool.scale.set(4.1, 2.35, 1);
     }
@@ -1015,21 +1052,21 @@ export function buildClinicWorld3D(
 
     if (room.minX === 2) {
       const sideBar = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.11, 0.08, 2.6)), rMat);
-      sideBar.position.set(2.16, 2.72, cz);
+      sideBar.position.set(2.18, 2.74, cz);
       const sideHousing = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.14, 0.11, 2.74)), darkMullionMat);
-      sideHousing.position.set(2.15, 2.78, cz);
-      sideWash.position.set(2.14, 1.62, cz);
+      sideHousing.position.set(2.17, 2.8, cz);
+      sideWash.position.set(2.165, 1.62, cz);
       sideWash.scale.set(3.8, 2.25, 1);
       sideFloorPool.position.set(3.25, 0.092, cz);
       sideFloorPool.scale.set(2.5, 4.4, 1);
       root.add(sideHousing, sideBar, sideWash, sideFloorPool);
     } else {
       const divBar = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.11, 0.08, 2.4)), rMat);
-      divBar.position.set(12.14, 1.56, cz);
+      divBar.position.set(12.135, 1.74, cz);
       const divHousing = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.14, 0.11, 2.54)), darkMullionMat);
-      divHousing.position.set(12.13, 1.62, cz);
-      sideWash.position.set(12.1, 0.86, cz);
-      sideWash.scale.set(3.2, 1.44, 1);
+      divHousing.position.set(12.125, 1.8, cz);
+      sideWash.position.set(12.115, 0.94, cz);
+      sideWash.scale.set(3.2, 1.54, 1);
       sideFloorPool.position.set(13.15, 0.092, cz);
       sideFloorPool.scale.set(2.35, 4.1, 1);
       root.add(divHousing, divBar, sideWash, sideFloorPool);
@@ -1041,18 +1078,18 @@ export function buildClinicWorld3D(
     } else if (room.minY === 2) {
       roomSconceAnchors.set(room.id, { x: cx, y: 2.25, z: 2.95 });
     } else {
-      roomSconceAnchors.set(room.id, { x: 12.95, y: 1.72, z: cz });
+      roomSconceAnchors.set(room.id, { x: 12.95, y: 1.82, z: cz });
     }
   }
 
-  // 5. Taller Architectural Clinic Building (3.45m outer perimeter walls, 2.95m facade, 1.66m interior partitions)
+  // 5. Deeper Architectural Clinic Building (3.50m thick outer walls, 2.95m facade, 1.88m interior partitions with dado/skirting/pilasters)
   const addWallSpan = (
     x1: number,
     z1: number,
     x2: number,
     z2: number,
     height: number,
-    thickness = 0.2,
+    thickness = 0.24,
     hasWindow = false
   ) => {
     const dx = x2 - x1;
@@ -1064,34 +1101,88 @@ export function buildClinicWorld3D(
     const isAlongX = Math.abs(dx) >= Math.abs(dz);
     const sx = isAlongX ? len : thickness;
     const sz = isAlongX ? thickness : len;
+    const trimAddX = isAlongX ? 0 : 0.045;
+    const trimAddZ = isAlongX ? 0.045 : 0;
 
     if (hasWindow && height >= 0.85) {
-      const kneeH = height < 1.2 ? 0.42 : 0.56;
+      const kneeH = height < 1.2 ? 0.44 : 0.58;
       const knee = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, kneeH, sz)), stuccoWhiteMat);
       knee.position.set(cx, 0.07 + kneeH / 2, cz);
       knee.castShadow = true;
       knee.receiveShadow = true;
       root.add(knee);
 
-      const glassH = height - kneeH - 0.1;
-      const gsX = isAlongX ? len - 0.16 : 0.04;
-      const gsZ = isAlongX ? 0.04 : len - 0.16;
+      // Floor baseboard skirting + protruding window sill reveal for real architectural wall depth
+      const skirt = new THREE.Mesh(
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.7, 0.1, sz + trimAddZ * 0.7)),
+        darkMullionMat
+      );
+      skirt.position.set(cx, 0.12, cz);
+      root.add(skirt);
+
+      const sill = new THREE.Mesh(
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 1.45, 0.065, sz + trimAddZ * 1.45)),
+        aluminumTrimMat
+      );
+      sill.position.set(cx, 0.07 + kneeH + 0.02, cz);
+      sill.castShadow = true;
+      root.add(sill);
+
+      const glassH = height - kneeH - 0.12;
+      const gsX = isAlongX ? len - 0.16 : 0.045;
+      const gsZ = isAlongX ? 0.045 : len - 0.16;
       const pane = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(gsX, glassH, gsZ)), glassMat);
-      pane.position.set(cx, 0.07 + kneeH + glassH / 2, cz);
+      pane.position.set(cx, 0.07 + kneeH + 0.04 + glassH / 2, cz);
       root.add(pane);
 
-      const topFrame = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, 0.1, sz)), darkMullionMat);
+      // Vertical architectural window mullions dividing curtain glass into realistic bays
+      const mullCount = Math.floor(len / 2.2);
+      if (mullCount >= 1) {
+        const mullW = isAlongX ? 0.08 : thickness * 0.9;
+        const mullD = isAlongX ? thickness * 0.9 : 0.08;
+        const mullGeom = trackGeom(new THREE.BoxGeometry(mullW, glassH + 0.04, mullD));
+        for (let mi = 1; mi <= mullCount; mi++) {
+          const t = mi / (mullCount + 1);
+          const m = new THREE.Mesh(mullGeom, darkMullionMat);
+          m.position.set(x1 + dx * t, 0.07 + kneeH + 0.03 + glassH / 2, z1 + dz * t);
+          m.castShadow = true;
+          root.add(m);
+        }
+      }
+
+      const topFrame = new THREE.Mesh(
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.9, 0.11, sz + trimAddZ * 0.9)),
+        darkMullionMat
+      );
       topFrame.position.set(cx, 0.07 + height - 0.05, cz);
+      topFrame.castShadow = true;
       root.add(topFrame);
       return;
     }
 
-    const baseH = Math.min(height * 0.28, 0.42);
+    const baseH = Math.min(height * 0.28, 0.44);
+    // Recessed dark floor baseboard / skirting trim
+    const skirt = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.75, 0.11, sz + trimAddZ * 0.75)),
+      darkMullionMat
+    );
+    skirt.position.set(cx, 0.125, cz);
+    root.add(skirt);
+
     const wain = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, baseH, sz)), wainscotBlueMat);
     wain.position.set(cx, 0.07 + baseH / 2, cz);
     wain.castShadow = true;
     wain.receiveShadow = true;
     root.add(wain);
+
+    // Protruding architectural dado / chair-rail molding between wainscot & plaster
+    const dado = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(sx + trimAddX, 0.055, sz + trimAddZ)),
+      aluminumTrimMat
+    );
+    dado.position.set(cx, 0.07 + baseH, cz);
+    dado.castShadow = true;
+    root.add(dado);
 
     const upperH = Math.max(0.06, height - baseH);
     const upper = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, upperH, sz)), stuccoWhiteMat);
@@ -1101,32 +1192,50 @@ export function buildClinicWorld3D(
     root.add(upper);
 
     const cap = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(sx + 0.04, 0.07, sz + 0.04)),
+      trackGeom(new THREE.BoxGeometry(sx + trimAddX * 1.25, 0.075, sz + trimAddZ * 1.25)),
       aluminumTrimMat
     );
-    cap.position.set(cx, 0.07 + height + 0.035, cz);
+    cap.position.set(cx, 0.07 + height + 0.037, cz);
+    cap.castShadow = true;
     root.add(cap);
   };
 
-  // Back perimeter walls (tall 3.45m, x: 2..22, z: 2..22)
-  addWallSpan(2, 2, 22, 2, 3.45, 0.24);
-  addWallSpan(2, 2, 2, 22, 3.45, 0.24);
+  // Back perimeter walls (deep 0.30m thickness, tall 3.50m, x: 2..22, z: 2..22)
+  addWallSpan(2, 2, 22, 2, 3.5, 0.3);
+  addWallSpan(2, 2, 2, 22, 3.5, 0.3);
+
+  // Architectural corner & junction pilasters adding crisp 3D structural depth
+  const addPilaster = (px: number, pz: number, w: number, h: number) => {
+    const col = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(w, h, w)), stuccoWhiteMat);
+    col.position.set(px, 0.07 + h / 2, pz);
+    col.castShadow = true;
+    col.receiveShadow = true;
+    const base = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(w + 0.05, 0.44, w + 0.05)), wainscotBlueMat);
+    base.position.set(px, 0.29, pz);
+    const cap = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(w + 0.07, 0.08, w + 0.07)), darkMullionMat);
+    cap.position.set(px, 0.07 + h + 0.04, pz);
+    root.add(col, base, cap);
+  };
+  addPilaster(2, 2, 0.38, 3.52);
+  addPilaster(22, 2, 0.34, 2.98);
+  addPilaster(2, 22, 0.34, 1.15);
+  addPilaster(22, 22, 0.34, 2.98);
 
   // Recessed warm LED cove strip along top of back walls (clean architectural cornice)
   const ledStripBack = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(19.2, 0.05, 0.08)), warmLedMat);
-  ledStripBack.position.set(12.0, 3.34, 2.18);
+  ledStripBack.position.set(12.0, 3.38, 2.2);
   const ledStripLeft = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.08, 0.05, 19.2)), warmLedMat);
-  ledStripLeft.position.set(2.18, 3.34, 12.0);
+  ledStripLeft.position.set(2.2, 3.38, 12.0);
   root.add(ledStripBack, ledStripLeft);
 
   // Cutaway front-left wall (z=22, glazed knee wall H=1.12 so interior stays clearly visible)
-  addWallSpan(2, 22, 7.2, 22, 1.12, 0.2, true);
-  addWallSpan(7.2, 22, 12.4, 22, 1.12, 0.2);
-  addWallSpan(12.4, 22, 22, 22, 1.12, 0.2, true);
+  addWallSpan(2, 22, 7.2, 22, 1.12, 0.24, true);
+  addWallSpan(7.2, 22, 12.4, 22, 1.12, 0.24);
+  addWallSpan(12.4, 22, 22, 22, 1.12, 0.24, true);
 
   // Tall Front Storefront Curtain Wall (x = 22, H=2.95m, entrance opening z = 14..16)
-  addWallSpan(22, 2, 22, 14, 2.95, 0.2, true);
-  addWallSpan(22, 16, 22, 22, 2.95, 0.2, true);
+  addWallSpan(22, 2, 22, 14, 2.95, 0.24, true);
+  addWallSpan(22, 16, 22, 22, 2.95, 0.24, true);
 
   // Architectural timber louver accent columns flanking main clinic entrance (x=22, z=13.1..16.9)
   for (let lz = 13.15; lz <= 13.65; lz += 0.18) {
@@ -1142,38 +1251,45 @@ export function buildClinicWorld3D(
     root.add(slat);
   }
 
-  // Interior Partition Walls (H = 1.66m — taller & realistic, yet easy to see over into every wing!)
-  addWallSpan(2, 10, 6, 10, 1.66, 0.16);
-  addWallSpan(7, 10, 16, 10, 1.66, 0.16);
-  addWallSpan(17, 10, 22, 10, 1.66, 0.16);
+  // Interior Partition Walls (H = 1.88m, thickness = 0.20m — deeper architectural partitions!)
+  addWallSpan(2, 10, 6, 10, 1.88, 0.2);
+  addWallSpan(7, 10, 16, 10, 1.88, 0.2);
+  addWallSpan(17, 10, 22, 10, 1.88, 0.2);
 
-  addWallSpan(12, 2, 12, 5, 1.66, 0.16);
-  addWallSpan(12, 6, 12, 14, 1.66, 0.16);
-  addWallSpan(12, 15, 12, 22, 1.66, 0.16);
+  addWallSpan(12, 2, 12, 5, 1.88, 0.2);
+  addWallSpan(12, 6, 12, 14, 1.88, 0.2);
+  addWallSpan(12, 15, 12, 22, 1.88, 0.2);
 
-  // Mounted Reception Brand Logo + Framed License Certificate + Anatomy Chart (cleanly positioned on walls)
+  // Interior wall T-junction pilasters
+  addPilaster(12, 10, 0.26, 1.9);
+  addPilaster(2, 10, 0.34, 1.9);
+  addPilaster(12, 2, 0.34, 1.9);
+  addPilaster(22, 10, 0.28, 1.9);
+  addPilaster(12, 22, 0.28, 1.15);
+
+  // Mounted Reception Brand Logo + Framed License Certificate + Anatomy Chart (cleanly positioned on deeper walls)
   const wallLogo = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(0.05, 0.68, 2.2)),
     trackMat(makeMat({ map: textures.therasonWall, roughness: 0.35 }))
   );
-  wallLogo.position.set(12.11, 1.08, 18.6);
+  wallLogo.position.set(12.125, 1.18, 18.6);
   root.add(wallLogo);
 
   const wallCert = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(0.04, 0.46, 0.6)),
     trackMat(makeMat({ map: textures.certificateFrame, roughness: 0.4 }))
   );
-  wallCert.position.set(12.11, 1.1, 12.0);
+  wallCert.position.set(12.125, 1.18, 12.0);
   root.add(wallCert);
 
   const wallChart = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(0.04, 0.96, 0.7)),
     trackMat(makeMat({ map: textures.anatomyPoster, roughness: 0.42 }))
   );
-  wallChart.position.set(2.16, 1.92, 15.8);
+  wallChart.position.set(2.175, 1.95, 15.8);
   root.add(wallChart);
 
-  // Normal Single-Leaf Interior Doors (standard ~0.92m single door opening, matching raised partitions)
+  // Normal Single-Leaf Interior Doors (standard ~0.92m single door opening, matching raised 1.88m partitions)
   const addAnimatedSingleDoor = (
     id: string,
     cx: number,
@@ -1184,13 +1300,13 @@ export function buildClinicWorld3D(
     for (const side of [-1, 1]) {
       const jamb = new THREE.Mesh(
         trackGeom(
-          new THREE.BoxGeometry(axis === 'z' ? 0.2 : 0.07, 1.66, axis === 'z' ? 0.07 : 0.2)
+          new THREE.BoxGeometry(axis === 'z' ? 0.24 : 0.08, 1.88, axis === 'z' ? 0.08 : 0.24)
         ),
         darkMullionMat
       );
       jamb.position.set(
         axis === 'z' ? cx : cx + side * 0.48,
-        0.9,
+        1.01,
         axis === 'z' ? cz + side * 0.48 : cz
       );
       root.add(jamb);
@@ -1200,23 +1316,23 @@ export function buildClinicWorld3D(
     piv.position.set(axis === 'z' ? cx : cx - 0.45, 0.08, axis === 'z' ? cz - 0.45 : cz);
     const len = 0.88;
     const body = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.055 : len, 1.58, axis === 'z' ? len : 0.055)),
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.055 : len, 1.78, axis === 'z' ? len : 0.055)),
       woodSlatMat
     );
-    body.position.set(axis === 'z' ? 0 : len / 2, 0.79, axis === 'z' ? len / 2 : 0);
+    body.position.set(axis === 'z' ? 0 : len / 2, 0.89, axis === 'z' ? len / 2 : 0);
     body.castShadow = true;
 
     const visionGlass = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.065 : 0.28, 0.54, axis === 'z' ? 0.28 : 0.065)),
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.065 : 0.28, 0.56, axis === 'z' ? 0.28 : 0.065)),
       glassMat
     );
-    visionGlass.position.set(axis === 'z' ? 0 : len * 0.58, 1.12, axis === 'z' ? len * 0.58 : 0);
+    visionGlass.position.set(axis === 'z' ? 0 : len * 0.58, 1.24, axis === 'z' ? len * 0.58 : 0);
 
     const handle = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.1 : 0.14, 0.035, axis === 'z' ? 0.14 : 0.1)),
       aluminumTrimMat
     );
-    handle.position.set(axis === 'z' ? 0 : len * 0.82, 0.84, axis === 'z' ? len * 0.82 : 0);
+    handle.position.set(axis === 'z' ? 0 : len * 0.82, 0.9, axis === 'z' ? len * 0.82 : 0);
 
     piv.add(body, visionGlass, handle);
     root.add(piv);
@@ -1409,37 +1525,89 @@ export function buildClinicWorld3D(
 
   const masterTree = buildRealisticTreeTemplate();
 
-  const treeCoords: Array<[number, number, number, number]> = [
-    [-0.2, 0.2, 1.24, 0.4],
-    [0.2, 9.4, 1.04, 1.8],
-    [0.1, 18.4, 1.18, 3.1],
-    [0.8, 24.4, 1.26, 0.9],
-    [8.4, 24.2, 0.96, 2.5],
-    [16.4, 24.2, 1.12, 4.2],
-    [13.4, -0.4, 1.08, 1.2],
-    [2.6, -4.6, 1.28, 2.1],
-    [12.4, -5.0, 1.18, 5.0],
-    [24.4, 0.3, 0.94, 3.6],
-    [25.2, 24.2, 1.14, 0.6],
-    [39.4, 3.4, 1.22, 2.9],
-    [39.6, 19.8, 1.16, 4.7],
-    [40.2, 11.4, 0.94, 1.5],
-  ];
+  const removedSet = new Set(removedTreeIds);
+  const activeTrees = WORLD_TREES.filter((t) => !removedSet.has(t.id));
 
-  treeCoords.forEach(([tx, tz, sc, rotY]) => {
-    const ao = new THREE.Mesh(aoPlaneGeom, contactAoMat);
-    ao.rotation.x = -Math.PI / 2;
-    ao.scale.set(2.3 * sc, 2.3 * sc, 1);
-    ao.position.set(tx, 0.014, tz);
-    ao.castShadow = false;
-    root.add(ao);
+  // Merge active outdoor trees into InstancedMeshes (AO, bark, inner crown, leaf cards)
+  const _treeRootMat4 = new THREE.Matrix4();
+  const _childWorldMat4 = new THREE.Matrix4();
+  const barkMatrices: Array<{ geom: THREE.BufferGeometry; mat4: THREE.Matrix4 }> = [];
+  const shadeMatrices: THREE.Matrix4[] = [];
+  const leafMatrices: THREE.Matrix4[] = [];
 
-    const tg = masterTree.clone(true);
-    tg.position.set(tx, 0, tz);
-    tg.rotation.y = rotY;
-    tg.scale.setScalar(sc * 1.12);
-    root.add(tg);
-  });
+  if (activeTrees.length > 0) {
+    const treeAoInst = new THREE.InstancedMesh(aoPlaneGeom, contactAoMat, activeTrees.length);
+    treeAoInst.castShadow = false;
+
+    masterTree.updateMatrixWorld(true);
+    activeTrees.forEach(({ x: tx, z: tz, scale: sc, rotY }, idx) => {
+      _tPos.set(tx, 0.014, tz);
+      _tEuler.set(-Math.PI / 2, 0, 0);
+      _tQuat.setFromEuler(_tEuler);
+      _tScale.set(2.3 * sc, 2.3 * sc, 1);
+      _tMat4.compose(_tPos, _tQuat, _tScale);
+      treeAoInst.setMatrixAt(idx, _tMat4);
+
+      _tPos.set(tx, 0, tz);
+      _tEuler.set(0, rotY, 0);
+      _tQuat.setFromEuler(_tEuler);
+      _tScale.setScalar(sc * 1.12);
+      _treeRootMat4.compose(_tPos, _tQuat, _tScale);
+
+      masterTree.children.forEach((child) => {
+        const m = child as THREE.Mesh;
+        if (!m.isMesh) return;
+        _childWorldMat4.multiplyMatrices(_treeRootMat4, m.matrix);
+        if (m.material === barkMat) {
+          barkMatrices.push({ geom: m.geometry, mat4: _childWorldMat4.clone() });
+        } else if (m.material === innerShadeMat) {
+          shadeMatrices.push(_childWorldMat4.clone());
+        } else if (m.material === leafCardMat) {
+          leafMatrices.push(_childWorldMat4.clone());
+        }
+      });
+    });
+    treeAoInst.instanceMatrix.needsUpdate = true;
+    treeAoInst.computeBoundingSphere();
+    root.add(treeAoInst);
+  }
+
+  // Bucket bark meshes by geometry so each bark geometry renders in a single InstancedMesh
+  const barkByGeom = new Map<THREE.BufferGeometry, THREE.Matrix4[]>();
+  for (const bm of barkMatrices) {
+    const arr = barkByGeom.get(bm.geom);
+    if (arr) arr.push(bm.mat4);
+    else barkByGeom.set(bm.geom, [bm.mat4]);
+  }
+  for (const [geom, mats] of barkByGeom.entries()) {
+    const inst = new THREE.InstancedMesh(geom, barkMat, mats.length);
+    mats.forEach((mat4, i) => inst.setMatrixAt(i, mat4));
+    inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingSphere();
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+    root.add(inst);
+  }
+
+  if (shadeMatrices.length > 0) {
+    const shadeInst = new THREE.InstancedMesh(crownCoreGeom, innerShadeMat, shadeMatrices.length);
+    shadeMatrices.forEach((mat4, i) => shadeInst.setMatrixAt(i, mat4));
+    shadeInst.instanceMatrix.needsUpdate = true;
+    shadeInst.computeBoundingSphere();
+    shadeInst.castShadow = true;
+    shadeInst.receiveShadow = true;
+    root.add(shadeInst);
+  }
+
+  if (leafMatrices.length > 0) {
+    const leafInst = new THREE.InstancedMesh(leafCardGeom, leafCardMat, leafMatrices.length);
+    leafMatrices.forEach((mat4, i) => leafInst.setMatrixAt(i, mat4));
+    leafInst.instanceMatrix.needsUpdate = true;
+    leafInst.computeBoundingSphere();
+    leafInst.castShadow = true;
+    leafInst.receiveShadow = true;
+    root.add(leafInst);
+  }
 
   return {
     group: root,
@@ -1461,6 +1629,106 @@ export function buildClinicWorld3D(
   };
 }
 
+interface SharedCatalogMats {
+  whiteBody: THREE.MeshStandardMaterial;
+  silverMetal: THREE.MeshStandardMaterial;
+  darkSlate: THREE.MeshStandardMaterial;
+  blueUpholstery: THREE.MeshStandardMaterial;
+  cyanAccent: THREE.MeshStandardMaterial;
+  woodMat: THREE.MeshStandardMaterial;
+  leafGreen: THREE.MeshStandardMaterial;
+  ceramicPot: THREE.MeshStandardMaterial;
+  blackRubber: THREE.MeshStandardMaterial;
+  warmTimber: THREE.MeshStandardMaterial;
+  redAccent: THREE.MeshStandardMaterial;
+  emeraldAccent: THREE.MeshStandardMaterial;
+  amberAccent: THREE.MeshStandardMaterial;
+  frostGlassMat: THREE.MeshPhysicalMaterial;
+  aoPlaneMat: THREE.MeshBasicMaterial;
+  barkMat: THREE.MeshStandardMaterial;
+  travertineMat: THREE.MeshStandardMaterial;
+  soilMat: THREE.MeshStandardMaterial;
+  blossomCardMat: THREE.MeshStandardMaterial;
+  roseCardMat: THREE.MeshStandardMaterial;
+  palmCardMat: THREE.MeshStandardMaterial;
+  solarCellMat: THREE.MeshPhysicalMaterial;
+}
+
+const sharedCatalogPoolByTextures = new WeakMap<TextureBundle, SharedCatalogMats>();
+
+function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
+  const cached = sharedCatalogPoolByTextures.get(textures);
+  if (cached) return cached;
+
+  const pool: SharedCatalogMats = {
+    whiteBody: makeMat({ color: 0xdadfe6, roughness: 0.54, metalness: 0.05 }),
+    silverMetal: makeMat({ color: 0xb0b8c2, roughness: 0.34, metalness: 0.68 }),
+    darkSlate: makeMat({ color: 0x243042, roughness: 0.54, metalness: 0.2 }),
+    blueUpholstery: makeMat({ color: 0x225d8a, roughness: 0.62, metalness: 0.04 }),
+    cyanAccent: makeMat({ color: 0x2e7fa8, roughness: 0.44, metalness: 0.08 }),
+    woodMat: makeMat({ map: textures.wood, roughness: 0.66, metalness: 0.02 }),
+    leafGreen: makeMat({ color: 0x3b6e2d, roughness: 0.86 }),
+    ceramicPot: makeMat({ color: 0xc5bdb0, roughness: 0.56 }),
+    blackRubber: makeMat({ color: 0x111827, roughness: 0.78, metalness: 0.08 }),
+    warmTimber: makeMat({ color: 0x9c6b3f, roughness: 0.62, metalness: 0.03 }),
+    redAccent: makeMat({ color: 0xdc2626, roughness: 0.36, metalness: 0.1 }),
+    emeraldAccent: makeMat({ color: 0x10b981, roughness: 0.36, metalness: 0.1 }),
+    amberAccent: makeMat({ color: 0xf59e0b, roughness: 0.35, metalness: 0.15 }),
+    frostGlassMat: new THREE.MeshPhysicalMaterial({
+      color: 0xdbeafe,
+      transparent: true,
+      opacity: 0.56,
+      roughness: 0.16,
+      metalness: 0.02,
+    }),
+    aoPlaneMat: new THREE.MeshBasicMaterial({
+      map: textures.contactShadow,
+      transparent: true,
+      depthWrite: false,
+    }),
+    barkMat: makeMat({ map: textures.bark, roughness: 0.94, metalness: 0.0 }),
+    travertineMat: makeMat({ color: 0xd2c9bc, roughness: 0.72, metalness: 0.02 }),
+    soilMat: makeMat({ color: 0x453121, roughness: 0.96, metalness: 0.0 }),
+    blossomCardMat: new THREE.MeshStandardMaterial({
+      map: textures.blossomFoliage,
+      alphaTest: 0.42,
+      side: THREE.DoubleSide,
+      roughness: 0.82,
+      metalness: 0.0,
+    }),
+    roseCardMat: new THREE.MeshStandardMaterial({
+      map: textures.roseFoliage,
+      alphaTest: 0.42,
+      side: THREE.DoubleSide,
+      roughness: 0.8,
+      metalness: 0.0,
+    }),
+    palmCardMat: new THREE.MeshStandardMaterial({
+      map: textures.palmFrond,
+      alphaTest: 0.38,
+      side: THREE.DoubleSide,
+      roughness: 0.76,
+      metalness: 0.0,
+    }),
+    solarCellMat: new THREE.MeshPhysicalMaterial({
+      map: textures.solarCell,
+      roughness: 0.14,
+      metalness: 0.22,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.1,
+    }),
+  };
+
+  sharedCatalogPoolByTextures.set(textures, pool);
+  const origDispose = textures.dispose;
+  textures.dispose = () => {
+    Object.values(pool).forEach((m: THREE.Material) => m.dispose());
+    origDispose();
+  };
+
+  return pool;
+}
+
 /**
  * Builds crisp multi-part PBR furniture, medical equipment, and decor items
  * anchored cleanly with soft contact AO decals.
@@ -1477,24 +1745,26 @@ export function createCatalogMesh3D(
   const inner = new THREE.Group();
   outer.add(inner);
 
-  const whiteBody = makeMat({ color: 0xdadfe6, roughness: 0.54, metalness: 0.05 });
-  const silverMetal = makeMat({ color: 0xb0b8c2, roughness: 0.34, metalness: 0.68 });
-  const darkSlate = makeMat({ color: 0x243042, roughness: 0.54, metalness: 0.2 });
-  const blueUpholstery = makeMat({ color: 0x225d8a, roughness: 0.62, metalness: 0.04 });
-  const cyanAccent = makeMat({ color: 0x2e7fa8, roughness: 0.44, metalness: 0.08 });
-  const woodMat = makeMat({ map: textures.wood, roughness: 0.66, metalness: 0.02 });
-  const leafGreen = makeMat({ color: 0x3b6e2d, roughness: 0.86 });
-  const ceramicPot = makeMat({ color: 0xc5bdb0, roughness: 0.56 });
+  const shared = getSharedCatalogMats(textures);
+  const {
+    whiteBody,
+    silverMetal,
+    darkSlate,
+    blueUpholstery,
+    cyanAccent,
+    woodMat,
+    leafGreen,
+    ceramicPot,
+    aoPlaneMat,
+  } = shared;
 
-  const aoPlaneMat = !isGhost
-    ? new THREE.MeshBasicMaterial({
-        map: textures.contactShadow,
-        transparent: true,
-        depthWrite: false,
-      })
-    : null;
+  const isWallMountedSprite =
+    sprite === 'wall_sconce_lamp' ||
+    sprite === 'anatomy_poster' ||
+    sprite === 'ac_nesma' ||
+    sprite === 'ac_lg';
 
-  if (aoPlaneMat && sprite !== 'floor_rug') {
+  if (!isGhost && sprite !== 'floor_rug' && !isWallMountedSprite) {
     const ao = new THREE.Mesh(
       new THREE.PlaneGeometry(width * 0.96, depth * 0.96),
       aoPlaneMat
@@ -1502,6 +1772,7 @@ export function createCatalogMesh3D(
     ao.rotation.x = -Math.PI / 2;
     ao.position.y = 0.018;
     ao.userData.noCastShadow = true;
+    ao.userData.sharedGlbMat = true;
     inner.add(ao);
   }
 
@@ -1590,15 +1861,42 @@ export function createCatalogMesh3D(
     haloMaxOpacities.push(maxOp);
   };
 
+  const sharedMatSet = new Set<THREE.Material>([
+    whiteBody,
+    silverMetal,
+    darkSlate,
+    blueUpholstery,
+    cyanAccent,
+    woodMat,
+    leafGreen,
+    ceramicPot,
+    shared.blackRubber,
+    shared.warmTimber,
+    shared.redAccent,
+    shared.emeraldAccent,
+    shared.amberAccent,
+    shared.frostGlassMat,
+    aoPlaneMat,
+    shared.barkMat,
+    shared.travertineMat,
+    shared.soilMat,
+    shared.blossomCardMat,
+    shared.roseCardMat,
+    shared.palmCardMat,
+    shared.solarCellMat,
+  ]);
+
   const box = (w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     m.position.set(x, y, z);
+    if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
     inner.add(m);
     return m;
   };
   const cyl = (rt: number, rb: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 14), mat);
     m.position.set(x, y, z);
+    if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
     inner.add(m);
     return m;
   };
@@ -1610,22 +1908,26 @@ export function createCatalogMesh3D(
   ) => {
     const curve = new THREE.CatmullRomCurve3(pts.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
     const m = new THREE.Mesh(new THREE.TubeGeometry(curve, segs, radius, 7, false), mat);
+    if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
     inner.add(m);
     return m;
   };
 
-  const blackRubber = makeMat({ color: 0x111827, roughness: 0.78, metalness: 0.08 });
-  const warmTimber = makeMat({ color: 0x9c6b3f, roughness: 0.62, metalness: 0.03 });
-  const redAccent = makeMat({ color: 0xdc2626, roughness: 0.36, metalness: 0.1 });
-  const emeraldAccent = makeMat({ color: 0x10b981, roughness: 0.36, metalness: 0.1 });
-  const amberAccent = makeMat({ color: 0xf59e0b, roughness: 0.35, metalness: 0.15 });
-  const frostGlassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xdbeafe,
-    transparent: true,
-    opacity: 0.56,
-    roughness: 0.16,
-    metalness: 0.02,
-  });
+  const {
+    blackRubber,
+    warmTimber,
+    redAccent,
+    emeraldAccent,
+    amberAccent,
+    frostGlassMat,
+    barkMat,
+    travertineMat,
+    soilMat,
+    blossomCardMat,
+    roseCardMat,
+    palmCardMat,
+    solarCellMat,
+  } = shared;
 
   switch (sprite) {
     case 'treatment_bed': {
@@ -1728,22 +2030,244 @@ export function createCatalogMesh3D(
     }
 
     case 'waiting_chairs': {
-      const glbCouch = glbRegistry.cloneNormalized('furn_couch', {
-        maxFootprint: { w: 1.78, d: 0.86 },
-        targetHeight: 0.78,
-      });
-      if (glbCouch) {
-        inner.add(glbCouch);
-      } else {
-        box(1.7, 0.06, 0.1, silverMetal, 0, 0.28, 0);
-        cyl(0.035, 0.04, 0.28, silverMetal, -0.7, 0.14, 0);
-        cyl(0.035, 0.04, 0.28, silverMetal, 0.7, 0.14, 0);
-        for (const sx of [-0.56, 0, 0.56]) {
-          box(0.46, 0.08, 0.44, blueUpholstery, sx, 0.34, 0.03);
-          const back = box(0.46, 0.42, 0.08, blueUpholstery, sx, 0.55, -0.18);
-          back.rotation.x = -0.08;
+      // Authentic 3-seat tandem hospital/clinic waiting bench (separated contoured chairs on steel beam + armrests)
+      // Main heavy-duty brushed steel horizontal beam
+      box(1.74, 0.055, 0.08, darkSlate, 0, 0.25, -0.04);
+      // Twin die-cast aluminum inverted-T leg frames with dark floor glides
+      for (const lx of [-0.68, 0.68]) {
+        cyl(0.028, 0.032, 0.24, silverMetal, lx, 0.13, -0.04);
+        box(0.06, 0.038, 0.48, silverMetal, lx, 0.035, 0.01);
+        for (const fz of [-0.21, 0.23]) {
+          const pad = cyl(0.026, 0.028, 0.02, blackRubber, lx, 0.01, fz);
+          pad.userData.noCastShadow = true;
         }
       }
+
+      // 3 individual separated ergonomic clinic seats
+      const seatShellMat = makeMat({ color: 0x264b6e, roughness: 0.48, metalness: 0.08 });
+      const cushionMat = makeMat({ color: 0x1e6091, roughness: 0.58, metalness: 0.04 });
+      for (const sx of [-0.56, 0, 0.56]) {
+        // Under-seat steel mounting bracket + contoured shell base
+        box(0.36, 0.028, 0.34, silverMetal, sx, 0.29, 0.03);
+        box(0.44, 0.045, 0.42, seatShellMat, sx, 0.325, 0.04);
+        // Contoured slim PU/vinyl seat pad
+        box(0.41, 0.038, 0.38, cushionMat, sx, 0.356, 0.05);
+        // Rounded front waterfall lip
+        const lip = cyl(0.02, 0.02, 0.41, cushionMat, sx, 0.352, 0.235);
+        lip.rotation.z = Math.PI / 2;
+        lip.userData.noCastShadow = true;
+
+        // Curved steel spine connecting seat to backrest (leaves realistic lumbar gap)
+        box(0.045, 0.24, 0.03, silverMetal, sx, 0.42, -0.17);
+        // Ergonomic curved clinic backrest shell + top rim
+        const backShell = box(0.43, 0.34, 0.045, seatShellMat, sx, 0.61, -0.19);
+        backShell.rotation.x = -0.11;
+        const backPad = box(0.39, 0.29, 0.032, cushionMat, sx, 0.61, -0.172);
+        backPad.rotation.x = -0.11;
+        backPad.userData.noCastShadow = true;
+      }
+
+      // 4 slim chrome divider/end armrests with dark molded arm pads
+      for (const ax of [-0.82, -0.28, 0.28, 0.82]) {
+        box(0.026, 0.22, 0.04, silverMetal, ax, 0.36, -0.05);
+        box(0.044, 0.028, 0.36, darkSlate, ax, 0.475, 0.02);
+      }
+      break;
+    }
+
+    case 'luxury_chair': {
+      // Plush tufted luxury executive lounge chair ("كرسي جلوس") facing +Z at rot=0
+      const brassMat = makeMat({ color: 0xd4a94f, roughness: 0.26, metalness: 0.85 });
+      const walnutMat = makeMat({ color: 0x4e3222, roughness: 0.48, metalness: 0.05 });
+      const velvetMat = new THREE.MeshPhysicalMaterial({
+        color: 0x1d405f,
+        roughness: 0.62,
+        metalness: 0.04,
+        sheen: 0.78,
+        sheenRoughness: 0.5,
+        sheenColor: new THREE.Color(0x6fa8d6),
+      });
+      const velvetDarkMat = new THREE.MeshPhysicalMaterial({
+        color: 0x152f47,
+        roughness: 0.66,
+        metalness: 0.04,
+        sheen: 0.65,
+        sheenColor: new THREE.Color(0x4b80ad),
+      });
+      const camelPillowMat = new THREE.MeshPhysicalMaterial({
+        color: 0xc2854c,
+        roughness: 0.56,
+        sheen: 0.55,
+        sheenColor: new THREE.Color(0xf1c28e),
+      });
+
+      // Tapered walnut legs with brushed brass ferrules
+      for (const lx of [-0.28, 0.28]) {
+        for (const lz of [-0.26, 0.26]) {
+          const leg = cyl(0.028, 0.017, 0.2, walnutMat, lx, 0.13, lz);
+          leg.rotation.z = lx > 0 ? -0.1 : 0.1;
+          leg.rotation.x = lz > 0 ? 0.08 : -0.08;
+          const ferrule = cyl(0.018, 0.015, 0.055, brassMat, lx * 1.03, 0.032, lz * 1.03);
+          ferrule.rotation.z = leg.rotation.z;
+          ferrule.rotation.x = leg.rotation.x;
+          ferrule.userData.noCastShadow = true;
+        }
+      }
+
+      // Rich walnut perimeter plinth apron + brass piping accent
+      box(0.68, 0.07, 0.64, walnutMat, 0, 0.24, 0);
+      const trim = box(0.7, 0.018, 0.66, brassMat, 0, 0.275, 0);
+      trim.userData.noCastShadow = true;
+
+      // Deep sculpted club-chair seat deck + plush thick beveled cushion
+      box(0.66, 0.1, 0.6, velvetDarkMat, 0, 0.31, 0);
+      box(0.54, 0.13, 0.54, velvetMat, 0, 0.38, 0.04);
+      const frontRoll = cyl(0.06, 0.06, 0.53, velvetMat, 0, 0.375, 0.28);
+      frontRoll.rotation.z = Math.PI / 2;
+      frontRoll.userData.noCastShadow = true;
+
+      // High wraparound wing/club backrest with vertical channel-tufted pleats
+      const backOuter = box(0.68, 0.52, 0.14, velvetDarkMat, 0, 0.61, -0.24);
+      backOuter.rotation.x = -0.12;
+      for (let pi = -2; pi <= 2; pi++) {
+        const pleat = cyl(0.055, 0.055, 0.44, velvetMat, pi * 0.105, 0.62, -0.175);
+        pleat.rotation.x = -0.12;
+        pleat.userData.noCastShadow = true;
+      }
+
+      // Plush rolled-top upholstered armrests
+      for (const ax of [-0.31, 0.31]) {
+        box(0.11, 0.28, 0.58, velvetDarkMat, ax, 0.47, -0.02);
+        const armRoll = cyl(0.062, 0.062, 0.56, velvetMat, ax, 0.61, -0.01);
+        armRoll.rotation.x = Math.PI / 2;
+      }
+
+      // Warm camel-tan tufted lumbar throw pillow
+      const lumbar = box(0.38, 0.19, 0.09, camelPillowMat, 0, 0.5, -0.08);
+      lumbar.rotation.x = -0.18;
+      break;
+    }
+
+    case 'ac_nesma': {
+      // Evaporative Water Air Cooler ("مكيف نسمة"): large rectangular wall duct opening with honeycomb pad & louvers
+      // Mounted flush at local x = -0.40 (extends inward to x = -0.20, centered at y = 1.44, width 0.88, height 0.60)
+      const frameMat = makeMat({ color: 0xe6e8ec, roughness: 0.42, metalness: 0.15 });
+      const ductInnerMat = makeMat({ color: 0x0f172a, roughness: 0.88, metalness: 0.05 });
+      const padMat = makeMat({ map: textures.nesmaPad, roughness: 0.85, metalness: 0.02 });
+      const louverMat = makeMat({ color: 0xf1f5f9, roughness: 0.32, metalness: 0.2 });
+      const badgeMat = makeMat({
+        map: textures.nesmaBadge,
+        emissiveMap: textures.nesmaBadge,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 0.25,
+        roughness: 0.3,
+      });
+
+      const cy = 1.44;
+      // Outer recessed duct housing flange sitting flush against the wall (x = -0.40 .. -0.22)
+      box(0.18, 0.62, 0.9, frameMat, -0.31, cy, 0);
+      // Wide bezel frame around the big rectangular air opening
+      box(0.05, 0.055, 0.94, silverMetal, -0.21, cy + 0.295, 0);
+      box(0.05, 0.055, 0.94, silverMetal, -0.21, cy - 0.295, 0);
+      box(0.05, 0.58, 0.055, silverMetal, -0.21, cy, -0.445);
+      box(0.05, 0.58, 0.16, silverMetal, -0.21, cy, 0.39);
+
+      // Deep dark recessed air cavity + wet celdek evaporative cooling pad visible inside
+      const cavity = box(0.04, 0.52, 0.72, ductInnerMat, -0.24, cy, -0.06);
+      cavity.userData.noCastShadow = true;
+      const wetPad = box(0.02, 0.5, 0.7, padMat, -0.218, cy, -0.06);
+      wetPad.userData.noCastShadow = true;
+
+      // Multi-blade horizontal & vertical outlet louvers across the wide opening
+      for (let hi = -2; hi <= 2; hi++) {
+        const blade = box(0.032, 0.014, 0.7, louverMat, -0.192, cy + hi * 0.088, -0.06);
+        blade.rotation.z = -0.32;
+        blade.userData.noCastShadow = true;
+      }
+      for (let vi = -2; vi <= 2; vi++) {
+        const vBlade = box(0.02, 0.48, 0.012, silverMetal, -0.205, cy, -0.06 + vi * 0.13);
+        vBlade.userData.noCastShadow = true;
+      }
+
+      // Right-side NESMA nameplate & rotary speed/water-pump control dials + cool LED
+      const badge = box(0.02, 0.14, 0.13, badgeMat, -0.185, cy + 0.16, 0.39);
+      badge.userData.noCastShadow = true;
+      for (const dy of [-0.02, -0.13]) {
+        const knob = cyl(0.024, 0.026, 0.025, darkSlate, -0.18, cy + dy, 0.39);
+        knob.rotation.z = Math.PI / 2;
+        knob.userData.noCastShadow = true;
+      }
+      const coolLed = cyl(0.011, 0.011, 0.02, cyanAccent, -0.18, cy - 0.22, 0.39);
+      coolLed.rotation.z = Math.PI / 2;
+      coolLed.userData.noCastShadow = true;
+      break;
+    }
+
+    case 'ac_lg': {
+      // Modern LG Dual Inverter Gas Split AC ("مكيف LG") flush-mounted high at local x = -0.40, y = 1.62
+      const glossyWhite = new THREE.MeshPhysicalMaterial({
+        color: 0xf4f7fb,
+        roughness: 0.24,
+        metalness: 0.04,
+        clearcoat: 0.72,
+        clearcoatRoughness: 0.16,
+      });
+      const fasciaMat = makeMat({
+        map: textures.lgAcFront,
+        emissiveMap: textures.lgAcFront,
+        emissive: 0x38bdf8,
+        emissiveIntensity: 0.32,
+        roughness: 0.18,
+        metalness: 0.15,
+      });
+
+      const cy = 1.62;
+      // Sculpted aerodynamic side profile extruded along Z (unit width 0.96m)
+      const acShape = new THREE.Shape();
+      acShape.moveTo(0, -0.135);
+      acShape.lineTo(0.16, -0.135);
+      acShape.quadraticCurveTo(0.225, -0.115, 0.23, 0.02);
+      acShape.quadraticCurveTo(0.22, 0.135, 0.14, 0.145);
+      acShape.lineTo(0, 0.145);
+      acShape.closePath();
+
+      const bodyGeom = new THREE.ExtrudeGeometry(acShape, {
+        depth: 0.94,
+        bevelEnabled: true,
+        bevelSegments: 2,
+        steps: 1,
+        bevelSize: 0.012,
+        bevelThickness: 0.012,
+      });
+      bodyGeom.translate(0, 0, -0.47);
+      const bodyMesh = new THREE.Mesh(bodyGeom, glossyWhite);
+      bodyMesh.position.set(-0.4, cy, 0);
+      inner.add(bodyMesh);
+
+      // Wall mounting cleat plate
+      box(0.02, 0.22, 0.86, darkSlate, -0.39, cy, 0);
+
+      // Sleek dark mirrored LG Dual Inverter + 22°C front display panel
+      const frontDisplay = box(0.022, 0.15, 0.88, fasciaMat, -0.172, cy + 0.025, 0);
+      frontDisplay.userData.noCastShadow = true;
+
+      // Top air-intake grill ribs
+      for (let ti = -3; ti <= 3; ti++) {
+        const rib = box(0.11, 0.01, 0.84, silverMetal, -0.29, cy + 0.154, 0);
+        rib.position.x = -0.34 + (ti + 3) * 0.018;
+        rib.userData.noCastShadow = true;
+      }
+
+      // Recessed dark bottom air-outlet throat + motorized angled discharge swing vane
+      const throat = box(0.06, 0.036, 0.82, darkSlate, -0.22, cy - 0.128, 0);
+      throat.userData.noCastShadow = true;
+      const vane = box(0.045, 0.012, 0.82, glossyWhite, -0.185, cy - 0.125, 0);
+      vane.rotation.z = -0.48;
+      vane.userData.noCastShadow = true;
+
+      // Neat side refrigerant line conduit stub descending smoothly into wall
+      const conduit = box(0.04, 0.28, 0.055, whiteBody, -0.38, cy - 0.22, -0.41);
+      conduit.userData.noCastShadow = true;
       break;
     }
 
@@ -2983,22 +3507,59 @@ export function createCatalogMesh3D(
     }
 
     case 'arch_pergola': {
-      // Decorative garden cedar archway spanning 1x2 tiles with climbing jasmine/vines
+      // Romantic cedar courtyard arbor (1x2) with limestone plinths, climbing botanical roses & twin lanterns
+      const roseCardG = new THREE.PlaneGeometry(0.56, 0.56);
+      const pergolaGlowMat = makeMat({
+        color: 0xfef3c7,
+        emissive: 0xfbbf24,
+        emissiveIntensity: 0.14,
+        roughness: 0.22,
+      });
       for (const pz of [-0.78, 0.78]) {
-        box(0.28, 0.16, 0.28, makeMat({ color: 0x94a3b8, roughness: 0.78 }), 0, 0.08, pz);
-        box(0.16, 2.28, 0.16, warmTimber, 0, 1.24, pz);
-        // Climbing garden greenery & soft pink blossoms along columns
+        box(0.36, 0.14, 0.36, travertineMat, 0, 0.07, pz);
+        box(0.3, 0.06, 0.3, darkSlate, 0, 0.17, pz);
+        box(0.14, 2.18, 0.14, woodMat, 0, 1.28, pz);
+        // Sculpted cedar knee-brace
+        const brace = box(0.08, 0.38, 0.08, woodMat, 0, 2.08, pz + (pz < 0 ? 0.16 : -0.16));
+        brace.rotation.x = pz < 0 ? 0.75 : -0.75;
+        // Lush botanical rose & foliage climbing clusters
         for (let k = 0; k < 5; k++) {
-          const leafC = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), leafGreen);
-          leafC.position.set((k % 2 === 0 ? 1 : -1) * 0.08, 0.55 + k * 0.36, pz);
-          inner.add(leafC);
+          const cy = 0.56 + k * 0.38;
+          for (let ci = 0; ci < 2; ci++) {
+            const card = new THREE.Mesh(roseCardG, roseCardMat);
+            card.position.set(
+              (ci === 0 ? 0.05 : -0.05),
+              cy,
+              pz + (pz < 0 ? 0.05 : -0.05)
+            );
+            card.rotation.set(0.18, k * 1.1 + ci * 1.4, (k % 2 === 0 ? 0.2 : -0.2));
+            card.scale.setScalar(0.85 + (k % 2) * 0.18);
+            card.userData.sharedGlbMat = true;
+            inner.add(card);
+          }
         }
       }
-      // Overhead crossbeams + pergola rafters
-      box(0.22, 0.14, 1.88, warmTimber, 0, 2.38, 0);
-      for (const rx of [-0.26, 0, 0.26]) {
-        box(0.1, 0.1, 1.94, warmTimber, rx, 2.48, 0);
+      // Overhead sculpted main crossbeams & scalloped pergola rafters
+      box(0.24, 0.13, 2.04, woodMat, 0, 2.4, 0);
+      for (const rx of [-0.28, -0.14, 0, 0.14, 0.28]) {
+        box(0.07, 0.1, 2.1, warmTimber, rx, 2.5, 0);
       }
+      // Twin hanging warm brass lanterns
+      for (const lz of [-0.42, 0.42]) {
+        cyl(0.012, 0.012, 0.22, darkSlate, 0, 2.26, lz);
+        cyl(0.075, 0.045, 0.04, darkSlate, 0, 2.15, lz);
+        const bulb = cyl(0.058, 0.068, 0.14, pergolaGlowMat, 0, 2.06, lz);
+        bulb.userData.noCastShadow = true;
+        addBulbAura(0.19, 0xffe4a8, 0.32, 0, 2.06, lz);
+      }
+      addFloorHalo(2.4, 0xffd584, 0.38, 0, 0.026, 0);
+      outer.userData.smartLight = {
+        kind: 'garden_lamp',
+        localPos: [0, 2.1, 0],
+        emissiveMats: [pergolaGlowMat],
+        haloMats,
+        haloMaxOpacities,
+      } as SmartLightMeta;
       break;
     }
 
@@ -3032,31 +3593,70 @@ export function createCatalogMesh3D(
     }
 
     case 'park_bench': {
+      // Sculpted cast-iron & warm teakwood courtyard bench (slatted contoured profile + scroll armrests)
+      const brassTrim = makeMat({ color: 0xc59b49, roughness: 0.3, metalness: 0.82 });
       for (const lz of [-0.72, 0.72]) {
-        box(0.46, 0.36, 0.07, darkSlate, 0, 0.18, lz);
+        // Flared cast-iron front & rear legs
+        box(0.055, 0.36, 0.055, darkSlate, 0.19, 0.18, lz);
+        box(0.055, 0.4, 0.055, darkSlate, -0.17, 0.2, lz);
+        box(0.42, 0.048, 0.055, darkSlate, 0.01, 0.34, lz);
+        // Sculpted curved armrest
+        tube(
+          [
+            [-0.2, 0.72, lz],
+            [-0.08, 0.54, lz],
+            [0.14, 0.54, lz],
+            [0.21, 0.48, lz],
+            [0.19, 0.35, lz],
+          ],
+          0.024,
+          darkSlate,
+          10
+        );
+        // Backrest upright support bar
+        const backPost = box(0.045, 0.46, 0.045, darkSlate, -0.22, 0.55, lz);
+        backPost.rotation.z = 0.22;
       }
-      box(0.44, 0.06, 1.62, woodMat, 0.04, 0.38, 0);
-      const back = box(0.07, 0.36, 1.62, woodMat, -0.18, 0.58, 0);
-      back.rotation.z = 0.16;
+      // Center steel under-seat stiffener
+      box(0.36, 0.04, 0.04, darkSlate, 0.02, 0.33, 0);
+      // 4 Individual beveled teakwood seat slats + front bullnose slat
+      for (let s = 0; s < 4; s++) {
+        box(0.095, 0.036, 1.56, woodMat, -0.12 + s * 0.11, 0.378 - (s === 0 ? 0.01 : 0), 0);
+      }
+      // 3 Individual reclined teakwood backrest slats + decorative brass rivets
+      for (let b = 0; b < 3; b++) {
+        const slat = box(0.036, 0.105, 1.56, woodMat, -0.18 - b * 0.03, 0.5 + b * 0.125, 0);
+        slat.rotation.z = 0.22;
+      }
+      for (const lz of [-0.72, 0.72]) {
+        cyl(0.022, 0.022, 0.06, brassTrim, 0.15, 0.54, lz);
+      }
       break;
     }
 
     case 'garden_lamp': {
-      cyl(0.09, 0.11, 0.72, darkSlate, 0, 0.36, 0);
+      // Modern architectural dark-slate louvered bollard with glowing frosted diffuser core
+      box(0.24, 0.06, 0.24, travertineMat, 0, 0.03, 0);
+      cyl(0.082, 0.096, 0.58, darkSlate, 0, 0.35, 0);
       const lampGlowMat = makeMat({
         color: 0xfde68a,
         emissive: 0xf59e0b,
-        emissiveIntensity: 0.1,
-        roughness: 0.25,
+        emissiveIntensity: 0.12,
+        roughness: 0.22,
       });
-      const lampBulb = box(0.16, 0.18, 0.16, lampGlowMat, 0, 0.78, 0);
-      lampBulb.userData.noCastShadow = true;
-      box(0.2, 0.05, 0.2, darkSlate, 0, 0.9, 0);
-      addFloorHalo(2.35, 0xffcc78, 0.46, 0, 0.026, 0);
-      addBulbAura(0.24, 0xffd584, 0.34, 0, 0.78, 0);
+      const lampCore = cyl(0.068, 0.068, 0.22, lampGlowMat, 0, 0.75, 0);
+      lampCore.userData.noCastShadow = true;
+      // 3 Architectural anti-glare horizontal louver rings
+      for (let li = 0; li < 3; li++) {
+        const ring = cyl(0.092, 0.092, 0.018, darkSlate, 0, 0.67 + li * 0.065, 0);
+        ring.userData.sharedGlbMat = true;
+      }
+      cyl(0.095, 0.115, 0.055, darkSlate, 0, 0.89, 0);
+      addFloorHalo(2.45, 0xffcc78, 0.48, 0, 0.026, 0);
+      addBulbAura(0.24, 0xffd584, 0.36, 0, 0.76, 0);
       outer.userData.smartLight = {
         kind: 'garden_lamp',
-        localPos: [0, 0.95, 0],
+        localPos: [0, 0.92, 0],
         emissiveMats: [lampGlowMat],
         haloMats,
         haloMaxOpacities,
@@ -3065,28 +3665,45 @@ export function createCatalogMesh3D(
     }
 
     case 'garden_spot_lamp': {
-      // Twin-globe classic outdoor garden post that casts wide golden floor illumination
-      cyl(0.16, 0.2, 0.12, darkSlate, 0, 0.06, 0);
-      cyl(0.05, 0.07, 1.72, darkSlate, 0, 0.94, 0);
-      box(0.56, 0.06, 0.07, darkSlate, 0, 1.82, 0);
+      // Classic fluted cast-iron twin-lantern garden post with brass collars & glowing glass globes
+      const brassMat = makeMat({ color: 0xc59b49, roughness: 0.3, metalness: 0.82 });
+      cyl(0.18, 0.22, 0.14, travertineMat, 0, 0.07, 0);
+      cyl(0.08, 0.12, 0.28, darkSlate, 0, 0.28, 0);
+      cyl(0.044, 0.062, 1.48, darkSlate, 0, 1.12, 0);
+      cyl(0.07, 0.07, 0.06, brassMat, 0, 1.84, 0);
+      // Curved ornate cross-arms
+      tube(
+        [
+          [-0.27, 1.94, 0],
+          [-0.14, 1.82, 0],
+          [0, 1.84, 0],
+          [0.14, 1.82, 0],
+          [0.27, 1.94, 0],
+        ],
+        0.024,
+        darkSlate,
+        12
+      );
       const twinGlowMat = makeMat({
         color: 0xfef08a,
         emissive: 0xfbbf24,
-        emissiveIntensity: 0.12,
-        roughness: 0.22,
+        emissiveIntensity: 0.14,
+        roughness: 0.2,
       });
-      for (const gx of [-0.24, 0.24]) {
-        cyl(0.05, 0.04, 0.08, darkSlate, gx, 1.88, 0);
-        const orb = new THREE.Mesh(new THREE.SphereGeometry(0.13, 14, 10), twinGlowMat);
-        orb.position.set(gx, 2.02, 0);
+      for (const gx of [-0.27, 0.27]) {
+        cyl(0.056, 0.036, 0.06, brassMat, gx, 1.96, 0);
+        const orb = new THREE.Mesh(new THREE.SphereGeometry(0.125, 16, 12), twinGlowMat);
+        orb.position.set(gx, 2.08, 0);
         orb.userData.noCastShadow = true;
         inner.add(orb);
-        addBulbAura(0.24, 0xffe29a, 0.34, gx, 2.02, 0);
+        // Decorative cap finial
+        cyl(0.012, 0.09, 0.065, darkSlate, gx, 2.22, 0);
+        addBulbAura(0.24, 0xffe29a, 0.36, gx, 2.08, 0);
       }
-      addFloorHalo(3.15, 0xffd282, 0.54, 0, 0.026, 0);
+      addFloorHalo(3.25, 0xffd282, 0.56, 0, 0.026, 0);
       outer.userData.smartLight = {
         kind: 'garden_lamp',
-        localPos: [0, 2.05, 0],
+        localPos: [0, 2.1, 0],
         emissiveMats: [twinGlowMat],
         haloMats,
         haloMaxOpacities,
@@ -3129,7 +3746,7 @@ export function createCatalogMesh3D(
 
     case 'wall_sconce_lamp': {
       const glbWallLamp = glbRegistry.cloneNormalized('furn_lamp_wall', {
-        maxFootprint: { w: 0.46, d: 0.46 },
+        maxFootprint: { w: 0.42, d: 0.42 },
         targetHeight: 0.42,
         rotY: Math.PI / 2,
       });
@@ -3139,21 +3756,22 @@ export function createCatalogMesh3D(
         emissiveIntensity: 0.12,
         roughness: 0.24,
       });
+      // Backplane anchored flush at local x = -0.40 (interior partition face; ClinicCanvas shifts +0.05 on thick outer walls)
       if (glbWallLamp) {
-        glbWallLamp.position.set(-0.34, 1.42, 0);
+        glbWallLamp.position.set(-0.34, 1.38, 0);
         inner.add(glbWallLamp);
       } else {
-        box(0.05, 0.24, 0.16, darkSlate, -0.44, 1.54, 0);
-        box(0.12, 0.04, 0.06, silverMetal, -0.37, 1.5, 0);
+        box(0.04, 0.24, 0.16, darkSlate, -0.38, 1.48, 0);
+        box(0.11, 0.04, 0.06, silverMetal, -0.33, 1.45, 0);
       }
-      const glassShade = cyl(0.065, 0.085, 0.18, sconceMat, -0.3, 1.56, 0);
+      const glassShade = cyl(0.065, 0.085, 0.18, sconceMat, -0.28, 1.5, 0);
       glassShade.userData.noCastShadow = true;
-      addWallWash(1.25, 1.45, 0xffd79e, 0.5, -0.4, 0.9, 0, Math.PI / 2);
-      addFloorHalo(1.95, 0xffd79e, 0.36, -0.1, 0.026, 0);
-      addBulbAura(0.18, 0xffe5b4, 0.34, -0.3, 1.56, 0);
+      addWallWash(1.25, 1.45, 0xffd79e, 0.5, -0.385, 0.88, 0, Math.PI / 2);
+      addFloorHalo(1.95, 0xffd79e, 0.36, -0.08, 0.026, 0);
+      addBulbAura(0.18, 0xffe5b4, 0.34, -0.28, 1.5, 0);
       outer.userData.smartLight = {
         kind: 'wall_lamp',
-        localPos: [-0.22, 1.54, 0],
+        localPos: [-0.2, 1.5, 0],
         emissiveMats: [sconceMat],
         haloMats,
         haloMaxOpacities,
@@ -3202,32 +3820,35 @@ export function createCatalogMesh3D(
     }
 
     case 'street_lamp_post': {
-      const glbPost = glbRegistry.cloneNormalized('streetlight', {
-        maxFootprint: { w: 0.92, d: 0.65 },
-        targetHeight: 3.1,
-        rotY: Math.PI / 2,
-      });
+      // Sleek architectural tapered steel streetlamp with curved gooseneck arm & bright optic diffuser
+      cyl(0.16, 0.2, 0.14, travertineMat, -0.08, 0.07, 0);
+      cyl(0.065, 0.095, 0.42, darkSlate, -0.08, 0.34, 0);
+      cyl(0.038, 0.062, 2.1, darkSlate, -0.08, 1.56, 0);
+      tube(
+        [
+          [-0.08, 2.58, 0],
+          [-0.04, 2.86, 0],
+          [0.14, 2.96, 0],
+          [0.3, 2.92, 0],
+        ],
+        0.032,
+        darkSlate,
+        12
+      );
       const headGlowMat = makeMat({
         color: 0xfef08a,
         emissive: 0xffc864,
-        emissiveIntensity: 0.12,
-        roughness: 0.22,
+        emissiveIntensity: 0.14,
+        roughness: 0.2,
       });
-      if (glbPost) {
-        inner.add(glbPost);
-        const headGlow = box(0.26, 0.08, 0.16, headGlowMat, 0.2, 2.94, 0);
-        headGlow.userData.noCastShadow = true;
-      } else {
-        cyl(0.05, 0.08, 2.9, darkSlate, -0.08, 1.45, 0);
-        box(0.55, 0.07, 0.09, darkSlate, 0.12, 2.92, 0);
-        const bulb = box(0.26, 0.07, 0.16, headGlowMat, 0.28, 2.86, 0);
-        bulb.userData.noCastShadow = true;
-      }
+      box(0.3, 0.06, 0.18, darkSlate, 0.28, 2.91, 0);
+      const bulb = box(0.24, 0.04, 0.14, headGlowMat, 0.28, 2.87, 0);
+      bulb.userData.noCastShadow = true;
       addFloorHalo(3.85, 0xffd488, 0.58, 0.25, 0.026, 0);
-      addBulbAura(0.32, 0xffdf9a, 0.38, 0.24, 2.86, 0);
+      addBulbAura(0.32, 0xffdf9a, 0.4, 0.28, 2.86, 0);
       outer.userData.smartLight = {
         kind: 'street_lamp',
-        localPos: [0.3, 2.8, 0],
+        localPos: [0.3, 2.82, 0],
         emissiveMats: [headGlowMat],
         haloMats,
         haloMaxOpacities,
@@ -3236,77 +3857,583 @@ export function createCatalogMesh3D(
     }
 
     case 'flower_bed': {
-      box(0.78, 0.14, 0.78, makeMat({ color: 0xc2bcb0, roughness: 0.82 }), 0, 0.07, 0);
-      box(0.68, 0.15, 0.68, makeMat({ color: 0x4b3626, roughness: 0.96 }), 0, 0.08, 0);
-      const petalColors = [0xd9485f, 0xeab338, 0xb07cc6, 0xebe6dc, 0xd96b43];
-      const stemG = new THREE.CylinderGeometry(0.008, 0.011, 0.2, 5);
-      const leafG = new THREE.ConeGeometry(0.045, 0.16, 4);
-      const petalG = new THREE.SphereGeometry(0.028, 6, 4);
-      const centerMat = makeMat({ color: 0xd99b26, roughness: 0.5 });
-      for (let i = 0; i < 6; i++) {
-        const fx = ((i % 3) - 1) * 0.2;
-        const fz = (Math.floor(i / 3) - 0.5) * 0.24;
-        for (let li = 0; li < 4; li++) {
-          const la = (li / 4) * Math.PI * 2 + i;
+      // Sculpted limestone & cedar courtyard planter with trailing greens, rose cards, and multi-height blooms
+      box(0.84, 0.12, 0.84, travertineMat, 0, 0.06, 0);
+      box(0.74, 0.08, 0.74, woodMat, 0, 0.14, 0);
+      box(0.66, 0.16, 0.66, soilMat, 0, 0.11, 0);
+
+      const roseCardG = new THREE.PlaneGeometry(0.46, 0.42);
+      for (let ci = 0; ci < 4; ci++) {
+        const card = new THREE.Mesh(roseCardG, roseCardMat);
+        const ang = (ci / 4) * Math.PI * 2 + 0.4;
+        card.position.set(Math.cos(ang) * 0.1, 0.3, Math.sin(ang) * 0.1);
+        card.rotation.set(0.18, ang, 0);
+        card.userData.sharedGlbMat = true;
+        inner.add(card);
+      }
+
+      const petalColors = [0xe11d48, 0xf59e0b, 0xc026d3, 0xfff1f2, 0xf97316, 0xfb7185];
+      const stemG = new THREE.CylinderGeometry(0.008, 0.011, 0.22, 5);
+      const leafG = new THREE.ConeGeometry(0.048, 0.17, 4);
+      const petalG = new THREE.SphereGeometry(0.032, 6, 4);
+      const centerMat = makeMat({ color: 0xfbbf24, roughness: 0.45 });
+      for (let i = 0; i < 8; i++) {
+        const ang = (i / 8) * Math.PI * 2 + 0.2;
+        const rad = i % 2 === 0 ? 0.22 : 0.12;
+        const fx = Math.cos(ang) * rad;
+        const fz = Math.sin(ang) * rad;
+        const hOff = i % 2 === 0 ? 0 : 0.055;
+        for (let li = 0; li < 3; li++) {
+          const la = (li / 3) * Math.PI * 2 + i;
           const lf = new THREE.Mesh(leafG, leafGreen);
-          lf.position.set(fx + Math.cos(la) * 0.05, 0.19, fz + Math.sin(la) * 0.05);
-          lf.rotation.z = -Math.cos(la) * 0.9;
-          lf.rotation.x = Math.sin(la) * 0.9;
-          lf.scale.set(0.9, 1, 0.35);
+          lf.position.set(fx + Math.cos(la) * 0.05, 0.21, fz + Math.sin(la) * 0.05);
+          lf.rotation.z = -Math.cos(la) * 0.92;
+          lf.rotation.x = Math.sin(la) * 0.92;
+          lf.scale.set(0.95, 1, 0.35);
+          lf.userData.sharedGlbMat = true;
           inner.add(lf);
         }
         const st = new THREE.Mesh(stemG, leafGreen);
-        st.position.set(fx, 0.25, fz);
+        st.position.set(fx, 0.27 + hOff * 0.5, fz);
+        st.userData.sharedGlbMat = true;
         inner.add(st);
-        const pMat = makeMat({ color: petalColors[i % petalColors.length], roughness: 0.55 });
+        const pMat = makeMat({ color: petalColors[i % petalColors.length], roughness: 0.5 });
         for (let pi = 0; pi < 5; pi++) {
           const pa = (pi / 5) * Math.PI * 2;
           const pet = new THREE.Mesh(petalG, pMat);
-          pet.scale.set(1.25, 0.45, 0.85);
-          pet.position.set(fx + Math.cos(pa) * 0.03, 0.35, fz + Math.sin(pa) * 0.03);
+          pet.scale.set(1.3, 0.45, 0.9);
+          pet.position.set(fx + Math.cos(pa) * 0.032, 0.37 + hOff, fz + Math.sin(pa) * 0.032);
           pet.rotation.y = -pa;
           inner.add(pet);
         }
-        const ctr = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.014, 7), centerMat);
-        ctr.position.set(fx, 0.358, fz);
+        const ctr = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.016, 7), centerMat);
+        ctr.position.set(fx, 0.382 + hOff, fz);
         inner.add(ctr);
       }
       break;
     }
 
     case 'outdoor_tree': {
-      const glbTree =
-        glbRegistry.cloneNormalized('birch_1', {
-          maxFootprint: { w: 0.96, d: 0.96 },
-          targetHeight: 2.85,
-        }) ||
-        glbRegistry.cloneNormalized('tree_2', {
-          maxFootprint: { w: 0.96, d: 0.96 },
-          targetHeight: 2.75,
-        });
-      // Stone garden curb collar
-      const treeRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.32, 0.045, 6, 16),
-        makeMat({ color: 0xb6afa3, roughness: 0.85 })
-      );
-      treeRing.rotation.x = Math.PI / 2;
-      treeRing.position.y = 0.035;
-      inner.add(treeRing);
-      if (glbTree) {
-        inner.add(glbTree);
-      } else {
-        cyl(0.09, 0.14, 1.35, warmTimber, 0, 0.67, 0);
-        for (const [cx, cy, cz, r] of [
-          [0, 1.85, 0, 0.56],
-          [-0.28, 1.55, 0.2, 0.4],
-          [0.26, 1.62, -0.18, 0.42],
-          [0.12, 1.48, 0.26, 0.36],
-        ]) {
-          const c = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), leafGreen);
-          c.position.set(cx, cy, cz);
-          inner.add(c);
+      // High-craft botanical flowering courtyard tree (carved stone pit + flared bark trunk + organic boughs + layered blossom foliage cards)
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.055, 8, 20), travertineMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 0.045;
+      ring.userData.sharedGlbMat = true;
+      inner.add(ring);
+      cyl(0.33, 0.35, 0.06, soilMat, 0, 0.03, 0);
+
+      // Tapered curved main trunk + 4 buttress root flares
+      const trunk = cyl(0.085, 0.15, 1.32, barkMat, 0, 0.66, 0);
+      trunk.rotation.z = 0.03;
+      for (let ri = 0; ri < 4; ri++) {
+        const ra = (ri / 4) * Math.PI * 2 + 0.35;
+        const rf = cyl(0.032, 0.072, 0.38, barkMat, Math.cos(ra) * 0.12, 0.14, Math.sin(ra) * 0.12);
+        rf.rotation.z = -Math.cos(ra) * 0.56;
+        rf.rotation.x = Math.sin(ra) * 0.56;
+      }
+
+      const shadeLeafMat = makeMat({ color: 0x254f1c, roughness: 0.92 });
+      const crownCoreG = new THREE.DodecahedronGeometry(0.34, 1);
+      const cardG = new THREE.PlaneGeometry(0.92, 0.92);
+
+      // 5 diverging botanical boughs + inner shaded canopy + crossed blossom leaf cards
+      const boughs = [
+        { ang: 0.2, tilt: 0.58, h: 1.36, r: 0.28 },
+        { ang: 1.45, tilt: 0.52, h: 1.46, r: 0.26 },
+        { ang: 2.7, tilt: 0.62, h: 1.34, r: 0.29 },
+        { ang: 3.95, tilt: 0.5, h: 1.48, r: 0.25 },
+        { ang: 5.2, tilt: 0.56, h: 1.4, r: 0.27 },
+      ];
+      for (const bg of boughs) {
+        const bx = Math.cos(bg.ang) * bg.r;
+        const bz = Math.sin(bg.ang) * bg.r;
+        const bough = cyl(0.042, 0.074, 0.78, barkMat, bx * 0.72, bg.h, bz * 0.72);
+        bough.rotation.z = -Math.cos(bg.ang) * bg.tilt;
+        bough.rotation.x = Math.sin(bg.ang) * bg.tilt;
+
+        const core = new THREE.Mesh(crownCoreG, shadeLeafMat);
+        core.position.set(bx * 1.4, bg.h + 0.42, bz * 1.4);
+        core.scale.set(0.92, 0.68, 0.92);
+        inner.add(core);
+
+        for (let ci = 0; ci < 3; ci++) {
+          const card = new THREE.Mesh(cardG, blossomCardMat);
+          card.position.set(bx * 1.55, bg.h + 0.5, bz * 1.55);
+          card.rotation.set(
+            ci === 2 ? Math.PI / 2 - 0.26 : 0.22,
+            bg.ang + (ci * Math.PI) / 3,
+            ci === 1 ? 0.32 : -0.2
+          );
+          card.scale.setScalar(0.82 + (ci % 2) * 0.18);
+          card.userData.sharedGlbMat = true;
+          inner.add(card);
         }
       }
+
+      // Lush domed upper crown canopy
+      const topCore = new THREE.Mesh(crownCoreG, shadeLeafMat);
+      topCore.position.set(0, 2.24, 0);
+      topCore.scale.set(1.12, 0.76, 1.12);
+      inner.add(topCore);
+      for (let ti = 0; ti < 5; ti++) {
+        const ta = (ti / 5) * Math.PI * 2;
+        const topCard = new THREE.Mesh(cardG, blossomCardMat);
+        topCard.position.set(Math.cos(ta) * 0.2, 2.34 + (ti % 2) * 0.14, Math.sin(ta) * 0.2);
+        topCard.rotation.set(0.5 + (ti % 2) * 0.3, ta, 0.18);
+        topCard.scale.setScalar(0.96);
+        topCard.userData.sharedGlbMat = true;
+        inner.add(topCard);
+      }
+      break;
+    }
+
+    case 'royal_palm': {
+      // Graceful ornamental courtyard palm in octagonal carved stone curb with arching pinnate fronds
+      const curb = cyl(0.38, 0.4, 0.12, travertineMat, 0, 0.06, 0);
+      curb.geometry.dispose();
+      curb.geometry = new THREE.CylinderGeometry(0.38, 0.4, 0.12, 8);
+      cyl(0.32, 0.34, 0.13, soilMat, 0, 0.065, 0);
+
+      // Ringed gently curving palm trunk (9 tapered segments)
+      for (let s = 0; s < 9; s++) {
+        const t = s / 8;
+        const px = Math.sin(t * 1.4) * 0.09;
+        const pz = Math.cos(t * 1.2) * 0.04 - 0.04;
+        const rBot = 0.115 - t * 0.038;
+        const rTop = 0.102 - t * 0.036;
+        const seg = cyl(rTop, rBot, 0.22, barkMat, px, 0.18 + s * 0.195, pz);
+        seg.rotation.z = -Math.cos(t * 1.4) * 0.07;
+      }
+      // Smooth green crownshaft + golden date clusters
+      cyl(0.078, 0.085, 0.36, leafGreen, 0.088, 2.02, -0.02);
+      const dateMat = makeMat({ color: 0xd97706, roughness: 0.45 });
+      for (let d = 0; d < 3; d++) {
+        const da = (d / 3) * Math.PI * 2;
+        const pod = new THREE.Mesh(new THREE.SphereGeometry(0.055, 7, 5), dateMat);
+        pod.scale.set(0.8, 1.45, 0.8);
+        pod.position.set(0.088 + Math.cos(da) * 0.1, 1.88, -0.02 + Math.sin(da) * 0.1);
+        inner.add(pod);
+      }
+
+      // 11 Arching pinnate palm fronds built from bent multi-segment planes with palmFrond alpha cutout
+      const frondGeom = new THREE.PlaneGeometry(0.68, 1.18, 2, 5);
+      frondGeom.translate(0, 0.59, 0);
+      const fPos = frondGeom.attributes.position as THREE.BufferAttribute;
+      for (let vi = 0; vi < fPos.count; vi++) {
+        const fy = fPos.getY(vi);
+        const norm = fy / 1.18;
+        fPos.setZ(vi, -Math.pow(norm, 1.85) * 0.52);
+      }
+      frondGeom.computeVertexNormals();
+
+      for (let fi = 0; fi < 11; fi++) {
+        const tier = fi < 6 ? 0 : 1;
+        const ang = (fi / (tier === 0 ? 6 : 5)) * Math.PI * 2 + tier * 0.38;
+        const fPivot = new THREE.Group();
+        fPivot.position.set(0.088, 2.16 + tier * 0.08, -0.02);
+        fPivot.rotation.y = ang;
+        const fMesh = new THREE.Mesh(frondGeom, palmCardMat);
+        fMesh.rotation.x = tier === 0 ? 1.12 : 0.62;
+        fMesh.userData.sharedGlbMat = true;
+        fPivot.add(fMesh);
+        inner.add(fPivot);
+      }
+      break;
+    }
+
+    case 'marble_fountain': {
+      // Sculpted two-tier travertine marble garden fountain with translucent turquoise water & night glow
+      const bronzeMat = makeMat({ color: 0xb48a48, roughness: 0.32, metalness: 0.78 });
+      // Octagonal carved stone basin rim + floor
+      const basinBase = cyl(0.45, 0.47, 0.2, travertineMat, 0, 0.1, 0);
+      basinBase.geometry.dispose();
+      basinBase.geometry = new THREE.CylinderGeometry(0.45, 0.47, 0.2, 8);
+      const basinRim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.055, 8, 16), travertineMat);
+      basinRim.rotation.x = Math.PI / 2;
+      basinRim.position.y = 0.21;
+      basinRim.userData.sharedGlbMat = true;
+      inner.add(basinRim);
+
+      const waterPoolMat = new THREE.MeshPhysicalMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.12,
+        roughness: 0.06,
+        metalness: 0.06,
+        transparent: true,
+        opacity: 0.84,
+        clearcoat: 1.0,
+      });
+      const poolDisk = cyl(0.39, 0.39, 0.06, waterPoolMat, 0, 0.18, 0);
+      poolDisk.userData.noCastShadow = true;
+
+      // Central fluted marble pedestal + lower bowl + upper finial spout
+      cyl(0.09, 0.13, 0.42, travertineMat, 0, 0.38, 0);
+      cyl(0.24, 0.09, 0.11, travertineMat, 0, 0.6, 0);
+      const upperWater = cyl(0.2, 0.18, 0.03, waterPoolMat, 0, 0.65, 0);
+      upperWater.userData.noCastShadow = true;
+      cyl(0.05, 0.075, 0.24, travertineMat, 0, 0.76, 0);
+      cyl(0.03, 0.045, 0.12, bronzeMat, 0, 0.92, 0);
+
+      // 4 Translucent arcing water jets cascading from upper bowl
+      for (let wi = 0; wi < 4; wi++) {
+        const wa = (wi / 4) * Math.PI * 2 + 0.3;
+        const arc = tube(
+          [
+            [Math.cos(wa) * 0.04, 0.96, Math.sin(wa) * 0.04],
+            [Math.cos(wa) * 0.15, 0.88, Math.sin(wa) * 0.15],
+            [Math.cos(wa) * 0.24, 0.64, Math.sin(wa) * 0.24],
+          ],
+          0.012,
+          waterPoolMat,
+          8
+        );
+        arc.userData.noCastShadow = true;
+      }
+
+      addFloorHalo(2.15, 0x38bdf8, 0.44, 0, 0.026, 0);
+      addBulbAura(0.26, 0x7dd3fc, 0.32, 0, 0.42, 0);
+      outer.userData.smartLight = {
+        kind: 'sign_lamp',
+        localPos: [0, 0.55, 0],
+        emissiveMats: [waterPoolMat],
+        haloMats,
+        haloMaxOpacities,
+      } as SmartLightMeta;
+      break;
+    }
+
+    case 'rose_trellis': {
+      // Limestone & cedar planter trough with lattice trellis and lush climbing roses
+      box(0.84, 0.1, 0.48, travertineMat, 0, 0.05, 0);
+      box(0.78, 0.28, 0.42, woodMat, 0, 0.24, 0);
+      box(0.7, 0.22, 0.34, soilMat, 0, 0.3, 0);
+
+      // Upright cedar trellis frame + cross slats behind trough
+      box(0.06, 1.38, 0.06, warmTimber, -0.36, 0.96, -0.14);
+      box(0.06, 1.38, 0.06, warmTimber, 0.36, 0.96, -0.14);
+      box(0.8, 0.06, 0.07, warmTimber, 0, 1.66, -0.14);
+      for (let h = 0; h < 5; h++) {
+        box(0.72, 0.025, 0.02, woodMat, 0, 0.52 + h * 0.24, -0.14);
+      }
+      for (let v = -2; v <= 2; v++) {
+        box(0.025, 1.24, 0.02, woodMat, v * 0.14, 1.02, -0.14);
+      }
+
+      // Layered climbing botanical rose & foliage cards across trellis face + planter base
+      const roseCardG = new THREE.PlaneGeometry(0.56, 0.56);
+      const cardPlacements: Array<[number, number, number, number]> = [
+        [-0.16, 0.68, -0.06, 0.15],
+        [0.16, 0.84, -0.05, -0.2],
+        [-0.04, 1.22, -0.06, 0.25],
+        [0.18, 1.38, -0.07, -0.15],
+      ];
+      for (const [cx, cy, cz, ry] of cardPlacements) {
+        const card = new THREE.Mesh(roseCardG, roseCardMat);
+        card.position.set(cx, cy, cz);
+        card.rotation.set(0.08, ry, 0);
+        card.userData.sharedGlbMat = true;
+        inner.add(card);
+      }
+      // Sculpted 3D rose buds along front rim
+      const roseMat = makeMat({ color: 0xe11d48, roughness: 0.45 });
+      for (const [rx, ry, rz] of [
+        [-0.22, 0.46, 0.08],
+        [0.02, 0.48, 0.1],
+        [0.24, 0.45, 0.07],
+        [-0.18, 1.05, -0.02],
+        [0.16, 1.36, -0.02],
+      ]) {
+        const bud = new THREE.Mesh(new THREE.SphereGeometry(0.045, 7, 5), roseMat);
+        bud.position.set(rx, ry, rz);
+        inner.add(bud);
+      }
+      break;
+    }
+
+    case 'zen_lantern': {
+      // Carved basalt pagoda garden lantern on mossy river-stone pad with bamboo & warm lantern glow
+      const basaltMat = makeMat({ color: 0x4b5563, roughness: 0.86, metalness: 0.04 });
+      const pebbleMat = makeMat({ color: 0x9ca3af, roughness: 0.88 });
+      const bambooMat = makeMat({ color: 0x5f8f38, roughness: 0.56 });
+      const shojiGlowMat = makeMat({
+        color: 0xfef3c7,
+        emissive: 0xf59e0b,
+        emissiveIntensity: 0.16,
+        roughness: 0.3,
+      });
+
+      // Rounded stone pad & river pebbles
+      cyl(0.42, 0.45, 0.06, pebbleMat, 0, 0.03, 0);
+      for (let p = 0; p < 5; p++) {
+        const pa = (p / 5) * Math.PI * 2 + 0.5;
+        const st = new THREE.Mesh(new THREE.SphereGeometry(0.065, 7, 5), basaltMat);
+        st.scale.set(1.2, 0.5, 0.9);
+        st.position.set(Math.cos(pa) * 0.28, 0.065, Math.sin(pa) * 0.28);
+        inner.add(st);
+      }
+
+      // Twin green bamboo culms at rear corner
+      for (const [bx, bz, bh] of [
+        [-0.24, -0.22, 1.24],
+        [-0.16, -0.26, 0.96],
+      ]) {
+        cyl(0.024, 0.028, bh, bambooMat, bx, 0.06 + bh / 2, bz);
+        for (let ni = 1; ni <= 3; ni++) {
+          cyl(0.032, 0.032, 0.02, darkSlate, bx, 0.06 + (bh * ni) / 4, bz);
+        }
+      }
+
+      // Carved basalt lantern: 4-legged pedestal, hexagonal pillar, warm glowing firebox, swept pagoda roof
+      for (const [lx, lz] of [
+        [-0.11, -0.11],
+        [0.11, -0.11],
+        [-0.11, 0.11],
+        [0.11, 0.11],
+      ]) {
+        box(0.07, 0.16, 0.07, basaltMat, lx, 0.14, lz);
+      }
+      cyl(0.16, 0.19, 0.08, basaltMat, 0.02, 0.24, 0.02);
+      cyl(0.09, 0.11, 0.34, basaltMat, 0.02, 0.45, 0.02);
+      cyl(0.19, 0.14, 0.08, basaltMat, 0.02, 0.64, 0.02);
+
+      // Glowing shoji paper chamber framed by stone corner mullions
+      const coreGlow = box(0.16, 0.22, 0.16, shojiGlowMat, 0.02, 0.78, 0.02);
+      coreGlow.userData.noCastShadow = true;
+      for (const [mx, mz] of [
+        [-0.08, -0.08],
+        [0.12, -0.08],
+        [-0.08, 0.12],
+        [0.12, 0.12],
+      ]) {
+        box(0.035, 0.24, 0.035, basaltMat, mx, 0.78, mz);
+      }
+
+      // Swept pagoda cap + lotus finial
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.17, 6), basaltMat);
+      roof.position.set(0.02, 0.98, 0.02);
+      inner.add(roof);
+      const finial = new THREE.Mesh(new THREE.SphereGeometry(0.048, 8, 6), basaltMat);
+      finial.position.set(0.02, 1.09, 0.02);
+      inner.add(finial);
+
+      addFloorHalo(2.2, 0xffcc78, 0.44, 0.02, 0.026, 0.02);
+      addBulbAura(0.24, 0xffe09a, 0.34, 0.02, 0.78, 0.02);
+      outer.userData.smartLight = {
+        kind: 'garden_lamp',
+        localPos: [0.02, 0.82, 0.02],
+        emissiveMats: [shojiGlowMat],
+        haloMats,
+        haloMaxOpacities,
+      } as SmartLightMeta;
+      break;
+    }
+
+    case 'garden_gazebo': {
+      // Luxury 1x2 cedar pergola swing bench with waterproof cushions & warm hanging lanterns
+      const cushionMat = makeMat({ color: 0xe7dfd1, roughness: 0.78 });
+      const pillowCoralMat = makeMat({ color: 0xd96b52, roughness: 0.76 });
+      const swingGlowMat = makeMat({
+        color: 0xfef3c7,
+        emissive: 0xfbbf24,
+        emissiveIntensity: 0.14,
+        roughness: 0.22,
+      });
+
+      // Limestone corner plinths + A-frame cedar uprights
+      for (const pz of [-0.76, 0.76]) {
+        box(0.68, 0.09, 0.2, travertineMat, 0, 0.045, pz);
+        const legF = box(0.08, 2.08, 0.08, woodMat, 0.16, 1.1, pz);
+        legF.rotation.z = 0.12;
+        const legB = box(0.08, 2.08, 0.08, woodMat, -0.16, 1.1, pz);
+        legB.rotation.z = -0.12;
+      }
+      // Top ridge beam + slatted pergola canopy roof
+      box(0.1, 0.11, 1.88, woodMat, 0, 2.15, 0);
+      box(0.86, 0.06, 1.86, warmTimber, 0, 2.22, 0);
+      for (let rz = -0.82; rz <= 0.84; rz += 0.27) {
+        box(0.98, 0.065, 0.065, woodMat, 0, 2.28, rz);
+      }
+
+      // Brushed steel suspension chains holding swing bench
+      for (const pz of [-0.58, 0.58]) {
+        cyl(0.012, 0.012, 1.62, silverMetal, 0.02, 1.32, pz);
+        cyl(0.012, 0.012, 1.62, silverMetal, -0.14, 1.32, pz);
+      }
+      // Swing wooden frame + tufted ivory cushions + coral bolster pillows
+      box(0.54, 0.06, 1.24, woodMat, 0.02, 0.44, 0);
+      const backFrame = box(0.06, 0.42, 1.24, woodMat, -0.22, 0.66, 0);
+      backFrame.rotation.z = 0.14;
+      box(0.48, 0.09, 1.16, cushionMat, 0.04, 0.51, 0);
+      const backCushion = box(0.09, 0.36, 1.14, cushionMat, -0.16, 0.69, 0);
+      backCushion.rotation.z = 0.14;
+      for (const pz of [-0.4, 0.4]) {
+        const pill = box(0.14, 0.2, 0.26, pillowCoralMat, -0.06, 0.64, pz);
+        pill.rotation.z = 0.28;
+      }
+
+      // Twin warm hanging lantern globes beneath pergola rafters
+      for (const lz of [-0.38, 0.38]) {
+        cyl(0.01, 0.01, 0.18, darkSlate, 0.26, 2.08, lz);
+        const orb = new THREE.Mesh(new THREE.SphereGeometry(0.065, 10, 8), swingGlowMat);
+        orb.position.set(0.26, 1.98, lz);
+        orb.userData.noCastShadow = true;
+        inner.add(orb);
+        addBulbAura(0.18, 0xffe4a8, 0.32, 0.26, 1.98, lz);
+      }
+      addFloorHalo(2.45, 0xffd584, 0.4, 0, 0.026, 0);
+      outer.userData.smartLight = {
+        kind: 'garden_lamp',
+        localPos: [0.1, 2.02, 0],
+        emissiveMats: [swingGlowMat],
+        haloMats,
+        haloMaxOpacities,
+      } as SmartLightMeta;
+      break;
+    }
+
+    case 'solar_panel': {
+      // Full-scale 2x2 dual-module commercial monocrystalline ground-mounted solar array
+      const galvSteel = makeMat({ color: 0x94a3b8, roughness: 0.34, metalness: 0.8 });
+      const warningYellow = makeMat({ color: 0xfacc15, roughness: 0.45, metalness: 0.1 });
+
+      // 4 precast concrete footing piers with bolted galvanized base plates
+      for (const bx of [-0.58, 0.58]) {
+        for (const bz of [-0.54, 0.56]) {
+          box(0.26, 0.11, 0.3, travertineMat, bx, 0.055, bz);
+          box(0.15, 0.022, 0.15, galvSteel, bx, 0.12, bz);
+        }
+        // Rear tall stanchion & front short stanchion
+        box(0.068, 1.08, 0.068, galvSteel, bx, 0.66, -0.54);
+        box(0.068, 0.38, 0.068, galvSteel, bx, 0.31, 0.56);
+
+        // Diagonal compression brace supporting rear overhang
+        const diag = box(0.044, 0.92, 0.044, galvSteel, bx, 0.62, -0.1);
+        diag.rotation.x = 0.72;
+
+        // Sloped steel rafter beam resting atop stanchions
+        const rafter = box(0.056, 0.068, 1.52, galvSteel, bx, 0.86, 0.01);
+        rafter.rotation.x = 0.52;
+      }
+
+      // Rear horizontal strut & X-bracing for authentic ground-mount racking
+      box(1.22, 0.048, 0.048, galvSteel, 0, 0.66, -0.54);
+      const xBraceA = box(0.028, 1.38, 0.024, galvSteel, 0, 0.66, -0.55);
+      xBraceA.rotation.z = 1.06;
+      const xBraceB = box(0.028, 1.38, 0.024, galvSteel, 0, 0.66, -0.55);
+      xBraceB.rotation.z = -1.06;
+
+      // Tilted Solar Array Assembly (30deg sun-facing tilt toward +Z south)
+      const tiltGroup = new THREE.Group();
+      tiltGroup.position.set(0, 0.91, 0.01);
+      tiltGroup.rotation.x = 0.52;
+
+      // Twin horizontal extruded aluminum C-channel mounting rails spanning both panels
+      for (const rz of [-0.46, 0.46]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.046, 0.052), galvSteel);
+        rail.position.set(0, -0.042, rz);
+        tiltGroup.add(rail);
+      }
+
+      // Two full-height 72-cell half-cut monocrystalline PV modules side by side
+      const modW = 0.9;
+      const modD = 1.66;
+      const frameT = 0.044;
+      const railRim = 0.032;
+
+      for (const mx of [-0.47, 0.47]) {
+        const modGroup = new THREE.Group();
+        modGroup.position.set(mx, 0, 0);
+
+        // Protective white/slate Tedlar backsheet base
+        const backsheet = new THREE.Mesh(
+          new THREE.BoxGeometry(modW - railRim * 1.4, 0.024, modD - railRim * 1.4),
+          darkSlate
+        );
+        backsheet.position.y = -0.008;
+        backsheet.userData.sharedGlbMat = true;
+
+        // 4 brushed anodized aluminum perimeter frame rails
+        const railTop = new THREE.Mesh(new THREE.BoxGeometry(modW, frameT, railRim), silverMetal);
+        railTop.position.z = -modD * 0.5 + railRim * 0.5;
+        railTop.userData.sharedGlbMat = true;
+        const railBot = new THREE.Mesh(new THREE.BoxGeometry(modW, frameT, railRim), silverMetal);
+        railBot.position.z = modD * 0.5 - railRim * 0.5;
+        railBot.userData.sharedGlbMat = true;
+        const railLeft = new THREE.Mesh(new THREE.BoxGeometry(railRim, frameT, modD - railRim * 2), silverMetal);
+        railLeft.position.x = -modW * 0.5 + railRim * 0.5;
+        railLeft.userData.sharedGlbMat = true;
+        const railRight = new THREE.Mesh(new THREE.BoxGeometry(railRim, frameT, modD - railRim * 2), silverMetal);
+        railRight.position.x = modW * 0.5 - railRim * 0.5;
+        railRight.userData.sharedGlbMat = true;
+
+        // Tempered photovoltaic silicon glass top face
+        const glassFace = new THREE.Mesh(
+          new THREE.PlaneGeometry(modW - railRim * 1.9, modD - railRim * 1.9),
+          solarCellMat
+        );
+        glassFace.rotation.x = -Math.PI / 2;
+        glassFace.position.y = 0.015;
+        glassFace.userData.sharedGlbMat = true;
+        glassFace.userData.noCastShadow = true;
+
+        // Rear IP68 junction box
+        const jBox = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.045, 0.14), darkSlate);
+        jBox.position.set(0, -0.036, -0.28);
+        jBox.userData.sharedGlbMat = true;
+
+        modGroup.add(backsheet, railTop, railBot, railLeft, railRight, glassFace, jBox);
+        tiltGroup.add(modGroup);
+      }
+
+      // Stainless steel mid-clamps & outer end-clamps holding panels to the C-rails
+      for (const rz of [-0.46, 0.46]) {
+        for (const cx of [-0.94, 0, 0.94]) {
+          const clamp = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.056, 0.058), darkSlate);
+          clamp.position.set(cx, 0.006, rz);
+          clamp.userData.sharedGlbMat = true;
+          tiltGroup.add(clamp);
+        }
+      }
+
+      inner.add(tiltGroup);
+
+      // Post-mounted grid-tie string inverter / DC combiner box with LED & safety stripe
+      box(0.32, 0.36, 0.14, silverMetal, 0, 0.72, -0.63);
+      box(0.28, 0.05, 0.02, warningYellow, 0, 0.59, -0.695);
+      const statusLed = box(
+        0.042,
+        0.022,
+        0.02,
+        makeMat({ color: 0x34d399, emissive: 0x10b981, emissiveIntensity: 0.85 }),
+        0.09,
+        0.84,
+        -0.695
+      );
+      statusLed.userData.noCastShadow = true;
+
+      // Coiled DC home-run cables & vertical armored conduit into grass
+      tube(
+        [
+          [-0.42, 0.96, -0.34],
+          [-0.2, 0.82, -0.52],
+          [0, 0.74, -0.6],
+        ],
+        0.015,
+        blackRubber,
+        8
+      );
+      tube(
+        [
+          [0.42, 0.96, -0.34],
+          [0.2, 0.82, -0.52],
+          [0, 0.74, -0.6],
+        ],
+        0.015,
+        blackRubber,
+        8
+      );
+      cyl(0.018, 0.018, 0.56, darkSlate, 0, 0.28, -0.63);
       break;
     }
 
@@ -3412,18 +4539,309 @@ export function createCatalogMesh3D(
     }
 
     case 'skeleton_stand': {
-      cyl(0.22, 0.24, 0.05, darkSlate, 0, 0.025, 0);
-      cyl(0.02, 0.02, 1.38, silverMetal, 0, 0.7, -0.05);
-      const boneMat = makeMat({ color: 0xf1f5f9, roughness: 0.45 });
-      cyl(0.04, 0.04, 0.45, boneMat, -0.08, 0.45, 0.02);
-      cyl(0.04, 0.04, 0.45, boneMat, 0.08, 0.45, 0.02);
-      box(0.22, 0.08, 0.12, boneMat, 0, 0.72, 0.02);
-      box(0.24, 0.34, 0.14, boneMat, 0, 0.98, 0.02);
-      cyl(0.028, 0.028, 0.36, boneMat, -0.17, 0.95, 0.02);
-      cyl(0.028, 0.028, 0.36, boneMat, 0.17, 0.95, 0.02);
-      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), boneMat);
-      skull.position.set(0, 1.28, 0.03);
-      inner.add(skull);
+      // High-detail educational anatomical human skeleton on 5-caster chrome medical rolling stand
+      const boneMat = makeMat({ color: 0xf2ece0, roughness: 0.48, metalness: 0.04 });
+      const boneShadeMat = makeMat({ color: 0xded5c3, roughness: 0.54, metalness: 0.03 });
+      const cartilageMat = makeMat({ color: 0xd5e3ea, roughness: 0.36, metalness: 0.04 });
+      const discTeachMat = makeMat({
+        color: 0xe11d48,
+        emissive: 0x9f1239,
+        emissiveIntensity: 0.32,
+        roughness: 0.35,
+      });
+      const cavityMat = makeMat({ color: 0x221b15, roughness: 0.88 });
+      const toothMat = makeMat({ color: 0xfaf8f2, roughness: 0.28 });
+
+      // 1. Mobile 5-star wheeled base & telescopic steel stand
+      cyl(0.038, 0.045, 0.055, silverMetal, 0, 0.068, -0.04);
+      for (let i = 0; i < 5; i++) {
+        const ang = (i / 5) * Math.PI * 2 + 0.3;
+        const arm = box(0.026, 0.022, 0.24, silverMetal, Math.sin(ang) * 0.12, 0.058, -0.04 + Math.cos(ang) * 0.12);
+        arm.rotation.y = ang;
+        const wheel = cyl(0.022, 0.022, 0.018, blackRubber, Math.sin(ang) * 0.22, 0.022, -0.04 + Math.cos(ang) * 0.22);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.rotation.y = ang;
+      }
+      // Vertical chrome rod + pelvic mount bracket
+      cyl(0.014, 0.016, 0.96, silverMetal, 0, 0.54, -0.055);
+      cyl(0.022, 0.022, 0.04, blackRubber, 0, 0.48, -0.055);
+      box(0.024, 0.024, 0.06, silverMetal, 0, 0.89, -0.025);
+
+      const addJoint = (r: number, x: number, y: number, z: number, mat = boneMat) => {
+        const m = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), mat);
+        m.position.set(x, y, z);
+        inner.add(m);
+        return m;
+      };
+
+      // 2. Articulated Lower Limbs (Feet, Tibia+Fibula, Patellae, Angled Femurs)
+      for (const side of [-1, 1]) {
+        const footX = side * 0.095;
+        const kneeX = side * 0.082;
+        const hipX = side * 0.105;
+
+        // Articulated foot: calcaneus heel + arched midfoot + metatarsals + 4 phalanges ridge
+        box(0.042, 0.032, 0.05, boneShadeMat, footX, 0.145, -0.01);
+        const arch = box(0.044, 0.024, 0.088, boneMat, footX, 0.146, 0.042);
+        arch.rotation.x = 0.16;
+        for (let t = 0; t < 4; t++) {
+          box(0.008, 0.014, 0.036, boneShadeMat, footX + (t - 1.5) * 0.011, 0.132, 0.096);
+        }
+        addJoint(0.021, footX, 0.172, 0.006); // ankle talus
+
+        // Twin Tibia (medial/thicker) + Fibula (lateral/slender)
+        tube([[footX - side * 0.006, 0.178, 0.008], [kneeX - side * 0.008, 0.515, 0.02]], 0.015, boneMat, 6);
+        tube([[footX + side * 0.014, 0.178, 0.002], [kneeX + side * 0.016, 0.495, 0.006]], 0.007, boneShadeMat, 6);
+
+        // Femoral condyles + tibial plateau + patella kneecap
+        addJoint(0.024, kneeX, 0.53, 0.018);
+        const patella = addJoint(0.014, kneeX, 0.535, 0.044, boneShadeMat);
+        patella.scale.set(1, 1.15, 0.55);
+
+        // Femur shaft angling naturally outward to greater trochanter + femoral neck to acetabulum
+        tube(
+          [
+            [kneeX, 0.54, 0.018],
+            [hipX + side * 0.018, 0.72, 0.016],
+            [hipX + side * 0.024, 0.855, 0.014],
+          ],
+          0.018,
+          boneMat,
+          8
+        );
+        tube(
+          [
+            [hipX + side * 0.022, 0.855, 0.014],
+            [hipX - side * 0.016, 0.885, 0.014],
+          ],
+          0.014,
+          boneMat,
+          4
+        );
+        addJoint(0.022, hipX - side * 0.018, 0.886, 0.014); // femoral head
+      }
+
+      // 3. Sculpted Anatomical Pelvis (Sacrum, Iliac Wings, Pubic Symphysis, Ischial Loops)
+      const sacrum = box(0.088, 0.115, 0.036, boneShadeMat, 0, 0.91, -0.028);
+      sacrum.rotation.x = 0.22;
+      for (const side of [-1, 1]) {
+        const wing = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.046, 0.098, 8), boneMat);
+        wing.scale.set(0.32, 1.0, 0.92);
+        wing.position.set(side * 0.105, 0.945, 0.008);
+        wing.rotation.z = side * -0.46;
+        wing.rotation.y = side * 0.42;
+        inner.add(wing);
+
+        // Iliac crest rim & pubic arch loop
+        tube(
+          [
+            [side * 0.04, 0.94, -0.024],
+            [side * 0.132, 0.985, -0.004],
+            [side * 0.125, 0.945, 0.048],
+            [side * 0.068, 0.87, 0.056],
+            [side * 0.012, 0.848, 0.048],
+          ],
+          0.013,
+          boneMat,
+          10
+        );
+        tube(
+          [
+            [side * 0.016, 0.848, 0.046],
+            [side * 0.075, 0.822, 0.014],
+            [side * 0.088, 0.875, 0.002],
+          ],
+          0.011,
+          boneShadeMat,
+          6
+        );
+      }
+      box(0.024, 0.032, 0.018, cartilageMat, 0, 0.848, 0.048); // pubic symphysis
+
+      // 4. Articulated Vertebral Column (Lumbar -> Thoracic -> Cervical) + Highlighted L4-L5 Teaching Disc
+      const numVert = 21;
+      for (let vi = 0; vi < numVert; vi++) {
+        const t = vi / (numVert - 1); // 0 = L5, 1 = C1
+        const vy = 0.96 + t * 0.56;
+        // Anatomical S-curve (lumbar lordosis, thoracic kyphosis, cervical lordosis)
+        const vz =
+          -0.02 +
+          Math.sin(t * Math.PI) * -0.028 +
+          (t < 0.35 ? Math.sin((t / 0.35) * Math.PI) * 0.026 : 0) +
+          (t > 0.78 ? Math.sin(((t - 0.78) / 0.22) * Math.PI) * 0.018 : 0);
+        const radius = 0.026 - t * 0.011;
+        cyl(radius, radius * 1.04, 0.019, boneMat, 0, vy, vz);
+        // Intervertebral cartilage disc (L4-L5 highlighted crimson for clinical teaching clarity)
+        if (vi < numVert - 1) {
+          const isTeachingDisc = vi === 1;
+          cyl(
+            radius * 0.98,
+            radius * 0.98,
+            0.008,
+            isTeachingDisc ? discTeachMat : cartilageMat,
+            0,
+            vy + 0.013,
+            vz
+          );
+        }
+        // Posterior spinous process + transverse knobs
+        const sp = box(0.009, 0.011, 0.024, boneShadeMat, 0, vy - 0.003, vz - radius - 0.008);
+        sp.rotation.x = 0.38;
+      }
+
+      // 5. Open Thoracic Ribcage (10 true/false curved rib pairs + 2 floating pairs + Manubrium/Sternum)
+      // Sternum (Manubrium, Body, Xiphoid)
+      box(0.056, 0.05, 0.016, boneMat, 0, 1.355, 0.068);
+      box(0.03, 0.14, 0.014, boneMat, 0, 1.26, 0.082);
+      box(0.014, 0.032, 0.01, cartilageMat, 0, 1.175, 0.08);
+
+      const ribPairs = 10;
+      for (let ri = 0; ri < ribPairs; ri++) {
+        const rt = ri / (ribPairs - 1); // 0 = top rib 1, 1 = rib 10
+        const backY = 1.385 - rt * 0.255;
+        const frontY = 1.365 - rt * 0.27;
+        const spreadX = 0.072 + Math.sin(Math.pow(rt, 0.72) * Math.PI * 0.88) * 0.078;
+        const frontZ = 0.055 + Math.sin(rt * Math.PI * 0.78) * 0.038;
+        const backZ = -0.042;
+        const attachesSternum = ri < 7;
+
+        for (const side of [-1, 1]) {
+          const ribMat = ri >= 5 && ri < 8 ? boneMat : boneMat;
+          const endX = attachesSternum ? side * 0.016 : side * (0.042 + (ri - 6) * 0.016);
+          const endY = attachesSternum ? frontY : frontY - 0.018;
+          const endZ = attachesSternum ? frontZ + 0.024 : frontZ - 0.004;
+          tube(
+            [
+              [side * 0.016, backY, backZ],
+              [side * (spreadX * 0.72), backY - 0.008, backZ - 0.006],
+              [side * spreadX, (backY + frontY) * 0.5, 0.015],
+              [side * (spreadX * 0.76), frontY + 0.006, frontZ + 0.012],
+              [endX, endY, endZ],
+            ],
+            0.0068,
+            ribMat,
+            10
+          );
+          if (ri >= 7 && ri < 9) {
+            // Costal cartilage sweep connecting false ribs upward toward costal margin
+            tube(
+              [
+                [endX, endY, endZ],
+                [side * 0.03, endY + 0.04, frontZ + 0.018],
+              ],
+              0.0055,
+              cartilageMat,
+              4
+            );
+          }
+        }
+      }
+
+      // 6. Shoulder Girdle (S-Curved Clavicles + Dorsal Scapulae) & Articulated Arms + Hands
+      for (const side of [-1, 1]) {
+        // S-curved Clavicle collarbone
+        tube(
+          [
+            [side * 0.022, 1.375, 0.064],
+            [side * 0.085, 1.385, 0.052],
+            [side * 0.168, 1.39, 0.018],
+          ],
+          0.0095,
+          boneMat,
+          7
+        );
+        // Dorsal Scapula shoulder blade
+        const scap = new THREE.Mesh(new THREE.ConeGeometry(0.056, 0.125, 3), boneShadeMat);
+        scap.scale.set(0.92, 1, 0.22);
+        scap.position.set(side * 0.095, 1.32, -0.068);
+        scap.rotation.z = Math.PI + side * 0.16;
+        scap.rotation.y = side * -0.22;
+        inner.add(scap);
+
+        const shX = side * 0.175;
+        const elbX = side * 0.195;
+        const wrX = side * 0.205;
+        addJoint(0.022, shX, 1.37, 0.008); // humeral head
+
+        // Humerus
+        tube([[shX, 1.37, 0.008], [elbX, 1.12, 0.002]], 0.014, boneMat, 6);
+        addJoint(0.018, elbX, 1.115, 0.004, boneShadeMat); // elbow condyle
+
+        // Twin Radius (lateral) & Ulna (medial) forearm bones
+        tube([[elbX + side * 0.007, 1.11, 0.004], [wrX + side * 0.008, 0.89, 0.022]], 0.0085, boneMat, 6);
+        tube([[elbX - side * 0.007, 1.11, -0.002], [wrX - side * 0.005, 0.89, 0.016]], 0.0085, boneShadeMat, 6);
+
+        // Wrist carpals + splayed articulated fingers
+        box(0.024, 0.028, 0.02, boneShadeMat, wrX, 0.875, 0.02);
+        for (let fi = 0; fi < 4; fi++) {
+          const fz = 0.006 + fi * 0.01;
+          tube(
+            [
+              [wrX, 0.865, fz],
+              [wrX + side * 0.004, 0.815, fz + 0.004],
+              [wrX - side * 0.006, 0.77, fz + 0.006],
+            ],
+            0.0038,
+            boneMat,
+            4
+          );
+        }
+        // Thumb
+        tube(
+          [
+            [wrX, 0.868, 0.03],
+            [wrX + side * 0.006, 0.83, 0.052],
+          ],
+          0.0042,
+          boneMat,
+          3
+        );
+      }
+
+      // 7. Anatomically Sculpted Cranium, Orbital Cavities, Nasal Cavity, Teeth & Mandible
+      const skullY = 1.61;
+      const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.088, 16, 12), boneMat);
+      cranium.scale.set(0.88, 1.06, 1.04);
+      cranium.position.set(0, skullY + 0.015, 0.014);
+      inner.add(cranium);
+
+      // Brow ridge & Zygomatic cheekbones
+      box(0.118, 0.02, 0.044, boneMat, 0, skullY + 0.024, 0.072);
+      for (const side of [-1, 1]) {
+        const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 6), boneMat);
+        cheek.scale.set(0.95, 0.72, 0.9);
+        cheek.position.set(side * 0.048, skullY - 0.018, 0.068);
+        inner.add(cheek);
+        // Dark recessed orbital eye sockets
+        const orbit = new THREE.Mesh(new THREE.SphereGeometry(0.021, 8, 6), cavityMat);
+        orbit.scale.set(1.05, 0.92, 0.65);
+        orbit.position.set(side * 0.03, skullY + 0.002, 0.082);
+        inner.add(orbit);
+      }
+
+      // Piriform nasal cavity
+      const noseHole = new THREE.Mesh(new THREE.ConeGeometry(0.013, 0.028, 3), cavityMat);
+      noseHole.position.set(0, skullY - 0.022, 0.094);
+      noseHole.rotation.x = 0.1;
+      inner.add(noseHole);
+
+      // Maxilla + upper & lower teeth rows + articulated Mandible (jawbone)
+      box(0.066, 0.022, 0.038, boneShadeMat, 0, skullY - 0.046, 0.076);
+      box(0.056, 0.014, 0.014, toothMat, 0, skullY - 0.06, 0.088);
+      box(0.052, 0.012, 0.014, toothMat, 0, skullY - 0.074, 0.085);
+      // Mandible body & rami
+      tube(
+        [
+          [-0.054, skullY - 0.03, 0.036],
+          [-0.048, skullY - 0.082, 0.056],
+          [0, skullY - 0.094, 0.086],
+          [0.048, skullY - 0.082, 0.056],
+          [0.054, skullY - 0.03, 0.036],
+        ],
+        0.0115,
+        boneMat,
+        8
+      );
       break;
     }
 
@@ -3456,12 +4874,15 @@ export function createCatalogMesh3D(
     }
 
     case 'anatomy_poster': {
-      box(0.12, 0.78, 0.56, whiteBody, -0.32, 0.92, 0);
+      // Backplane flush at local x = -0.40 so it mounts cleanly onto any wall
+      box(0.045, 0.8, 0.58, darkSlate, -0.378, 1.15, 0);
+      box(0.03, 0.74, 0.52, whiteBody, -0.36, 1.15, 0);
       const art = new THREE.Mesh(
-        new THREE.BoxGeometry(0.03, 0.7, 0.48),
+        new THREE.BoxGeometry(0.02, 0.68, 0.46),
         makeMat({ map: textures.anatomyPoster, roughness: 0.4 })
       );
-      art.position.set(-0.25, 0.92, 0);
+      art.position.set(-0.348, 1.15, 0);
+      art.userData.noCastShadow = true;
       inner.add(art);
       break;
     }

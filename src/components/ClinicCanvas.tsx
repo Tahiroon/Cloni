@@ -4,12 +4,17 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { CATALOG_ITEMS, GRID_SIZE } from '../data/catalog';
 import {
   buildObstacleBoxes,
+  clampToSolarZone,
   findGridPath,
   hasContinuousLineOfSight,
+  isInSolarZone,
   isTileWalkable,
+  isValidWallMount,
   isWorldWalkable,
   ObstacleBox,
   resolveTileStep,
+  snapToNearestValidWallSlot,
+  SOLAR_ZONE,
 } from '../engine/isometricMath';
 import { glbRegistry, startPreloadGlbs } from '../engine3d/glbRegistry';
 import {
@@ -27,6 +32,8 @@ import {
   SmartLightMeta,
   updateDoors3D,
   WaterCoolerRigMeta,
+  WORLD_TREES,
+  WorldTreeDef,
 } from '../engine3d/models3d';
 import { createTextureBundle, TextureBundle } from '../engine3d/textures3d';
 import {
@@ -61,14 +68,17 @@ interface ClinicCanvasProps {
   language: Language;
   orbitStep?: number;
   lightingMode?: LightingMode;
+  removedTreeIds?: string[];
+  selectedTreeId?: string | null;
   onTapPatient: (patient: PatientEntity) => void;
   onTapLockedRoom: (room: ClinicRoom) => void;
   onTapPlacedItem: (item: PlacedItem) => void;
   onLongPressPlacedItem?: (item: PlacedItem) => void;
   onTapReceptionDesk?: () => void;
   onInspectItem?: (item: PlacedItem) => void;
-  onUpdatePlacementHover: (gx: number, gy: number) => void;
-  onConfirmPlacement: (gx: number, gy: number) => void;
+  onTapWorldTree?: (tree: WorldTreeDef) => void;
+  onUpdatePlacementHover: (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => void;
+  onConfirmPlacement: (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => void;
   onCancelPlacement: () => void;
   onRotatePlacement: () => void;
   onSellMovingDraft?: (instanceId: string) => void;
@@ -107,12 +117,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   language,
   orbitStep = 0,
   lightingMode = 'day',
+  removedTreeIds = [],
+  selectedTreeId = null,
   onTapPatient,
   onTapLockedRoom,
   onTapPlacedItem,
   onLongPressPlacedItem,
   onTapReceptionDesk,
   onInspectItem,
+  onTapWorldTree,
   onUpdatePlacementHover,
   onConfirmPlacement,
   onCancelPlacement,
@@ -133,8 +146,43 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   }, []);
 
   const isPlacementValid = (gx: number, gy: number, draft: PlacementDraft): boolean => {
+    if (draft.catalogItem.isWallDecor) {
+      if (!isValidWallMount(gx, gy, draft.rotation, rooms)) return false;
+
+      // Wall items only conflict with other wall items sharing the same wall tile & orientation
+      for (const existing of placedItems) {
+        if (existing.instanceId === draft.movingInstanceId) continue;
+        const cat = catalogMap.get(existing.catalogId);
+        if (!cat?.isWallDecor) continue;
+        if (existing.gridX === gx && existing.gridY === gy && existing.rotation === draft.rotation) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     const effW = draft.rotation % 2 === 0 ? draft.catalogItem.width : draft.catalogItem.depth;
     const effD = draft.rotation % 2 === 0 ? draft.catalogItem.depth : draft.catalogItem.width;
+
+    if (draft.catalogItem.isSolarPanel || draft.catalogItem.id === 'solar_panel') {
+      if (!isInSolarZone(gx, gy, effW, effD)) return false;
+      for (const existing of placedItems) {
+        if (existing.instanceId === draft.movingInstanceId) continue;
+        const cat = catalogMap.get(existing.catalogId);
+        if (!cat || cat.isWallDecor) continue;
+        const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
+        const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
+        if (
+          gx < existing.gridX + ew &&
+          gx + effW > existing.gridX &&
+          gy < existing.gridY + ed &&
+          gy + effD > existing.gridY
+        ) {
+          return false;
+        }
+      }
+      return true;
+    }
 
     if (gx < 1 || gy < 1 || gx + effW > GRID_SIZE + 2 || gy + effD > GRID_SIZE - 2) {
       return false;
@@ -175,7 +223,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         for (const existing of placedItems) {
           if (existing.instanceId === draft.movingInstanceId) continue;
           const cat = catalogMap.get(existing.catalogId);
-          if (!cat) continue;
+          if (!cat || cat.isWallDecor) continue;
           const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
           const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
           if (
@@ -204,6 +252,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     language,
     zoomUi,
     lightingMode,
+    removedTreeIds,
+    selectedTreeId,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -211,6 +261,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     onTapPlacedItem,
     onLongPressPlacedItem,
     onTapReceptionDesk,
+    onTapWorldTree,
     onUpdatePlacementHover,
     onConfirmPlacement,
   });
@@ -226,6 +277,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     language,
     zoomUi,
     lightingMode,
+    removedTreeIds,
+    selectedTreeId,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -233,6 +286,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     onTapPlacedItem,
     onLongPressPlacedItem,
     onTapReceptionDesk,
+    onTapWorldTree,
     onUpdatePlacementHover,
     onConfirmPlacement,
   };
@@ -249,11 +303,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   });
 
   const sceneHooksRef = useRef<{
-    rebuildWorld: (rooms: ClinicRoom[]) => void;
+    rebuildWorld: (rooms: ClinicRoom[], removedTreeIds?: string[]) => void;
     syncItems: (items: PlacedItem[], movingId?: string) => void;
     syncDraft: (draft: PlacementDraft | null) => void;
     screenToGrid: (clientX: number, clientY: number) => { gx: number; gy: number; rawX: number; rawZ: number };
     hitTestPatient: (clientX: number, clientY: number) => PatientEntity | null;
+    hitTestPlacedItem: (clientX: number, clientY: number) => PlacedItem | null;
+    hitTestWorldTree: (clientX: number, clientY: number) => WorldTreeDef | null;
+    hitTestDraftGhost: (clientX: number, clientY: number) => boolean;
     getPanVectors: () => { right: THREE.Vector3; forward: THREE.Vector3; scale: number };
   } | null>(null);
 
@@ -292,8 +349,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const dpr = isSoftwareGl
       ? 1
       : isMobileGpu
-        ? Math.min(window.devicePixelRatio || 1, 1.5)
-        : Math.min(window.devicePixelRatio || 1, 2);
+        ? Math.min(window.devicePixelRatio || 1, 1.25)
+        : Math.min(window.devicePixelRatio || 1, 1.5);
     renderer.setPixelRatio(dpr);
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -326,7 +383,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const sunLight = new THREE.DirectionalLight(0xfff1dc, 1.42);
     sunLight.position.set(25, 32, 18);
     if (!isSoftwareGl) {
-      const shadowRes = isMobileGpu ? 1024 : 2048;
+      const shadowRes = isMobileGpu ? 1024 : 1536;
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
       sunLight.shadow.camera.near = 6;
@@ -873,14 +930,38 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
     };
 
-    const rebuildWorld = (nextRooms: ClinicRoom[]) => {
+    const rebuildWorld = (nextRooms: ClinicRoom[], nextRemovedTreeIds: string[] = []) => {
       if (worldHandle) worldHandle.dispose();
       while (worldLayer.children.length > 0) {
         worldLayer.remove(worldLayer.children[0]);
       }
-      worldHandle = buildClinicWorld3D(nextRooms, textures);
+      worldHandle = buildClinicWorld3D(nextRooms, textures, nextRemovedTreeIds);
       worldLayer.add(worldHandle.group);
       updateAtmosphereAndLights(performance.now() * 0.001, 0.05);
+    };
+
+    const computeItemWorldPos = (
+      cat: CatalogItem,
+      gx: number,
+      gy: number,
+      rot: 0 | 1 | 2 | 3,
+      baseY: number
+    ): [number, number, number] => {
+      const effW = rot % 2 === 0 ? cat.width : cat.depth;
+      const effD = rot % 2 === 0 ? cat.depth : cat.width;
+      let wx = gx + effW / 2;
+      let wy = baseY;
+      let wz = gy + effD / 2;
+      if (cat.isWallDecor) {
+        const onOuterWest = rot === 0 && gx === 2;
+        const onOuterNorth = rot === 1 && gy === 2;
+        if (onOuterWest) wx += 0.05;
+        if (onOuterNorth) wz += 0.05;
+        if ((onOuterWest || onOuterNorth) && cat.sprite !== 'wall_sconce_lamp') {
+          wy += 0.48;
+        }
+      }
+      return [wx, wy, wz];
     };
 
     const syncItems = (nextItems: PlacedItem[], movingId?: string) => {
@@ -910,9 +991,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           item.rotation,
           false
         );
-        const effW = item.rotation % 2 === 0 ? cat.width : cat.depth;
-        const effD = item.rotation % 2 === 0 ? cat.depth : cat.width;
-        mesh.position.set(item.gridX + effW / 2, 0.08, item.gridY + effD / 2);
+        mesh.userData.instanceId = item.instanceId;
+        const [wx, wy, wz] = computeItemWorldPos(cat, item.gridX, item.gridY, item.rotation, 0.08);
+        mesh.position.set(wx, wy, wz);
         itemsLayer.add(mesh);
         itemMeshes.set(item.instanceId, { sig, mesh });
       }
@@ -965,18 +1046,25 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         draftMeshSig = sig;
       }
       if (draftGhost) {
-        draftGhost.position.set(draft.hoverX + effW / 2, 0.2, draft.hoverY + effD / 2);
+        const [wx, wy, wz] = computeItemWorldPos(
+          draft.catalogItem,
+          draft.hoverX,
+          draft.hoverY,
+          draft.rotation,
+          draft.catalogItem.isWallDecor ? 0.1 : 0.2
+        );
+        draftGhost.position.set(wx, wy, wz);
       }
     };
 
     startPreloadGlbs();
-    rebuildWorld(latestRef.current.rooms);
+    rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
     syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
     syncDraft(latestRef.current.placementDraft);
 
     const unsubGlb = glbRegistry.onReady(() => {
       if (disposed) return;
-      rebuildWorld(latestRef.current.rooms);
+      rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
       for (const entry of itemMeshes.values()) {
         itemsLayer.remove(entry.mesh);
         disposeObject3D(entry.mesh);
@@ -1086,6 +1174,73 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       return null;
     };
 
+    const hitTestPlacedItem = (clientX: number, clientY: number): PlacedItem | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      _raycaster.setFromCamera(_ndc, camera);
+      const hits = _raycaster.intersectObjects(itemsLayer.children, true);
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
+        while (obj && obj !== itemsLayer) {
+          const instId = obj.userData?.instanceId as string | undefined;
+          if (instId) {
+            return latestRef.current.placedItems.find((it) => it.instanceId === instId) || null;
+          }
+          obj = obj.parent;
+        }
+      }
+      return null;
+    };
+
+    const hitTestDraftGhost = (clientX: number, clientY: number): boolean => {
+      if (!draftGhost) return false;
+      const rect = renderer.domElement.getBoundingClientRect();
+      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      _raycaster.setFromCamera(_ndc, camera);
+      return _raycaster.intersectObject(draftGhost, true).length > 0;
+    };
+
+    const _treeSphere = new THREE.Sphere();
+    const _treeCenter = new THREE.Vector3();
+    const _treeHitVec = new THREE.Vector3();
+    const hitTestWorldTree = (clientX: number, clientY: number): WorldTreeDef | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      _raycaster.setFromCamera(_ndc, camera);
+      const removedSet = new Set(latestRef.current.removedTreeIds);
+
+      let closestTree: WorldTreeDef | null = null;
+      let closestDistSq = Infinity;
+      for (const tree of WORLD_TREES) {
+        if (removedSet.has(tree.id)) continue;
+        const s = tree.scale * 1.12;
+        // Check canopy sphere and trunk sphere
+        _treeCenter.set(tree.x, 2.05 * s, tree.z);
+        _treeSphere.set(_treeCenter, 1.38 * s);
+        if (_raycaster.ray.intersectSphere(_treeSphere, _treeHitVec)) {
+          const dSq = camera.position.distanceToSquared(_treeHitVec);
+          if (dSq < closestDistSq) {
+            closestDistSq = dSq;
+            closestTree = tree;
+          }
+          continue;
+        }
+        _treeCenter.set(tree.x, 0.85 * s, tree.z);
+        _treeSphere.set(_treeCenter, 0.55 * s);
+        if (_raycaster.ray.intersectSphere(_treeSphere, _treeHitVec)) {
+          const dSq = camera.position.distanceToSquared(_treeHitVec);
+          if (dSq < closestDistSq) {
+            closestDistSq = dSq;
+            closestTree = tree;
+          }
+        }
+      }
+      return closestTree;
+    };
+
     const getPanVectors = () => {
       camera.getWorldDirection(_camFwd);
       _camFwd.y = 0;
@@ -1105,6 +1260,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       syncDraft,
       screenToGrid,
       hitTestPatient,
+      hitTestPlacedItem,
+      hitTestWorldTree,
+      hitTestDraftGhost,
       getPanVectors,
     };
 
@@ -1955,7 +2113,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const h = container.clientHeight;
       if (w < 1 || h < 1) return;
 
-      const odpr = Math.min(window.devicePixelRatio || 1, 2);
+      const odpr = Math.min(window.devicePixelRatio || 1, 1.5);
       if (overlay.width !== Math.floor(w * odpr) || overlay.height !== Math.floor(h * odpr)) {
         overlay.width = Math.floor(w * odpr);
         overlay.height = Math.floor(h * odpr);
@@ -1991,8 +2149,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         ctx.save();
         ctx.lineWidth = 1;
         ctx.strokeStyle = curDraft ? 'rgba(14, 165, 233, 0.28)' : 'rgba(56, 189, 248, 0.16)';
+        const isSolarDraft = Boolean(
+          curDraft && (curDraft.catalogItem.isSolarPanel || curDraft.catalogItem.id === 'solar_panel')
+        );
         const allowIn = curDraft ? curDraft.catalogItem.indoorAllowed !== false : true;
-        const allowOut = curDraft ? curDraft.catalogItem.outdoorAllowed !== false : true;
+        const allowOut = curDraft ? curDraft.catalogItem.outdoorAllowed !== false && !isSolarDraft : true;
+        const showSolarGrid = isSolarDraft || (!curDraft && isEdit);
 
         if (allowIn) {
           for (const room of curRooms) {
@@ -2040,18 +2202,40 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             ctx.stroke();
           }
         }
+        if (showSolarGrid) {
+          ctx.strokeStyle = isSolarDraft
+            ? 'rgba(16, 185, 129, 0.38)'
+            : 'rgba(16, 185, 129, 0.22)';
+          for (let gx = SOLAR_ZONE.minX; gx <= SOLAR_ZONE.maxX + 1; gx++) {
+            const p1 = projectToScreen(gx, 0.09, SOLAR_ZONE.minY);
+            const p2 = projectToScreen(gx, 0.09, SOLAR_ZONE.maxY + 1);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+          for (let gz = SOLAR_ZONE.minY; gz <= SOLAR_ZONE.maxY + 1; gz++) {
+            const p1 = projectToScreen(SOLAR_ZONE.minX, 0.09, gz);
+            const p2 = projectToScreen(SOLAR_ZONE.maxX + 1, 0.09, gz);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+        }
 
         if (curDraft) {
-          // Crisp highlighted footprint outline under active placement tile
+          // Crisp highlighted footprint outline under active placement tile (or wall-mount line for wall decor)
           const effW = curDraft.rotation % 2 === 0 ? curDraft.catalogItem.width : curDraft.catalogItem.depth;
           const effD = curDraft.rotation % 2 === 0 ? curDraft.catalogItem.depth : curDraft.catalogItem.width;
           const valid = checkValid(curDraft.hoverX, curDraft.hoverY, curDraft);
+          ctx.strokeStyle = valid ? '#10b981' : '#ef4444';
+          ctx.lineWidth = 2.6;
+
           const c1 = projectToScreen(curDraft.hoverX, 0.12, curDraft.hoverY);
           const c2 = projectToScreen(curDraft.hoverX + effW, 0.12, curDraft.hoverY);
           const c3 = projectToScreen(curDraft.hoverX + effW, 0.12, curDraft.hoverY + effD);
           const c4 = projectToScreen(curDraft.hoverX, 0.12, curDraft.hoverY + effD);
-          ctx.strokeStyle = valid ? '#10b981' : '#ef4444';
-          ctx.lineWidth = 2.6;
           ctx.beginPath();
           ctx.moveTo(c1.x, c1.y);
           ctx.lineTo(c2.x, c2.y);
@@ -2059,6 +2243,31 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           ctx.lineTo(c4.x, c4.y);
           ctx.closePath();
           ctx.stroke();
+
+          if (curDraft.catalogItem.isWallDecor) {
+            const xA =
+              curDraft.rotation === 2 ? curDraft.hoverX + 1 : curDraft.hoverX;
+            const zA =
+              curDraft.rotation === 3 ? curDraft.hoverY + 1 : curDraft.hoverY;
+            const xB =
+              curDraft.rotation === 1 || curDraft.rotation === 3 ? curDraft.hoverX + 1 : xA;
+            const zB =
+              curDraft.rotation === 0 || curDraft.rotation === 2 ? curDraft.hoverY + 1 : zA;
+            const w1 = projectToScreen(xA, 0.16, zA);
+            const w2 = projectToScreen(xB, 0.16, zB);
+            const w3 = projectToScreen(xB, 1.75, zB);
+            const w4 = projectToScreen(xA, 1.75, zA);
+            ctx.fillStyle = valid ? 'rgba(16, 185, 129, 0.18)' : 'rgba(239, 68, 68, 0.18)';
+            ctx.lineWidth = 3.2;
+            ctx.beginPath();
+            ctx.moveTo(w1.x, w1.y);
+            ctx.lineTo(w2.x, w2.y);
+            ctx.lineTo(w3.x, w3.y);
+            ctx.lineTo(w4.x, w4.y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
         }
         ctx.restore();
       }
@@ -2203,6 +2412,31 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         ctx.restore();
       }
 
+      // 3b. Selected Outer Tree Highlight Ring (for removal confirmation)
+      const selTreeId = latestRef.current.selectedTreeId;
+      if (selTreeId) {
+        const tree = WORLD_TREES.find((t) => t.id === selTreeId);
+        if (tree) {
+          ctx.save();
+          const segs = 24;
+          const r = 1.25 * tree.scale;
+          ctx.strokeStyle = '#f59e0b';
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.16)';
+          ctx.lineWidth = 2.6;
+          ctx.beginPath();
+          for (let i = 0; i <= segs; i++) {
+            const ang = (i / segs) * Math.PI * 2;
+            const pt = projectToScreen(tree.x + Math.cos(ang) * r, 0.12, tree.z + Math.sin(ang) * r);
+            if (i === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
       // 4. Floating Coins/Stars Feedbacks
       const now = Date.now();
       for (const fb of fbs) {
@@ -2304,9 +2538,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     };
   }, []);
 
+  const removedTreeKey = (removedTreeIds || []).join(',');
   useEffect(() => {
-    sceneHooksRef.current?.rebuildWorld(rooms);
-  }, [rooms]);
+    sceneHooksRef.current?.rebuildWorld(rooms, removedTreeIds);
+  }, [rooms, removedTreeKey]);
 
   useEffect(() => {
     sceneHooksRef.current?.syncItems(placedItems, placementDraft?.movingInstanceId);
@@ -2345,15 +2580,42 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       return gx >= item.gridX && gx < item.gridX + ew && gy >= item.gridY && gy < item.gridY + ed;
     });
 
+  const resolveDraftTarget = (
+    rawX: number,
+    rawZ: number,
+    gx: number,
+    gy: number,
+    draft: PlacementDraft
+  ): { gx: number; gy: number; rotation: 0 | 1 | 2 | 3 } => {
+    if (draft.catalogItem.isWallDecor) {
+      const snapped = snapToNearestValidWallSlot(rawX, rawZ, draft.rotation, rooms);
+      if (snapped) return snapped;
+    }
+    if (draft.catalogItem.isSolarPanel || draft.catalogItem.id === 'solar_panel') {
+      const effW = draft.rotation % 2 === 0 ? draft.catalogItem.width : draft.catalogItem.depth;
+      const effD = draft.rotation % 2 === 0 ? draft.catalogItem.depth : draft.catalogItem.width;
+      const clamped = clampToSolarZone(gx, gy, effW, effD);
+      return { gx: clamped.gx, gy: clamped.gy, rotation: draft.rotation };
+    }
+    return { gx, gy, rotation: draft.rotation };
+  };
+
   const handleTap = (clientX: number, clientY: number) => {
     const hooks = sceneHooksRef.current;
     if (!hooks) return;
     const { gx, gy, rawX, rawZ } = hooks.screenToGrid(clientX, clientY);
 
     if (placementDraft) {
-      onUpdatePlacementHover(gx, gy);
-      if (isPlacementValid(gx, gy, placementDraft)) {
-        onConfirmPlacement(gx, gy);
+      const resolved = resolveDraftTarget(rawX, rawZ, gx, gy, placementDraft);
+      const nextDraft = {
+        ...placementDraft,
+        hoverX: resolved.gx,
+        hoverY: resolved.gy,
+        rotation: resolved.rotation,
+      };
+      onUpdatePlacementHover(resolved.gx, resolved.gy, resolved.rotation);
+      if (isPlacementValid(resolved.gx, resolved.gy, nextDraft)) {
+        onConfirmPlacement(resolved.gx, resolved.gy, resolved.rotation);
       }
       return;
     }
@@ -2382,11 +2644,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       return;
     }
 
-    const hitItem = findHitItemAt(gx, gy);
+    const hitItem = hooks.hitTestPlacedItem(clientX, clientY) || findHitItemAt(gx, gy);
 
     if (editMode) {
       if (hitItem) {
         onTapPlacedItem(hitItem);
+        return;
+      }
+      const hitTree = hooks.hitTestWorldTree(clientX, clientY);
+      if (hitTree) {
+        onTapWorldTree?.(hitTree);
       }
       return;
     }
@@ -2396,6 +2663,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       onTapReceptionDesk?.();
     } else if (hitItem) {
       onInspectItem?.(hitItem);
+    } else {
+      const hitTree = hooks.hitTestWorldTree(clientX, clientY);
+      if (hitTree) {
+        onTapWorldTree?.(hitTree);
+      }
     }
   };
 
@@ -2421,16 +2693,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const effW = placementDraft.rotation % 2 === 0 ? placementDraft.catalogItem.width : placementDraft.catalogItem.depth;
       const effD = placementDraft.rotation % 2 === 0 ? placementDraft.catalogItem.depth : placementDraft.catalogItem.width;
       if (
-        gx >= placementDraft.hoverX - 0.5 &&
-        gx <= placementDraft.hoverX + effW + 0.5 &&
-        gy >= placementDraft.hoverY - 0.5 &&
-        gy <= placementDraft.hoverY + effD + 0.5
+        hooks.hitTestDraftGhost(e.clientX, e.clientY) ||
+        (gx >= placementDraft.hoverX - 0.5 &&
+          gx <= placementDraft.hoverX + effW + 0.5 &&
+          gy >= placementDraft.hoverY - 0.5 &&
+          gy <= placementDraft.hoverY + effD + 0.5)
       ) {
         grabbingDraft = true;
       }
     } else if (!placementDraft && hooks && onLongPressPlacedItem) {
       const { gx, gy } = hooks.screenToGrid(e.clientX, e.clientY);
-      const hitItem = findHitItemAt(gx, gy);
+      const hitItem = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(gx, gy);
       if (hitItem) {
         longPressTimerRef.current = window.setTimeout(() => {
           dragRef.current.active = false;
@@ -2469,9 +2742,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
     const hooks = sceneHooksRef.current;
     if (placementDraft && !dragRef.current.active && hooks) {
-      const { gx, gy } = hooks.screenToGrid(e.clientX, e.clientY);
-      if (gx !== placementDraft.hoverX || gy !== placementDraft.hoverY) {
-        onUpdatePlacementHover(gx, gy);
+      const { gx, gy, rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
+      const resolved = resolveDraftTarget(rawX, rawZ, gx, gy, placementDraft);
+      if (
+        resolved.gx !== placementDraft.hoverX ||
+        resolved.gy !== placementDraft.hoverY ||
+        resolved.rotation !== placementDraft.rotation
+      ) {
+        onUpdatePlacementHover(resolved.gx, resolved.gy, resolved.rotation);
       }
     }
 
@@ -2484,9 +2762,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     }
 
     if (dragRef.current.draggingDraft && placementDraft) {
-      const { gx, gy } = hooks.screenToGrid(e.clientX, e.clientY);
-      if (gx !== placementDraft.hoverX || gy !== placementDraft.hoverY) {
-        onUpdatePlacementHover(gx, gy);
+      const { gx, gy, rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
+      const resolved = resolveDraftTarget(rawX, rawZ, gx, gy, placementDraft);
+      if (
+        resolved.gx !== placementDraft.hoverX ||
+        resolved.gy !== placementDraft.hoverY ||
+        resolved.rotation !== placementDraft.rotation
+      ) {
+        onUpdatePlacementHover(resolved.gx, resolved.gy, resolved.rotation);
       }
       return;
     }
@@ -2515,7 +2798,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       handleTap(e.clientX, e.clientY);
     } else if (wasDraggingDraft && placementDraft && isPlacementValid(placementDraft.hoverX, placementDraft.hoverY, placementDraft)) {
       // Effortless drag-and-drop: releasing over a valid tile keeps it positioned cleanly
-      onUpdatePlacementHover(placementDraft.hoverX, placementDraft.hoverY);
+      onUpdatePlacementHover(placementDraft.hoverX, placementDraft.hoverY, placementDraft.rotation);
     }
   };
 

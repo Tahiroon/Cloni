@@ -60,6 +60,9 @@ export type SpriteKind =
   | 'supply_shelf'
   | 'med_cabinet'
   | 'lounge_chair'
+  | 'luxury_chair'
+  | 'ac_nesma'
+  | 'ac_lg'
   | 'wheelchair_bay'
   | 'doctor_stool'
   | 'skeleton_stand'
@@ -69,7 +72,13 @@ export type SpriteKind =
   | 'waste_bin'
   | 'floor_rug'
   | 'outdoor_tree'
-  | 'street_lamp_post';
+  | 'street_lamp_post'
+  | 'solar_panel'
+  | 'royal_palm'
+  | 'marble_fountain'
+  | 'rose_trellis'
+  | 'zen_lantern'
+  | 'garden_gazebo';
 
 export type LightingMode = 'day' | 'night';
 
@@ -92,6 +101,7 @@ export interface CatalogItem {
   outdoorAllowed?: boolean;
   indoorAllowed?: boolean;
   isWallDecor?: boolean;
+  isSolarPanel?: boolean;
 }
 
 export interface PlacedItem {
@@ -308,6 +318,7 @@ export interface ClinicSaveState {
   redFlagsCaughtTotal: number;
   rooms: ClinicRoom[];
   placedItems: PlacedItem[];
+  removedTreeIds?: string[];
   staff: StaffMember[];
   missions: Mission[];
   lastSyncedAt: string | null;

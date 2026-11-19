@@ -13,7 +13,7 @@ import {
   Stethoscope,
   X,
 } from 'lucide-react';
-import { Language, LightingMode, PatientEntity } from '../types/clinic';
+import { ClinicalCase, Language, LightingMode, PatientEntity } from '../types/clinic';
 
 interface ClinicalAssessmentModalProps {
   patient: PatientEntity | null;
@@ -27,6 +27,7 @@ interface ClinicalAssessmentModalProps {
     satisfactionDelta: number;
     caughtRedFlag: boolean;
   }) => void;
+  onUpdatePatientCase?: (patientId: string, nextCase: ClinicalCase) => void;
 }
 
 type ExamStep = 'subjective' | 'redflags' | 'objective' | 'plan' | 'summary';

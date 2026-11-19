@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Coins, Trash2, Trees, X } from 'lucide-react';
 import { BottomNavBar } from './components/BottomNavBar';
 import { BonusQuizModal } from './components/BonusQuizModal';
 import { ClinicCanvas, PlacementDraft } from './components/ClinicCanvas';
@@ -9,6 +10,7 @@ import { RoomUnlockModal } from './components/RoomUnlockModal';
 import { SettingsModal } from './components/SettingsModal';
 import { StoreSheet } from './components/StoreSheet';
 import { TopHudBar } from './components/TopHudBar';
+import { WorldTreeDef } from './engine3d/models3d';
 import {
   CATALOG_ITEMS,
   createInitialSaveState,
@@ -19,9 +21,13 @@ import {
 import {
   buildObstacleBoxes,
   findGridPath,
+  getValidWallRotationsForTile,
   hasContinuousLineOfSight,
   isTileWalkable,
+  isWallDecorId,
   resolveTileStep,
+  snapToNearestValidWallSlot,
+  SOLAR_ZONE,
 } from './engine/isometricMath';
 import {
   loadClinicLocal,
@@ -88,6 +94,8 @@ const FEMALE_CASUAL_LOOKS = [
   { shirt: '#6b4f3a', pants: '#27272a' },
 ];
 
+const EMPTY_REMOVED_TREES: string[] = [];
+
 export default function App() {
   const [clinic, setClinic] = useState<ClinicSaveState>(() => createInitialSaveState());
   const [hydrated, setHydrated] = useState(false);
@@ -107,6 +115,7 @@ export default function App() {
   const [orbitStep] = useState(0);
 
   const [unlockTargetRoom, setUnlockTargetRoom] = useState<ClinicRoom | null>(null);
+  const [selectedWorldTree, setSelectedWorldTree] = useState<WorldTreeDef | null>(null);
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [placementDraft, setPlacementDraft] = useState<PlacementDraft | null>(null);
@@ -184,6 +193,7 @@ export default function App() {
               const old = prevStaffMap.get(st.id);
               return old?.hired ? { ...st, hired: true } : st;
             }),
+            removedTreeIds: saved.removedTreeIds || [],
             lastSyncedAt: saved.lastSyncedAt || null,
           };
         }
@@ -192,6 +202,7 @@ export default function App() {
         nextState = {
           ...nextState,
           lightingMode: nextState.lightingMode || 'day',
+          removedTreeIds: nextState.removedTreeIds || [],
           version: 6,
           coins: 999999,
         };
@@ -423,27 +434,28 @@ export default function App() {
           }
         } else if (item.catalogId === 'waiting_chairs') {
           if (item.rotation === 0) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: 0.07, facingRad: 0, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
-            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: 0.07, facingRad: 0, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: 0.06, facingRad: 0, seatHeight: 0.35, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: 0.06, facingRad: 0, seatHeight: 0.35, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 2) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: -0.07, facingRad: Math.PI, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
-            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: -0.07, facingRad: Math.PI, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: -0.06, facingRad: Math.PI, seatHeight: 0.35, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: -0.06, facingRad: Math.PI, seatHeight: 0.35, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 1) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: -0.07, offZ: 0.12, facingRad: -Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
-            seats.push({ x: item.gridX, y: item.gridY + 1, offX: -0.07, offZ: -0.12, facingRad: -Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: -0.06, offZ: 0.12, facingRad: -Math.PI / 2, seatHeight: 0.35, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY + 1, offX: -0.06, offZ: -0.12, facingRad: -Math.PI / 2, seatHeight: 0.35, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.07, offZ: 0.12, facingRad: Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
-            seats.push({ x: item.gridX, y: item.gridY + 1, offX: 0.07, offZ: -0.12, facingRad: Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.06, offZ: 0.12, facingRad: Math.PI / 2, seatHeight: 0.35, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY + 1, offX: 0.06, offZ: -0.12, facingRad: Math.PI / 2, seatHeight: 0.35, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           }
-        } else if (item.catalogId === 'lounge_chair') {
+        } else if (item.catalogId === 'lounge_chair' || item.catalogId === 'luxury_chair') {
+          const sHeight = item.catalogId === 'luxury_chair' ? 0.36 : 0.34;
           if (item.rotation === 0) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0, offZ: 0.06, facingRad: 0, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0, offZ: 0.06, facingRad: 0, seatHeight: sHeight, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 1) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: -0.06, offZ: 0, facingRad: -Math.PI / 2, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: -0.06, offZ: 0, facingRad: -Math.PI / 2, seatHeight: sHeight, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 2) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0, offZ: -0.06, facingRad: Math.PI, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0, offZ: -0.06, facingRad: Math.PI, seatHeight: sHeight, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
           } else {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.06, offZ: 0, facingRad: Math.PI / 2, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.06, offZ: 0, facingRad: Math.PI / 2, seatHeight: sHeight, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
           }
         }
       }
@@ -1269,6 +1281,120 @@ export default function App() {
     setActiveNavTab(null);
     setEditMode(false);
 
+    if (item.isWallDecor || isWallDecorId(item.id)) {
+      const occupiedWallKeys = new Set(
+        clinic.placedItems
+          .filter((it) => isWallDecorId(it.catalogId) || catalogById.get(it.catalogId)?.isWallDecor)
+          .map((it) => `${it.gridX},${it.gridY},${it.rotation}`)
+      );
+      const preferredSlots: Array<{ gx: number; gy: number; rotation: 0 | 1 | 2 | 3 }> = [
+        { gx: 14, gy: 10, rotation: 1 },
+        { gx: 15, gy: 10, rotation: 1 },
+        { gx: 18, gy: 10, rotation: 1 },
+        { gx: 12, gy: 15, rotation: 0 },
+        { gx: 12, gy: 16, rotation: 0 },
+        { gx: 5, gy: 10, rotation: 1 },
+        { gx: 8, gy: 10, rotation: 1 },
+      ];
+      let chosen: { gx: number; gy: number; rotation: 0 | 1 | 2 | 3 } | null = null;
+      for (const s of preferredSlots) {
+        if (
+          getValidWallRotationsForTile(s.gx, s.gy, clinic.rooms).includes(s.rotation) &&
+          !occupiedWallKeys.has(`${s.gx},${s.gy},${s.rotation}`)
+        ) {
+          chosen = s;
+          break;
+        }
+      }
+      if (!chosen) {
+        outer: for (let gy = 2; gy <= 21; gy++) {
+          for (let gx = 2; gx <= 21; gx++) {
+            const rots = getValidWallRotationsForTile(gx, gy, clinic.rooms);
+            for (const rot of rots) {
+              if (!occupiedWallKeys.has(`${gx},${gy},${rot}`)) {
+                chosen = { gx, gy, rotation: rot };
+                break outer;
+              }
+            }
+          }
+        }
+      }
+      if (!chosen) {
+        chosen = snapToNearestValidWallSlot(14.5, 10.2, 1, clinic.rooms) || {
+          gx: 14,
+          gy: 10,
+          rotation: 1,
+        };
+      }
+      setPlacementDraft({
+        catalogItem: item,
+        rotation: chosen.rotation,
+        hoverX: chosen.gx,
+        hoverY: chosen.gy,
+      });
+      return;
+    }
+
+    if (item.isSolarPanel || item.id === 'solar_panel') {
+      const effW = item.width;
+      const effD = item.depth;
+      const occupiedTiles = new Set<string>();
+      for (const existing of clinic.placedItems) {
+        const cat = catalogById.get(existing.catalogId);
+        if (!cat || cat.isWallDecor) continue;
+        const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
+        const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
+        for (let dx = 0; dx < ew; dx++) {
+          for (let dy = 0; dy < ed; dy++) {
+            occupiedTiles.add(`${existing.gridX + dx},${existing.gridY + dy}`);
+          }
+        }
+      }
+
+      const maxSlotX = SOLAR_ZONE.maxX - effW + 1;
+      const maxSlotY = SOLAR_ZONE.maxY - effD + 1;
+      const preferredXs: number[] = [];
+      for (let x = 6; x <= maxSlotX; x++) preferredXs.push(x);
+      for (let x = SOLAR_ZONE.minX; x < 6 && x <= maxSlotX; x++) preferredXs.push(x);
+
+      let chosenX = Math.min(8, maxSlotX);
+      let chosenY = SOLAR_ZONE.minY;
+      let found = false;
+
+      outerSolar: for (let y = SOLAR_ZONE.minY; y <= maxSlotY; y++) {
+        for (const x of preferredXs) {
+          let free = true;
+          for (let dx = 0; dx < effW && free; dx++) {
+            for (let dy = 0; dy < effD; dy++) {
+              if (occupiedTiles.has(`${x + dx},${y + dy}`)) {
+                free = false;
+                break;
+              }
+            }
+          }
+          if (free) {
+            chosenX = x;
+            chosenY = y;
+            found = true;
+            break outerSolar;
+          }
+        }
+      }
+
+      if (!found) {
+        chosenX = SOLAR_ZONE.minX;
+        chosenY = SOLAR_ZONE.minY;
+      }
+
+      setPlacementDraft({
+        catalogItem: item,
+        rotation: 0,
+        hoverX: chosenX,
+        hoverY: chosenY,
+      });
+      return;
+    }
+
     // Suggest a sensible default hover coordinate based on indoor vs outdoor
     const defaultX = item.indoorAllowed === false ? 23 : 6;
     const defaultY = item.indoorAllowed === false ? 5 : 14;
@@ -1280,10 +1406,11 @@ export default function App() {
     });
   };
 
-  const handleConfirmPlacement = (gx: number, gy: number) => {
+  const handleConfirmPlacement = (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => {
     if (!placementDraft) return;
     soundFx.placeItem();
 
+    const finalRotation = rotation ?? placementDraft.rotation;
     const room = clinic.rooms.find(
       (r) => gx >= r.minX && gx <= r.maxX && gy >= r.minY && gy <= r.maxY
     );
@@ -1295,7 +1422,7 @@ export default function App() {
         ...prev,
         placedItems: prev.placedItems.map((it) =>
           it.instanceId === placementDraft.movingInstanceId
-            ? { ...it, gridX: gx, gridY: gy, rotation: placementDraft.rotation, roomId }
+            ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
             : it
         ),
       }));
@@ -1310,7 +1437,7 @@ export default function App() {
         catalogId: item.id,
         gridX: gx,
         gridY: gy,
-        rotation: placementDraft.rotation,
+        rotation: finalRotation,
         roomId,
       };
 
@@ -1445,6 +1572,30 @@ export default function App() {
     });
   };
 
+  const handleConfirmRemoveTree = () => {
+    if (!selectedWorldTree) return;
+    const cost = selectedWorldTree.removeCost;
+    if (clinic.coins < 900000 && clinic.coins < cost) return;
+    soundFx.placeItem();
+    const target = selectedWorldTree;
+    setClinic((prev) => {
+      const existing = prev.removedTreeIds || [];
+      if (existing.includes(target.id)) return prev;
+      return {
+        ...prev,
+        coins: prev.coins >= 900000 ? 999999 : prev.coins - cost,
+        removedTreeIds: [...existing, target.id],
+      };
+    });
+    addFloatingFeedback(
+      Math.round(target.x),
+      Math.round(target.z),
+      clinic.language === 'ar' ? `تمت إزالة الشجرة · -${cost}` : `Tree Cleared · -${cost}`,
+      '#fbbf24'
+    );
+    setSelectedWorldTree(null);
+  };
+
   const handleResetClinic = () => {
     const fresh = createInitialSaveState();
     fresh.language = clinic.language;
@@ -1452,6 +1603,7 @@ export default function App() {
     setPatients([]);
     setFocusedPatientId(null);
     setPlacementDraft(null);
+    setSelectedWorldTree(null);
     setSettingsOpen(false);
   };
 
@@ -1488,11 +1640,19 @@ export default function App() {
         language={clinic.language}
         orbitStep={orbitStep}
         lightingMode={lightingMode}
+        removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
+        selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
         onTapPatient={handleTapPatient}
         onTapLockedRoom={(room) => {
           if (!visitingFriend) {
             soundFx.tap();
             setUnlockTargetRoom(room);
+          }
+        }}
+        onTapWorldTree={(tree) => {
+          if (!visitingFriend) {
+            soundFx.tap();
+            setSelectedWorldTree(tree);
           }
         }}
         onTapPlacedItem={(item) => {
@@ -1541,8 +1701,10 @@ export default function App() {
             );
           }
         }}
-        onUpdatePlacementHover={(gx, gy) =>
-          setPlacementDraft((prev) => (prev ? { ...prev, hoverX: gx, hoverY: gy } : null))
+        onUpdatePlacementHover={(gx, gy, rotation) =>
+          setPlacementDraft((prev) =>
+            prev ? { ...prev, hoverX: gx, hoverY: gy, rotation: rotation ?? prev.rotation } : null
+          )
         }
         onConfirmPlacement={handleConfirmPlacement}
         onCancelPlacement={() => {
@@ -1551,9 +1713,37 @@ export default function App() {
         }}
         onRotatePlacement={() => {
           soundFx.tap();
-          setPlacementDraft((prev) =>
-            prev ? { ...prev, rotation: ((prev.rotation + 1) % 4) as 0 | 1 | 2 | 3 } : null
-          );
+          setPlacementDraft((prev) => {
+            if (!prev) return null;
+            if (prev.catalogItem.isWallDecor || isWallDecorId(prev.catalogItem.id)) {
+              const validRots = getValidWallRotationsForTile(
+                prev.hoverX,
+                prev.hoverY,
+                clinic.rooms
+              );
+              if (validRots.length > 0) {
+                const idx = validRots.indexOf(prev.rotation);
+                const nextRot = validRots[(idx + 1) % validRots.length];
+                return { ...prev, rotation: nextRot };
+              }
+              const snapped = snapToNearestValidWallSlot(
+                prev.hoverX + 0.5,
+                prev.hoverY + 0.5,
+                ((prev.rotation + 1) % 4) as 0 | 1 | 2 | 3,
+                clinic.rooms
+              );
+              if (snapped) {
+                return {
+                  ...prev,
+                  hoverX: snapped.gx,
+                  hoverY: snapped.gy,
+                  rotation: snapped.rotation,
+                };
+              }
+              return prev;
+            }
+            return { ...prev, rotation: ((prev.rotation + 1) % 4) as 0 | 1 | 2 | 3 };
+          });
         }}
         onSellMovingDraft={handleSellMovingDraft}
       />
@@ -1699,6 +1889,87 @@ export default function App() {
         }}
         onResetClinic={handleResetClinic}
       />
+
+      {/* Outdoor Tree Paid Removal Confirmation Card */}
+      {selectedWorldTree && (
+        <div
+          className="fixed inset-0 z-40 flex items-end sm:items-center justify-center p-4 bg-slate-950/40 backdrop-blur-[2px]"
+          onClick={() => setSelectedWorldTree(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-sm rounded-3xl border shadow-2xl p-5 transition-colors ${
+              lightingMode === 'night'
+                ? 'bg-slate-900 border-slate-700 text-slate-100'
+                : 'bg-white border-slate-200 text-slate-900'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center shrink-0">
+                  <Trees className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black">
+                    {isAr ? 'إزالة شجرة خارجية' : 'Remove Outdoor Tree'}
+                  </h3>
+                  <p
+                    className={`text-xs mt-0.5 ${
+                      lightingMode === 'night' ? 'text-slate-400' : 'text-slate-500'
+                    }`}
+                  >
+                    {isAr
+                      ? 'ادفع رسوم الإزالة لإخلاء هذه الشجرة من محيط العيادة نهائياً'
+                      : 'Pay a small clearing fee to permanently remove this tree'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedWorldTree(null)}
+                aria-label="Close"
+                className={`p-1.5 rounded-xl transition-colors ${
+                  lightingMode === 'night'
+                    ? 'text-slate-400 hover:bg-slate-800'
+                    : 'text-slate-400 hover:bg-slate-100'
+                }`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setSelectedWorldTree(null)}
+                className={`flex-1 py-2.5 px-3 rounded-2xl text-xs font-extrabold transition-colors ${
+                  lightingMode === 'night'
+                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                {isAr ? 'إلغاء' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                disabled={clinic.coins < 900000 && clinic.coins < selectedWorldTree.removeCost}
+                onClick={handleConfirmRemoveTree}
+                className={`flex-[1.4] py-2.5 px-4 rounded-2xl text-xs font-black flex items-center justify-center gap-1.5 shadow transition-transform active:scale-95 ${
+                  clinic.coins >= 900000 || clinic.coins >= selectedWorldTree.removeCost
+                    ? 'bg-gradient-to-b from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-600 text-slate-950'
+                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isAr ? 'إزالة' : 'Remove'}</span>
+                <span aria-hidden="true">·</span>
+                <Coins className="w-3.5 h-3.5" />
+                <span className="tabular-nums">{selectedWorldTree.removeCost}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bonus PT Flashcard Quiz */}
       <BonusQuizModal
