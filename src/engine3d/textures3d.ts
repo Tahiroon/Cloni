@@ -24,6 +24,8 @@ export interface TextureBundle {
   anatomyPoster: THREE.CanvasTexture;
   ecgScreen: THREE.CanvasTexture;
   certificateFrame: THREE.CanvasTexture;
+  sconceWash: THREE.CanvasTexture;
+  sconcePool: THREE.CanvasTexture;
   dispose: () => void;
 }
 
@@ -304,46 +306,152 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 40, 40, true));
   })();
 
-  // 6. Asphalt road + aggregate bump
+  // 6. Natural Imperfect Garden Street / Sandy Earth & Fine Gravel Park Lane (zero asphalt!)
   const asphalt = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#313944';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 2000; i++) {
-      const x = (Math.sin(i * 37.2) * 0.5 + 0.5) * 256;
-      const y = (Math.cos(i * 61.9) * 0.5 + 0.5) * 256;
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.06)' : 'rgba(10,15,24,0.22)';
-      ctx.fillRect(x, y, 2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#9b876a';
+    ctx.fillRect(0, 0, 512, 512);
+
+    // Organic damp soil, sandy loam, and mossy moisture variation (wrapped seamlessly)
+    for (let i = 0; i < 95; i++) {
+      const x = (Math.sin(i * 43.1 + 0.3) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 29.7 + 1.1) * 0.5 + 0.5) * 512;
+      const r = 24 + (i % 6) * 16;
+      const grad = ctx.createRadialGradient(x, y, 2, x, y, r);
+      grad.addColorStop(
+        0,
+        i % 4 === 0
+          ? 'rgba(122, 104, 78, 0.36)'
+          : i % 4 === 1
+            ? 'rgba(176, 156, 124, 0.32)'
+            : i % 4 === 2
+              ? 'rgba(92, 108, 62, 0.22)'
+              : 'rgba(136, 118, 90, 0.28)'
+      );
+      grad.addColorStop(1, 'rgba(155, 135, 106, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
     }
-    return track(finalizeTexture(c, aniso, 2, 12, true));
+
+    // Gentle meandering compacted footpath / worn earth tracks down the garden lane
+    for (const baseX of [172, 338]) {
+      const g = ctx.createLinearGradient(baseX - 42, 0, baseX + 42, 0);
+      g.addColorStop(0, 'rgba(155, 135, 106, 0)');
+      g.addColorStop(0.5, 'rgba(116, 98, 72, 0.38)');
+      g.addColorStop(1, 'rgba(155, 135, 106, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(baseX - 42, 0, 84, 512);
+    }
+
+    // Organic grass/moss encroachment creeping in softly from left & right garden verges
+    const leftEdge = ctx.createLinearGradient(0, 0, 62, 0);
+    leftEdge.addColorStop(0, 'rgba(72, 104, 52, 0.72)');
+    leftEdge.addColorStop(0.45, 'rgba(96, 122, 64, 0.32)');
+    leftEdge.addColorStop(1, 'rgba(155, 135, 106, 0)');
+    ctx.fillStyle = leftEdge;
+    ctx.fillRect(0, 0, 62, 512);
+
+    const rightEdge = ctx.createLinearGradient(450, 0, 512, 0);
+    rightEdge.addColorStop(0, 'rgba(155, 135, 106, 0)');
+    rightEdge.addColorStop(0.55, 'rgba(96, 122, 64, 0.32)');
+    rightEdge.addColorStop(1, 'rgba(72, 104, 52, 0.72)');
+    ctx.fillStyle = rightEdge;
+    ctx.fillRect(450, 0, 62, 512);
+
+    // Subtle grass & clover tufts along irregular shoulders
+    for (let i = 0; i < 420; i++) {
+      const side = i % 2 === 0 ? 0 : 1;
+      const gx = side === 0 ? (Math.sin(i * 19.3) * 0.5 + 0.5) * 44 : 468 + (Math.cos(i * 23.7) * 0.5 + 0.5) * 44;
+      const gy = (Math.sin(i * 67.1) * 0.5 + 0.5) * 512;
+      ctx.strokeStyle = i % 3 === 0 ? 'rgba(66, 102, 42, 0.65)' : 'rgba(104, 138, 60, 0.52)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(gx, gy);
+      ctx.lineTo(gx + ((i % 5) - 2) * 1.4, gy - 5 - (i % 4));
+      ctx.stroke();
+    }
+
+    // Scattered fine pebbles, sand grains, and fallen dry garden leaves
+    for (let i = 0; i < 6500; i++) {
+      const x = (Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 512;
+      if (i % 19 === 0) {
+        // Small warm fallen leaf or river pebble
+        ctx.fillStyle = i % 38 === 0 ? 'rgba(158, 118, 64, 0.55)' : 'rgba(198, 188, 170, 0.45)';
+        ctx.beginPath();
+        ctx.ellipse(x, y, 2.8, 1.8, i * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle =
+          i % 4 === 0
+            ? 'rgba(220, 206, 182, 0.24)'
+            : i % 3 === 0
+              ? 'rgba(84, 68, 48, 0.22)'
+              : 'rgba(176, 158, 130, 0.18)';
+        ctx.fillRect(x, y, 1.8, 1.8);
+      }
+    }
+    return track(finalizeTexture(c, aniso, 1, 7, true));
   })();
 
   const asphaltBump = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 2000; i++) {
-      const x = (Math.sin(i * 37.2) * 0.5 + 0.5) * 256;
-      const y = (Math.cos(i * 61.9) * 0.5 + 0.5) * 256;
+    ctx.fillRect(0, 0, 512, 512);
+    for (let i = 0; i < 6500; i++) {
+      const x = (Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 512;
       ctx.fillStyle = i % 2 === 0 ? '#a8a8a8' : '#585858';
-      ctx.fillRect(x, y, 2, 2);
+      ctx.fillRect(x, y, i % 11 === 0 ? 2.8 : 1.8, i % 11 === 0 ? 2.8 : 1.8);
     }
-    return track(finalizeTexture(c, aniso, 2, 12, false));
+    return track(finalizeTexture(c, aniso, 1, 7, false));
   })();
 
-  // 7. Warm limestone pedestrian promenade slabs
+  // 7. Natural Weathered Garden Flagstone Walkway (warm irregular garden stones + earthy soil/moss joints)
   const sidewalk = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#c8c2b6';
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillStyle = '#d3cdc2';
-    ctx.fillRect(4, 4, 248, 120);
-    ctx.fillRect(4, 132, 248, 120);
-    ctx.strokeStyle = '#9e978b';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(2, 2, 252, 124);
-    ctx.strokeRect(2, 130, 252, 124);
-    return track(finalizeTexture(c, aniso, 2, 12, true));
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#7c7564'; // Warm soil & moss joint base
+    ctx.fillRect(0, 0, 512, 512);
+
+    const rows = 5;
+    const cols = 3;
+    const rh = 512 / rows;
+    const cw = 512 / cols;
+    for (let r = 0; r < rows; r++) {
+      const off = r % 2 === 0 ? 0 : cw * 0.42;
+      for (let col = -1; col <= cols; col++) {
+        const seed = r * 13 + col * 7;
+        const jx = ((seed * 17) % 7) - 3;
+        const jy = ((seed * 29) % 7) - 3;
+        const shade = ((seed * 11) % 7) * 4 - 12;
+        const sx = col * cw + off + 6 + jx;
+        const sy = r * rh + 6 + jy;
+        const sw = cw - 12 - (Math.abs(seed) % 5);
+        const sh = rh - 12 - (Math.abs(seed * 3) % 5);
+
+        ctx.fillStyle = `rgb(${182 + shade}, ${172 + shade}, ${152 + shade})`;
+        ctx.beginPath();
+        ctx.roundRect(sx, sy, sw, sh, 10);
+        ctx.fill();
+
+        // Subtle moss tint on stone edges
+        if (Math.abs(seed) % 3 === 0) {
+          ctx.strokeStyle = 'rgba(84, 114, 58, 0.35)';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+      }
+    }
+
+    for (let i = 0; i < 2800; i++) {
+      const x = (Math.sin(i * 23.4) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 51.8) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,250,240,0.08)' : 'rgba(62,56,42,0.12)';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    return track(finalizeTexture(c, aniso, 1, 12, true));
   })();
 
   // 8. Rich architectural oak/cedar wood grain
@@ -607,6 +715,41 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
+  // 16. Ultra-lightweight downward architectural wall-wash cone & soft floor spill textures (0 GPU shader cost)
+  const sconceWash = (() => {
+    const [c, ctx] = makeCanvas(128, 128);
+    ctx.clearRect(0, 0, 128, 128);
+    const vGrad = ctx.createLinearGradient(0, 6, 0, 124);
+    vGrad.addColorStop(0.0, 'rgba(255, 255, 255, 0.92)');
+    vGrad.addColorStop(0.28, 'rgba(255, 255, 255, 0.56)');
+    vGrad.addColorStop(0.7, 'rgba(255, 255, 255, 0.18)');
+    vGrad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+    ctx.fillStyle = vGrad;
+    ctx.fillRect(0, 0, 128, 128);
+
+    // Soft side edge vignette so beam widens gracefully downward without boxy edges
+    ctx.globalCompositeOperation = 'destination-in';
+    const hGrad = ctx.createRadialGradient(64, 24, 14, 64, 72, 62);
+    hGrad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+    hGrad.addColorStop(0.6, 'rgba(255, 255, 255, 0.72)');
+    hGrad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+    ctx.fillStyle = hGrad;
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.globalCompositeOperation = 'source-over';
+    return track(finalizeTexture(c, 1, 1, 1, true, true));
+  })();
+
+  const sconcePool = (() => {
+    const [c, ctx] = makeCanvas(64, 64);
+    const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 31);
+    g.addColorStop(0.0, 'rgba(255, 255, 255, 0.85)');
+    g.addColorStop(0.45, 'rgba(255, 255, 255, 0.36)');
+    g.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    return track(finalizeTexture(c, 1, 1, 1, true, true));
+  })();
+
   return {
     tileBlue,
     tileBlueRough,
@@ -631,6 +774,8 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     anatomyPoster,
     ecgScreen,
     certificateFrame,
+    sconceWash,
+    sconcePool,
     dispose: () => {
       created.forEach((t) => t.dispose());
     },

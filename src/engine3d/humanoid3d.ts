@@ -35,6 +35,7 @@ export interface HumanoidRig {
   bodyPivot: THREE.Group;
   selectRing: THREE.Mesh;
   hitMesh: THREE.Mesh;
+  handCup?: THREE.Group;
   isSkinnedGlb: boolean;
   bones?: Record<string, SkinnedBoneRef>;
   // Procedural fallback references
@@ -596,6 +597,10 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       'UpperArm.R': 'UpperArmR',
       LowerArmR: 'LowerArmR',
       'LowerArm.R': 'LowerArmR',
+      HandR: 'HandR',
+      'Hand.R': 'HandR',
+      WristR: 'HandR',
+      'Wrist.R': 'HandR',
       UpperLegL: 'UpperLegL',
       'UpperLeg.L': 'UpperLegL',
       LowerLegL: 'LowerLegL',
@@ -750,11 +755,46 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     }
 
+    let handCup: THREE.Group | undefined;
+    const cupAnchor = bones['HandR']?.bone || bones['LowerArmR']?.bone;
+    if (cupAnchor) {
+      handCup = new THREE.Group();
+      handCup.scale.setScalar(0.01);
+      const cupBody = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.036, 0.025, 0.085, 12),
+        colorMat(0xf8fafc, 0.45, 0.02)
+      );
+      const cupRim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.036, 0.004, 6, 14),
+        colorMat(0x0284c7, 0.35, 0.05)
+      );
+      cupRim.rotation.x = Math.PI / 2;
+      cupRim.position.y = 0.042;
+      const cupWater = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.032, 0.029, 0.016, 12),
+        colorMat(0x38bdf8, 0.18, 0.05)
+      );
+      cupWater.position.y = 0.028;
+      handCup.add(cupBody, cupRim, cupWater);
+      if (bones['HandR']) {
+        cupBody.position.set(0, 0.05, 0.025);
+        cupRim.position.set(0, 0.092, 0.025);
+        cupWater.position.set(0, 0.078, 0.025);
+      } else {
+        cupBody.position.set(0, 0.25, 0.025);
+        cupRim.position.set(0, 0.292, 0.025);
+        cupWater.position.set(0, 0.278, 0.025);
+      }
+      handCup.visible = false;
+      cupAnchor.add(handCup);
+    }
+
     return {
       root,
       bodyPivot,
       selectRing,
       hitMesh,
+      handCup,
       isSkinnedGlb: true,
       bones,
     };
@@ -833,6 +873,20 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   };
   const leftArm = makeArm(-0.16);
   const rightArm = makeArm(0.16);
+  const fallbackCup = new THREE.Group();
+  const fbCupBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.034, 0.024, 0.08, 10),
+    colorMat(0xf8fafc, 0.45, 0.02)
+  );
+  const fbCupWater = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.027, 0.014, 10),
+    colorMat(0x38bdf8, 0.18, 0.05)
+  );
+  fbCupWater.position.y = 0.026;
+  fallbackCup.add(fbCupBody, fbCupWater);
+  fallbackCup.position.set(0, -0.27, 0.045);
+  fallbackCup.visible = false;
+  rightArm.add(fallbackCup);
   torso.add(leftArm, rightArm);
 
   const headGroup = new THREE.Group();
@@ -873,6 +927,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     bodyPivot,
     selectRing,
     hitMesh,
+    handCup: fallbackCup,
     isSkinnedGlb: false,
     robePivot,
     torso,
@@ -931,13 +986,36 @@ export function animateHumanoid3D(
     walkPhase: number;
     isMoving: boolean;
     walkBlend?: number;
+    sitBlend?: number;
+    seatHeight?: number;
+    lyingHeight?: number;
+    tiltPitch?: number;
     facingRad: number;
     timeSec: number;
     isSelected: boolean;
     inTreatment?: boolean;
+    activeGait?: boolean;
+    isDrinking?: boolean;
+    drinkStage?: 'none' | 'filling' | 'sipping' | 'returning';
   }
 ) {
-  const { pose, walkPhase, isMoving, walkBlend, facingRad, timeSec, isSelected, inTreatment } = opts;
+  const {
+    pose,
+    walkPhase,
+    isMoving,
+    walkBlend,
+    sitBlend,
+    seatHeight = 0.34,
+    lyingHeight = 0.49,
+    tiltPitch = -Math.PI / 2,
+    facingRad,
+    timeSec,
+    isSelected,
+    inTreatment,
+    activeGait,
+    isDrinking,
+    drinkStage = isDrinking ? 'sipping' : 'none',
+  } = opts;
 
   rig.selectRing.visible = isSelected;
   if (isSelected) {
@@ -945,25 +1023,36 @@ export function animateHumanoid3D(
     rig.selectRing.scale.set(s, s, 1);
   }
 
+  const sit = THREE.MathUtils.clamp(sitBlend ?? (pose === 'seated' ? 1 : 0), 0, 1);
+
+  if (rig.handCup) {
+    rig.handCup.visible =
+      !isMoving &&
+      sit < 0.2 &&
+      pose === 'standing' &&
+      (drinkStage === 'sipping' || drinkStage === 'returning');
+  }
+
   if (rig.isSkinnedGlb && rig.bones) {
     const b = rig.bones;
 
     if (pose === 'lying') {
-      rig.bodyPivot.rotation.set(-Math.PI / 2, 0, 0);
-      rig.bodyPivot.position.set(0, 0.49, 0.67);
+      rig.bodyPivot.rotation.set(tiltPitch, 0, 0);
+      const isTilted = Math.abs(tiltPitch + Math.PI / 2) > 0.1;
+      rig.bodyPivot.position.set(0, lyingHeight, isTilted ? 0.34 : 0.67);
       rig.root.rotation.y = facingRad;
       applyCharEuler(b['Hips'], 0, 0, 0);
       applyCharEuler(b['Torso'], 0.02, 0, 0);
-      applyCharEuler(b['UpperLegL'], -0.1, 0, 0.02);
-      applyCharEuler(b['UpperLegR'], -0.1, 0, -0.02);
-      applyCharEuler(b['LowerLegL'], 0.18, 0, 0);
-      applyCharEuler(b['LowerLegR'], 0.18, 0, 0);
-      applyCharEuler(b['FootL'], 0.14, 0, 0);
-      applyCharEuler(b['FootR'], 0.14, 0, 0);
+      applyCharEuler(b['UpperLegL'], -0.06, 0, 0.02);
+      applyCharEuler(b['UpperLegR'], -0.06, 0, -0.02);
+      applyCharEuler(b['LowerLegL'], isTilted ? 0.06 : 0.18, 0, 0);
+      applyCharEuler(b['LowerLegR'], isTilted ? 0.06 : 0.18, 0, 0);
+      applyCharEuler(b['FootL'], isTilted ? 0.04 : 0.14, 0, 0);
+      applyCharEuler(b['FootR'], isTilted ? 0.04 : 0.14, 0, 0);
       applyArmSagittal(b['UpperArmL'], -1.46, -0.06);
       applyArmSagittal(b['UpperArmR'], 1.46, -0.06);
-      applyLocalElbowFlex(b['LowerArmL'], true, 0.24);
-      applyLocalElbowFlex(b['LowerArmR'], false, 0.24);
+      applyLocalElbowFlex(b['LowerArmL'], true, 0.2);
+      applyLocalElbowFlex(b['LowerArmR'], false, 0.2);
       applyCharEuler(b['Head'], 0.12 + Math.sin(timeSec * 1.8) * 0.015, 0, 0);
       return;
     }
@@ -971,107 +1060,137 @@ export function animateHumanoid3D(
     rig.bodyPivot.rotation.set(0, 0, 0);
     rig.root.rotation.y = facingRad;
 
-    if (pose === 'seated') {
-      rig.bodyPivot.position.set(0, -0.33, 0);
-      const pedal = inTreatment ? Math.sin(timeSec * 5.2) * 0.32 : 0;
-      const breath = Math.sin(timeSec * 1.7) * 0.015;
-      applyCharEuler(b['Hips'], 0, 0, 0);
-      applyCharEuler(b['Torso'], 0.07 + breath * 0.5, 0, 0);
-      applyCharEuler(b['Chest'], 0.05 + breath, 0, 0);
-      applyCharEuler(b['ShoulderL'], 0, 0, -0.04);
-      applyCharEuler(b['ShoulderR'], 0, 0, 0.04);
-      applyCharEuler(b['UpperLegL'], -1.48 - pedal, 0.04, 0.04);
-      applyCharEuler(b['UpperLegR'], -1.48 + pedal, -0.04, -0.04);
-      applyCharEuler(b['LowerLegL'], 1.50 + pedal * 0.65, 0, 0);
-      applyCharEuler(b['LowerLegR'], 1.50 - pedal * 0.65, 0, 0);
-      applyCharEuler(b['FootL'], 0.02, 0, 0);
-      applyCharEuler(b['FootR'], 0.02, 0, 0);
-      applyArmSagittal(b['UpperArmL'], -1.48, -0.14);
-      applyArmSagittal(b['UpperArmR'], 1.48, -0.14);
-      applyLocalElbowFlex(b['LowerArmL'], true, 0.56);
-      applyLocalElbowFlex(b['LowerArmR'], false, 0.56);
-      applyCharEuler(b['Neck'], -0.04, Math.sin(timeSec * 0.6) * 0.04, 0);
-      applyCharEuler(b['Head'], -0.03 + Math.sin(timeSec * 1.3) * 0.025, Math.sin(timeSec * 0.55) * 0.11, 0);
-      return;
-    }
+    const gaitActive = Boolean(activeGait ?? inTreatment) && pose !== 'seated';
+    const activeBlend = (gaitActive ? 1 : walkBlend ?? (isMoving ? 1 : 0)) * (1 - sit);
+    const breath = Math.sin(timeSec * 1.85) * 0.014;
+    const idleShift = Math.sin(timeSec * 0.85) * 0.014 * (1 - activeBlend) * (1 - sit);
+    const sitHipY = THREE.MathUtils.clamp(-0.63 + seatHeight, -0.35, -0.18);
 
-    const activeBlend = inTreatment ? 1 : walkBlend ?? (isMoving ? 1 : 0);
-    const breath = Math.sin(timeSec * 1.9) * 0.013;
+    // Compute standing/walking baseline angles
+    const phase = gaitActive ? timeSec * 4.2 : walkPhase;
+    const stride = Math.sin(phase);
+    const cosP = Math.cos(phase);
+    const cos2 = Math.cos(phase * 2);
 
-    if (activeBlend > 0.01) {
-      const phase = inTreatment ? timeSec * 4.2 : walkPhase;
-      const stride = Math.sin(phase);
-      const cosP = Math.cos(phase);
-      const cos2 = Math.cos(phase * 2);
+    const standY = 0.02 + (cos2 - 1) * 0.013 * activeBlend;
+    const standX = (-cosP * 0.013 * activeBlend) + idleShift * 0.45;
+    rig.bodyPivot.position.set(
+      standX,
+      THREE.MathUtils.lerp(standY, sitHipY, sit),
+      THREE.MathUtils.lerp(0, -0.02, sit)
+    );
 
-      const verticalBob = (cos2 - 1) * 0.013 * activeBlend;
-      const lateralSway = -cosP * 0.013 * activeBlend;
-      rig.bodyPivot.position.set(lateralSway, 0.02 + verticalBob, 0);
+    const walkHipY = -stride * 0.058 * activeBlend + idleShift * 0.9;
+    const walkHipZ = stride * 0.026 * activeBlend + idleShift * 0.8;
+    applyCharEuler(b['Hips'], 0, walkHipY * (1 - sit), walkHipZ * (1 - sit));
 
-      applyCharEuler(b['Hips'], 0, -stride * 0.058 * activeBlend, stride * 0.026 * activeBlend);
-      applyCharEuler(
-        b['Torso'],
-        -0.035 * activeBlend + breath * (1 - activeBlend),
-        stride * 0.04 * activeBlend,
-        -stride * 0.014 * activeBlend
-      );
-      applyCharEuler(
-        b['Chest'],
-        0.015 * activeBlend + breath,
-        stride * 0.048 * activeBlend,
-        -stride * 0.018 * activeBlend
-      );
-      applyCharEuler(b['ShoulderL'], 0, -stride * 0.04 * activeBlend, -0.04);
-      applyCharEuler(b['ShoulderR'], 0, -stride * 0.04 * activeBlend, 0.04);
+    const torsoStandX = -0.035 * activeBlend + breath * 0.55;
+    const torsoStandY = stride * 0.04 * activeBlend - idleShift * 0.6;
+    const torsoStandZ = -stride * 0.014 * activeBlend - idleShift * 0.5;
+    applyCharEuler(
+      b['Torso'],
+      THREE.MathUtils.lerp(torsoStandX, 0.05 + breath * 0.5, sit),
+      torsoStandY * (1 - sit),
+      torsoStandZ * (1 - sit)
+    );
 
-      const swing = stride * 0.34 * activeBlend;
-      applyCharEuler(b['UpperLegL'], -swing, 0, 0.016);
-      applyCharEuler(b['UpperLegR'], swing, 0, -0.016);
+    applyCharEuler(
+      b['Chest'],
+      THREE.MathUtils.lerp(0.015 * activeBlend + breath, 0.04 + breath, sit),
+      stride * 0.048 * activeBlend * (1 - sit) - idleShift * 0.5 * (1 - sit),
+      -stride * 0.018 * activeBlend * (1 - sit)
+    );
+    applyCharEuler(b['ShoulderL'], 0, -stride * 0.04 * activeBlend * (1 - sit), -0.04);
+    applyCharEuler(b['ShoulderR'], 0, -stride * 0.04 * activeBlend * (1 - sit), 0.04);
 
-      const kneeL =
-        0.04 + (Math.max(0, -cosP) * 0.58 + Math.max(0, stride) * 0.12) * activeBlend;
-      const kneeR =
-        0.04 + (Math.max(0, cosP) * 0.58 + Math.max(0, -stride) * 0.12) * activeBlend;
-      applyCharEuler(b['LowerLegL'], kneeL, 0, 0);
-      applyCharEuler(b['LowerLegR'], kneeR, 0, 0);
+    // Legs smoothly transition between gait/standing and seated bend
+    const pedal = sit > 0.7 && inTreatment ? Math.sin(timeSec * 5.2) * 0.32 : 0;
+    const swing = stride * 0.34 * activeBlend;
+    const sitThighAngle = -1.42;
+    const sitKneeAngle = 1.44;
+    const standKneeL = 0.04 + (Math.max(0, -cosP) * 0.58 + Math.max(0, stride) * 0.12) * activeBlend;
+    const standKneeR = 0.04 + (Math.max(0, cosP) * 0.58 + Math.max(0, -stride) * 0.12) * activeBlend;
 
-      applyCharEuler(b['FootL'], -stride * 0.17 * activeBlend, 0, 0);
-      applyCharEuler(b['FootR'], stride * 0.17 * activeBlend, 0, 0);
+    applyCharEuler(
+      b['UpperLegL'],
+      THREE.MathUtils.lerp(-swing, sitThighAngle - pedal, sit),
+      THREE.MathUtils.lerp(0.02 * (1 - activeBlend), 0.05, sit),
+      THREE.MathUtils.lerp(0.018, 0.04, sit)
+    );
+    applyCharEuler(
+      b['UpperLegR'],
+      THREE.MathUtils.lerp(swing, sitThighAngle + pedal, sit),
+      THREE.MathUtils.lerp(-0.02 * (1 - activeBlend), -0.05, sit),
+      THREE.MathUtils.lerp(-0.018, -0.04, sit)
+    );
 
-      const armSwing = stride * 0.24 * activeBlend;
-      applyArmSagittal(b['UpperArmL'], -1.49, armSwing - 0.02);
-      applyArmSagittal(b['UpperArmR'], 1.49, -armSwing - 0.02);
-      applyLocalElbowFlex(b['LowerArmL'], true, 0.12 + Math.max(0, -stride) * 0.22 * activeBlend);
-      applyLocalElbowFlex(b['LowerArmR'], false, 0.12 + Math.max(0, stride) * 0.22 * activeBlend);
+    applyCharEuler(
+      b['LowerLegL'],
+      THREE.MathUtils.lerp(standKneeL, sitKneeAngle + pedal * 0.65, sit),
+      0,
+      0
+    );
+    applyCharEuler(
+      b['LowerLegR'],
+      THREE.MathUtils.lerp(standKneeR, sitKneeAngle - pedal * 0.65, sit),
+      0,
+      0
+    );
 
-      applyCharEuler(b['Neck'], 0.01 * activeBlend, -stride * 0.025 * activeBlend, 0);
-      applyCharEuler(
-        b['Head'],
-        0.012 * activeBlend + Math.sin(timeSec * 1.4) * 0.014,
-        -stride * 0.02 * activeBlend + Math.sin(timeSec * 0.55) * 0.045,
-        0
-      );
-    } else {
-      const sway = Math.sin(timeSec * 0.9) * 0.01;
-      rig.bodyPivot.position.set(sway * 0.4, 0.02, 0);
-      applyCharEuler(b['Hips'], 0, sway * 0.8, sway * 0.8);
-      applyCharEuler(b['Torso'], breath * 0.5, -sway * 0.6, -sway * 0.5);
-      applyCharEuler(b['Chest'], breath, -sway * 0.5, 0);
-      applyCharEuler(b['ShoulderL'], 0, 0, -0.04);
-      applyCharEuler(b['ShoulderR'], 0, 0, 0.04);
-      applyCharEuler(b['UpperLegL'], 0, 0.03, 0.02);
-      applyCharEuler(b['UpperLegR'], 0, -0.03, -0.02);
-      applyCharEuler(b['LowerLegL'], 0.04, 0, 0);
-      applyCharEuler(b['LowerLegR'], 0.04, 0, 0);
-      applyCharEuler(b['FootL'], 0, 0, 0);
-      applyCharEuler(b['FootR'], 0, 0, 0);
-      applyArmSagittal(b['UpperArmL'], -1.49, -0.02 + breath * 0.7);
-      applyArmSagittal(b['UpperArmR'], 1.49, -0.02 - breath * 0.7);
-      applyLocalElbowFlex(b['LowerArmL'], true, 0.14);
-      applyLocalElbowFlex(b['LowerArmR'], false, 0.14);
-      applyCharEuler(b['Neck'], 0, Math.sin(timeSec * 0.45) * 0.04, 0);
-      applyCharEuler(b['Head'], Math.sin(timeSec * 1.1) * 0.022, Math.sin(timeSec * 0.52) * 0.08, 0);
-    }
+    applyCharEuler(b['FootL'], THREE.MathUtils.lerp(-stride * 0.17 * activeBlend, 0.04, sit), 0, 0);
+    applyCharEuler(b['FootR'], THREE.MathUtils.lerp(stride * 0.17 * activeBlend, 0.04, sit), 0, 0);
+
+    // Arms blend smoothly from swinging/relaxed at sides to resting comfortably on lap (or 3-stage water cooler interaction)
+    const armSwing = stride * 0.24 * activeBlend;
+    const armStandL = armSwing - 0.02 + breath * 0.6 * (1 - activeBlend);
+    const armStandR = -armSwing - 0.02 - breath * 0.6 * (1 - activeBlend);
+    const activeDrink = !isMoving && sit < 0.2 && drinkStage !== 'none';
+    const drinkSip = drinkStage === 'sipping' ? 0.5 + 0.5 * Math.sin(timeSec * 4.2) : 0;
+
+    const rightArmSwingX = activeDrink
+      ? drinkStage === 'filling'
+        ? -0.58 - Math.sin(timeSec * 2.2) * 0.04
+        : drinkStage === 'sipping'
+          ? -0.68 - drinkSip * 0.24
+          : -0.48
+      : THREE.MathUtils.lerp(armStandR, -0.14, sit);
+
+    const rightElbowFlex = activeDrink
+      ? drinkStage === 'filling'
+        ? 0.58
+        : drinkStage === 'sipping'
+          ? 1.2 + drinkSip * 0.28
+          : 0.44
+      : THREE.MathUtils.lerp(0.13 + Math.max(0, stride) * 0.22 * activeBlend, 0.56, sit);
+
+    applyArmSagittal(
+      b['UpperArmL'],
+      THREE.MathUtils.lerp(-1.49, -1.46, sit),
+      THREE.MathUtils.lerp(armStandL, -0.14, sit)
+    );
+    applyArmSagittal(
+      b['UpperArmR'],
+      THREE.MathUtils.lerp(1.49, 1.46, sit),
+      rightArmSwingX
+    );
+
+    const elbowStandL = 0.13 + Math.max(0, -stride) * 0.22 * activeBlend;
+    applyLocalElbowFlex(b['LowerArmL'], true, THREE.MathUtils.lerp(elbowStandL, 0.56, sit));
+    applyLocalElbowFlex(b['LowerArmR'], false, rightElbowFlex);
+
+    // Natural head & neck glance when waiting, sitting, filling cup, or sipping water
+    const lookYaw = activeDrink
+      ? 0
+      : Math.sin(timeSec * 0.52) * (1 - activeBlend * 0.55) * 0.11;
+    const lookPitch = activeDrink
+      ? drinkStage === 'filling'
+        ? 0.1
+        : drinkStage === 'sipping'
+          ? -0.15 * drinkSip
+          : 0.06
+      : Math.sin(timeSec * 1.15) * 0.022;
+    applyCharEuler(b['Neck'], THREE.MathUtils.lerp(0.01 * activeBlend, -0.03, sit), lookYaw * 0.45, 0);
+    applyCharEuler(b['Head'], THREE.MathUtils.lerp(lookPitch, -0.02 + lookPitch, sit), lookYaw, 0);
     return;
   }
 
@@ -1081,18 +1200,18 @@ export function animateHumanoid3D(
   }
   if (pose === 'lying') {
     rig.bodyPivot.rotation.set(-Math.PI / 2, 0, 0);
-    rig.bodyPivot.position.set(0, 0.56, -0.35);
-    rig.root.rotation.y = Math.PI / 2;
+    rig.bodyPivot.position.set(0, lyingHeight + 0.05, -0.35);
+    rig.root.rotation.y = facingRad;
     return;
   }
   rig.bodyPivot.rotation.set(0, 0, 0);
   rig.root.rotation.y = facingRad;
-  if (pose === 'seated') {
-    rig.bodyPivot.position.set(0, -0.09, 0);
-    rig.leftLeg.rotation.x = -Math.PI * 0.48;
-    rig.rightLeg.rotation.x = -Math.PI * 0.48;
-    rig.leftShin.rotation.x = Math.PI * 0.48;
-    rig.rightShin.rotation.x = Math.PI * 0.48;
+  if (sit > 0.05) {
+    rig.bodyPivot.position.set(0, THREE.MathUtils.lerp(0.05, -0.09, sit), 0);
+    rig.leftLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.48, sit);
+    rig.rightLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.48, sit);
+    rig.leftShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.48, sit);
+    rig.rightShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.48, sit);
     return;
   }
   rig.bodyPivot.position.set(0, 0.05, 0);

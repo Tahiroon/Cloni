@@ -16,7 +16,13 @@ import {
   FRIEND_CLINICS,
   SPECIALTY_META,
 } from './data/catalog';
-import { canStepBetween, findGridPath } from './engine/isometricMath';
+import {
+  buildObstacleBoxes,
+  findGridPath,
+  hasContinuousLineOfSight,
+  isTileWalkable,
+  resolveTileStep,
+} from './engine/isometricMath';
 import {
   loadClinicLocal,
   saveClinicLocal,
@@ -31,6 +37,7 @@ import {
   FloatingFeedback,
   FriendClinic,
   Language,
+  LightingMode,
   NavTab,
   PatientEntity,
   PlacedItem,
@@ -102,12 +109,16 @@ export default function App() {
   const [unlockTargetRoom, setUnlockTargetRoom] = useState<ClinicRoom | null>(null);
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
-  const [goldenHour, setGoldenHour] = useState(false);
   const [placementDraft, setPlacementDraft] = useState<PlacementDraft | null>(null);
 
-  // Queue for optional AI-generated cases fetched silently in background
-  const aiCasePoolRef = useRef<ClinicalCase[]>([]);
-  const fetchingAiCaseRef = useRef(false);
+  const lightingMode: LightingMode = clinic.lightingMode || 'day';
+
+  // On-demand patient case updater (used when the student explicitly requests a fresh Gemini AI case)
+  const handleUpdatePatientCase = useCallback((patientId: string, nextCase: ClinicalCase) => {
+    setPatients((prev) =>
+      prev.map((p) => (p.id === patientId ? { ...p, clinicalCase: nextCase, isAiGenerated: true } : p))
+    );
+  }, []);
 
   const itemFootprints = useMemo(() => {
     const map = new Map<string, { w: number; d: number }>();
@@ -120,6 +131,11 @@ export default function App() {
     CATALOG_ITEMS.forEach((c) => map.set(c.id, c));
     return map;
   }, []);
+
+  const obstacleBoxes = useMemo(
+    () => buildObstacleBoxes(clinic.rooms, clinic.placedItems, itemFootprints),
+    [clinic.rooms, clinic.placedItems, itemFootprints]
+  );
 
   // Hydrate offline-first from IndexedDB / LocalStorage (+ clean v2 expanded clinic migration & infinite coins)
   useEffect(() => {
@@ -141,6 +157,7 @@ export default function App() {
             studentId: saved.studentId || fresh.studentId,
             language: saved.language || fresh.language,
             soundEnabled: saved.soundEnabled ?? fresh.soundEnabled,
+            lightingMode: saved.lightingMode || 'day',
             stars: saved.stars || 0,
             xp: saved.xp || 0,
             level: saved.level || 1,
@@ -172,7 +189,12 @@ export default function App() {
         }
 
         // Keep unlimited coins active on this account
-        nextState = { ...nextState, version: 6, coins: 999999 };
+        nextState = {
+          ...nextState,
+          lightingMode: nextState.lightingMode || 'day',
+          version: 6,
+          coins: 999999,
+        };
         setClinic(nextState);
         soundFx.enabled = nextState.soundEnabled;
         document.documentElement.lang = nextState.language;
@@ -199,32 +221,6 @@ export default function App() {
     setFloatingFeedbacks((prev) => [...prev.slice(-8), { id, gridX, gridY, text, color, createdAt: Date.now() }]);
   }, []);
 
-  // Pre-warm 1 Gemini clinical case in background when online
-  const prefetchAiCase = useCallback(async (unlockedSpecs: RoomSpecialty[]) => {
-    if (fetchingAiCaseRef.current || aiCasePoolRef.current.length >= 2) return;
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-
-    fetchingAiCaseRef.current = true;
-    try {
-      const spec = unlockedSpecs[Math.floor(Math.random() * unlockedSpecs.length)] || 'orthopedics';
-      const res = await fetch('/api/clinical/generate-case', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specialty: spec }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as ClinicalCase;
-        if (data && data.chiefComplaintEn && Array.isArray(data.diagnosisOptions)) {
-          aiCasePoolRef.current.push(data);
-        }
-      }
-    } catch {
-      // Offline fallback works seamlessly
-    } finally {
-      fetchingAiCaseRef.current = false;
-    }
-  }, []);
-
   // Helper to update mission progress
   const bumpMission = useCallback((type: ClinicSaveState['missions'][0]['type'], amount = 1) => {
     setClinic((prev) => ({
@@ -237,9 +233,9 @@ export default function App() {
     }));
   }, []);
 
-  // Find available treatment station in unlocked rooms
+  // Find available treatment station in unlocked rooms, preferring devices matching the patient's specialty
   const findFreeStation = useCallback(
-    (currentPatients: PatientEntity[]): PlacedItem | null => {
+    (currentPatients: PatientEntity[], patientSpecialty?: RoomSpecialty): PlacedItem | null => {
       const occupiedIds = new Set(
         currentPatients
           .filter((p) => p.state !== 'treated_leaving' && p.assignedStationId)
@@ -253,109 +249,259 @@ export default function App() {
         return (!room || room.unlocked) && !occupiedIds.has(item.instanceId);
       });
 
-      return stations.length > 0 ? stations[Math.floor(Math.random() * stations.length)] : null;
+      if (stations.length === 0) return null;
+
+      if (patientSpecialty) {
+        const directMatches = stations.filter((item) => {
+          const cat = catalogById.get(item.catalogId);
+          const room = clinic.rooms.find((r) => r.id === item.roomId);
+          return (
+            cat?.stationSpecialty === patientSpecialty ||
+            room?.specialty === patientSpecialty
+          );
+        });
+        if (directMatches.length > 0) {
+          return directMatches[Math.floor(Math.random() * directMatches.length)];
+        }
+        const generalMatches = stations.filter(
+          (item) => catalogById.get(item.catalogId)?.stationSpecialty === 'any'
+        );
+        if (generalMatches.length > 0) {
+          return generalMatches[Math.floor(Math.random() * generalMatches.length)];
+        }
+      }
+
+      return stations[Math.floor(Math.random() * stations.length)];
     },
     [clinic.placedItems, clinic.rooms, catalogById]
   );
 
-  // Pick a reception desk check-in spot in front of the desk
+  // Pick a walkable reception desk check-in spot in front of the desk
   const getReceptionCheckinSpot = useCallback(
     (currentPatients: PatientEntity[]) => {
       const desk = clinic.placedItems.find((it) => it.catalogId === 'reception_desk');
-      const spots = desk
-        ? [
-            { x: desk.gridX + 1, y: desk.gridY + 1 },
-            { x: desk.gridX, y: desk.gridY + 1 },
-            { x: desk.gridX + 1, y: Math.min(20, desk.gridY + 2) },
-          ]
+      const rawSpots = desk
+        ? desk.rotation === 0
+          ? [
+              { x: desk.gridX + 1, y: desk.gridY + 1 },
+              { x: desk.gridX, y: desk.gridY + 1 },
+              { x: desk.gridX + 1, y: Math.min(20, desk.gridY + 2) },
+            ]
+          : desk.rotation === 2
+            ? [
+                { x: desk.gridX, y: desk.gridY - 1 },
+                { x: desk.gridX + 1, y: desk.gridY - 1 },
+              ]
+            : desk.rotation === 1
+              ? [
+                  { x: desk.gridX - 1, y: desk.gridY },
+                  { x: desk.gridX - 1, y: desk.gridY + 1 },
+                ]
+              : [
+                  { x: desk.gridX + 1, y: desk.gridY },
+                  { x: desk.gridX + 1, y: desk.gridY + 1 },
+                ]
         : [
             { x: 15, y: 13 },
             { x: 14, y: 13 },
             { x: 15, y: 14 },
           ];
+      const spots = rawSpots.filter((s) => isTileWalkable(s.x, s.y, 0.22, obstacleBoxes));
+      const pool = spots.length > 0 ? spots : [{ x: 15, y: 14 }, { x: 16, y: 14 }];
       const occupied = new Set(
         currentPatients
           .filter((p) => p.state === 'arriving' || p.state === 'checkin_at_desk')
           .map((p) => `${Math.round(p.targetX)},${Math.round(p.targetY)}`)
       );
-      return spots.find((s) => !occupied.has(`${s.x},${s.y}`)) || spots[0];
+      return pool.find((s) => !occupied.has(`${s.x},${s.y}`)) || pool[0];
     },
-    [clinic.placedItems]
+    [clinic.placedItems, obstacleBoxes]
   );
 
-  // Pick a waiting seat (outdoor park_bench or indoor waiting_chairs)
-  const pickWaitingSeat = useCallback(
+  // Pick a walkable spot in front of an unlocked water cooler for a quick hydration sip
+  const pickFreeWaterCoolerSpot = useCallback(
     (currentPatients: PatientEntity[], excludePatientId?: string) => {
+      const busyIds = new Set(
+        currentPatients
+          .filter(
+            (p) =>
+              p.id !== excludePatientId &&
+              (p.state === 'walking_to_water' || p.state === 'drinking_water') &&
+              p.waterCoolerId
+          )
+          .map((p) => p.waterCoolerId!)
+      );
+
+      for (const item of clinic.placedItems) {
+        if (item.catalogId !== 'water_cooler' || busyIds.has(item.instanceId)) continue;
+        const room = clinic.rooms.find(
+          (r) =>
+            item.gridX >= r.minX &&
+            item.gridX <= r.maxX &&
+            item.gridY >= r.minY &&
+            item.gridY <= r.maxY
+        );
+        if (room && !room.unlocked) continue;
+
+        const pref =
+          item.rotation === 0
+            ? { dx: 0, dy: 0.68 }
+            : item.rotation === 1
+              ? { dx: -0.68, dy: 0 }
+              : item.rotation === 2
+                ? { dx: 0, dy: -0.68 }
+                : { dx: 0.68, dy: 0 };
+
+        const candidates = [
+          pref,
+          { dx: 0, dy: 0.68 },
+          { dx: 0.68, dy: 0 },
+          { dx: -0.68, dy: 0 },
+          { dx: 0, dy: -0.68 },
+        ];
+        for (const c of candidates) {
+          const tx = item.gridX + c.dx;
+          const ty = item.gridY + c.dy;
+          if (isTileWalkable(tx, ty, 0.22, obstacleBoxes)) {
+            return {
+              coolerId: item.instanceId,
+              x: tx,
+              y: ty,
+              facingRad: Math.atan2(item.gridX - tx, item.gridY - ty),
+            };
+          }
+        }
+      }
+      return null;
+    },
+    [clinic.placedItems, clinic.rooms, obstacleBoxes]
+  );
+
+  // Pick the nearest unoccupied waiting seat (waiting_chairs or park_bench) or null if all full
+  const pickNearestFreeWaitingSeat = useCallback(
+    (
+      fromX: number,
+      fromY: number,
+      currentPatients: PatientEntity[],
+      excludePatientId?: string
+    ) => {
       const seats: Array<{
         x: number;
         y: number;
         offX: number;
         offZ: number;
         facingRad: number;
+        seatHeight: number;
+        seatKey: string;
+        itemId: string;
         isOutdoor: boolean;
       }> = [];
 
       for (const item of clinic.placedItems) {
+        const room = clinic.rooms.find(
+          (r) =>
+            item.gridX >= r.minX &&
+            item.gridX <= r.maxX &&
+            item.gridY >= r.minY &&
+            item.gridY <= r.maxY
+        );
+        if (room && !room.unlocked) continue;
+
         if (item.catalogId === 'park_bench') {
           if (item.rotation === 0) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: 0.08, facingRad: Math.PI / 2, isOutdoor: true });
-            seats.push({ x: item.gridX, y: item.gridY + 1, offX: 0.12, offZ: -0.08, facingRad: Math.PI / 2, isOutdoor: true });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.04, offZ: 0.12, facingRad: Math.PI / 2, seatHeight: 0.4, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY + 1, offX: 0.04, offZ: -0.12, facingRad: Math.PI / 2, seatHeight: 0.4, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 2) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: -0.12, offZ: 0.08, facingRad: -Math.PI / 2, isOutdoor: true });
-            seats.push({ x: item.gridX, y: item.gridY + 1, offX: -0.12, offZ: -0.08, facingRad: -Math.PI / 2, isOutdoor: true });
+            seats.push({ x: item.gridX, y: item.gridY, offX: -0.04, offZ: 0.12, facingRad: -Math.PI / 2, seatHeight: 0.4, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY + 1, offX: -0.04, offZ: -0.12, facingRad: -Math.PI / 2, seatHeight: 0.4, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 1) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.08, offZ: 0.12, facingRad: 0, isOutdoor: true });
-            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.08, offZ: 0.12, facingRad: 0, isOutdoor: true });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: 0.04, facingRad: 0, seatHeight: 0.4, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: 0.04, facingRad: 0, seatHeight: 0.4, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.08, offZ: -0.12, facingRad: Math.PI, isOutdoor: true });
-            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.08, offZ: -0.12, facingRad: Math.PI, isOutdoor: true });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: -0.04, facingRad: Math.PI, seatHeight: 0.4, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: -0.04, facingRad: Math.PI, seatHeight: 0.4, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           }
         } else if (item.catalogId === 'waiting_chairs') {
           if (item.rotation === 0) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: -0.06, offZ: 0.15, facingRad: 0, isOutdoor: false });
-            seats.push({ x: item.gridX + 1, y: item.gridY, offX: 0.06, offZ: 0.15, facingRad: 0, isOutdoor: false });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: 0.07, facingRad: 0, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: 0.07, facingRad: 0, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 2) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: -0.06, offZ: -0.15, facingRad: Math.PI, isOutdoor: false });
-            seats.push({ x: item.gridX + 1, y: item.gridY, offX: 0.06, offZ: -0.15, facingRad: Math.PI, isOutdoor: false });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.12, offZ: -0.07, facingRad: Math.PI, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX + 1, y: item.gridY, offX: -0.12, offZ: -0.07, facingRad: Math.PI, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else if (item.rotation === 1) {
-            seats.push({ x: item.gridX, y: item.gridY, offX: -0.15, offZ: -0.06, facingRad: -Math.PI / 2, isOutdoor: false });
-            seats.push({ x: item.gridX, y: item.gridY + 1, offX: -0.15, offZ: 0.06, facingRad: -Math.PI / 2, isOutdoor: false });
+            seats.push({ x: item.gridX, y: item.gridY, offX: -0.07, offZ: 0.12, facingRad: -Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY + 1, offX: -0.07, offZ: -0.12, facingRad: -Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
           } else {
-            seats.push({ x: item.gridX, y: item.gridY, offX: 0.15, offZ: -0.06, facingRad: Math.PI / 2, isOutdoor: false });
-            seats.push({ x: item.gridX, y: item.gridY + 1, offX: 0.15, offZ: 0.06, facingRad: Math.PI / 2, isOutdoor: false });
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.07, offZ: 0.12, facingRad: Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+            seats.push({ x: item.gridX, y: item.gridY + 1, offX: 0.07, offZ: -0.12, facingRad: Math.PI / 2, seatHeight: 0.32, seatKey: `${item.instanceId}_1`, itemId: item.instanceId, isOutdoor: !room });
+          }
+        } else if (item.catalogId === 'lounge_chair') {
+          if (item.rotation === 0) {
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0, offZ: 0.06, facingRad: 0, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+          } else if (item.rotation === 1) {
+            seats.push({ x: item.gridX, y: item.gridY, offX: -0.06, offZ: 0, facingRad: -Math.PI / 2, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+          } else if (item.rotation === 2) {
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0, offZ: -0.06, facingRad: Math.PI, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
+          } else {
+            seats.push({ x: item.gridX, y: item.gridY, offX: 0.06, offZ: 0, facingRad: Math.PI / 2, seatHeight: 0.34, seatKey: `${item.instanceId}_0`, itemId: item.instanceId, isOutdoor: !room });
           }
         }
       }
 
-      if (seats.length === 0) {
-        return { x: 16, y: 18, offX: 0, offZ: 0, facingRad: 0, isOutdoor: false };
+      if (seats.length === 0) return null;
+
+      const claimedKeys = new Set<string>();
+      const claimedCoords = new Set<string>();
+      for (const p of currentPatients) {
+        if (p.id === excludePatientId) continue;
+        if (p.state !== 'walking_to_wait' && p.state !== 'waiting_checkin') continue;
+        if (p.isSeatedWait === false) continue;
+        if (p.waitingSeatKey) claimedKeys.add(p.waitingSeatKey);
+        claimedCoords.add(`${Math.round(p.targetX)},${Math.round(p.targetY)}`);
       }
 
-      const occupied = new Set(
-        currentPatients
-          .filter(
-            (p) =>
-              p.id !== excludePatientId &&
-              (p.state === 'walking_to_wait' || p.state === 'waiting_checkin')
-          )
-          .map((p) => `${Math.round(p.targetX)},${Math.round(p.targetY)}`)
+      const freeSeats = seats.filter(
+        (s) => !claimedKeys.has(s.seatKey) && !claimedCoords.has(`${s.x},${s.y}`)
       );
+      if (freeSeats.length === 0) return null;
 
-      const freeSeats = seats.filter((s) => !occupied.has(`${s.x},${s.y}`));
-      const pool = freeSeats.length > 0 ? freeSeats : seats;
-      const outdoorFree = pool.filter((s) => s.isOutdoor);
-      const indoorFree = pool.filter((s) => !s.isOutdoor);
-
-      // Balance outdoor courtyard benches & indoor waiting lounge so patients actively use outside chairs too
-      if (outdoorFree.length > 0 && (indoorFree.length === 0 || Math.random() < 0.58)) {
-        return outdoorFree[Math.floor(Math.random() * outdoorFree.length)];
-      }
-      return pool[Math.floor(Math.random() * pool.length)];
+      freeSeats.sort((a, b) => {
+        const da = Math.hypot(a.x - fromX, a.y - fromY);
+        const db = Math.hypot(b.x - fromX, b.y - fromY);
+        return da - db;
+      });
+      return freeSeats[0];
     },
-    [clinic.placedItems]
+    [clinic.placedItems, clinic.rooms]
   );
 
-  // Patient Spawner (calm pace: arrives -> Reception Desk -> outdoor bench / waiting chairs -> treatment wing)
+  // Pick an open non-colliding standing waiting spot inside reception when all chairs are full
+  const findStandingWaitSpot = useCallback(
+    (currentPatients: PatientEntity[], excludePatientId?: string) => {
+      const candidates: Array<{ x: number; y: number }> = [];
+      for (let x = 13.4; x <= 20.4; x += 1.2) {
+        for (let y = 13.6; y <= 20.2; y += 1.2) {
+          const jx = x + (Math.random() - 0.5) * 0.45;
+          const jy = y + (Math.random() - 0.5) * 0.45;
+          if (!isTileWalkable(jx, jy, 0.28, obstacleBoxes)) continue;
+          const crowded = currentPatients.some(
+            (pt) =>
+              pt.id !== excludePatientId &&
+              pt.state !== 'treated_leaving' &&
+              Math.hypot(pt.gridX - jx, pt.gridY - jy) < 0.95
+          );
+          if (!crowded) candidates.push({ x: jx, y: jy });
+        }
+      }
+      if (candidates.length > 0) {
+        return candidates[Math.floor(Math.random() * candidates.length)];
+      }
+      return { x: 16.2 + (Math.random() - 0.5) * 0.8, y: 15.6 + (Math.random() - 0.5) * 0.8 };
+    },
+    [obstacleBoxes]
+  );
+
+  // Patient Spawner (always arrives -> Reception Desk -> nearest free seat or calm standing wait -> treatment wing)
   useEffect(() => {
     if (!hydrated || visitingFriend) return;
 
@@ -365,25 +511,26 @@ export default function App() {
           (r) => r.unlocked && r.specialty !== 'reception'
         ).length;
         const stationCount = clinic.placedItems.filter((i) => catalogById.get(i.catalogId)?.isTreatmentStation).length;
-        const maxActive = Math.min(3, Math.min(Math.max(1, stationCount), unlockedTreatmentWings + 1));
+        // Keep clinic calm and readable: 2-3 active patients normally, up to 4 when expanded
+        const maxActive = Math.min(
+          unlockedTreatmentWings >= 2 ? 4 : 3,
+          Math.max(2, Math.min(stationCount, unlockedTreatmentWings + 1))
+        );
         const activeCount = prev.filter((p) => p.state !== 'treated_leaving').length;
         if (activeCount >= maxActive) return prev;
 
-        const unlockedSpecs = clinic.rooms
-          .filter((r) => r.unlocked && r.specialty && r.specialty !== 'reception')
-          .map((r) => r.specialty as RoomSpecialty);
-
-        prefetchAiCase(unlockedSpecs);
-
-        const aiCase = aiCasePoolRef.current.shift();
-        const fallbackCase =
-          FALLBACK_CLINICAL_CASES[Math.floor(Math.random() * FALLBACK_CLINICAL_CASES.length)];
-        const chosenCase = aiCase || { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
+        const activeBaseIds = new Set(
+          prev.map((p) => p.clinicalCase.id.replace(/_\d+$/, ''))
+        );
+        const unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
+        const casePool = unseenPool.length > 0 ? unseenPool : FALLBACK_CLINICAL_CASES;
+        const fallbackCase = casePool[Math.floor(Math.random() * casePool.length)];
+        const chosenCase = { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
         const skin = SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
         const receptionSpot = getReceptionCheckinSpot(prev);
-        const startX = 28;
-        const startY = 14;
+        const startX = 27.9;
+        const startY = 14.3 + (Math.random() - 0.5) * 0.5;
         const path = findGridPath(
           startX,
           startY,
@@ -391,7 +538,8 @@ export default function App() {
           receptionSpot.y,
           clinic.rooms,
           clinic.placedItems,
-          itemFootprints
+          itemFootprints,
+          obstacleBoxes
         );
 
         const isFemale = chosenCase.gender === 'female';
@@ -469,14 +617,14 @@ export default function App() {
           assignedStationId: null,
           waitTimer: 0,
           clinicalCase: chosenCase,
-          isAiGenerated: Boolean(aiCase),
+          isAiGenerated: false,
         };
         return [...prev, newPatient];
       });
     };
 
-    const bootTimer = setTimeout(spawnCheck, 1100);
-    const interval = setInterval(spawnCheck, 12500);
+    const bootTimer = setTimeout(spawnCheck, 1300);
+    const interval = setInterval(spawnCheck, 13800);
     return () => {
       clearTimeout(bootTimer);
       clearInterval(interval);
@@ -488,95 +636,331 @@ export default function App() {
     clinic.rooms,
     catalogById,
     itemFootprints,
-    prefetchAiCase,
+    obstacleBoxes,
     getReceptionCheckinSpot,
   ]);
 
-  // 10Hz Character & Staff Simulation Tick (paired with 60fps 3D damping)
+  // Smooth dt-driven ~10Hz simulation tick (zero IndexedDB thrashing, brisk natural speed, optional water-cooler sips)
   useEffect(() => {
     if (!hydrated || visitingFriend) return;
 
     const receptionistHired = clinic.staff.some((s) => s.role === 'receptionist' && s.hired);
-    let latestPatientsSnapshot: PatientEntity[] = [];
+    let lastTickMs = performance.now();
+
+    const assignWaitingDestination = (
+      updated: PatientEntity,
+      claimedSoFar: PatientEntity[]
+    ) => {
+      const seat = pickNearestFreeWaitingSeat(
+        updated.gridX,
+        updated.gridY,
+        claimedSoFar,
+        updated.id
+      );
+      updated.state = 'walking_to_wait';
+      updated.waitTimer = 0;
+      updated.waterCoolerId = undefined;
+
+      if (seat) {
+        updated.isSeatedWait = true;
+        updated.waitingSeatKey = seat.seatKey;
+        updated.seatHeight = seat.seatHeight;
+        updated.targetX = seat.x;
+        updated.targetY = seat.y;
+        updated.seatOffsetX = seat.offX;
+        updated.seatOffsetZ = seat.offZ;
+        updated.seatFacingRad = seat.facingRad;
+        updated.idleMoveTimer = undefined;
+        updated.path = findGridPath(
+          updated.gridX,
+          updated.gridY,
+          seat.x,
+          seat.y,
+          clinic.rooms,
+          clinic.placedItems,
+          itemFootprints,
+          obstacleBoxes,
+          seat.itemId
+        );
+      } else {
+        const standSpot = findStandingWaitSpot(claimedSoFar, updated.id);
+        updated.isSeatedWait = false;
+        updated.waitingSeatKey = undefined;
+        updated.seatHeight = undefined;
+        updated.seatOffsetX = undefined;
+        updated.seatOffsetZ = undefined;
+        updated.seatFacingRad = undefined;
+        updated.targetX = standSpot.x;
+        updated.targetY = standSpot.y;
+        updated.idleMoveTimer = 2400 + Math.random() * 2000;
+        updated.path = findGridPath(
+          updated.gridX,
+          updated.gridY,
+          standSpot.x,
+          standSpot.y,
+          clinic.rooms,
+          clinic.placedItems,
+          itemFootprints,
+          obstacleBoxes
+        );
+      }
+    };
 
     const tick = setInterval(() => {
+      const nowMs = performance.now();
+      const dtSec = Math.min(0.15, Math.max(0.03, (nowMs - lastTickMs) / 1000));
+      const dtMs = dtSec * 1000;
+      lastTickMs = nowMs;
+
       setPatients((prev) => {
         let changed = false;
         const nextList: PatientEntity[] = [];
 
-        for (const p of prev) {
-          let updated = { ...p };
+        for (let idx = 0; idx < prev.length; idx++) {
+          const p = prev[idx];
+          const updated = { ...p };
+          const seatItemId = updated.waitingSeatKey
+            ? updated.waitingSeatKey.slice(0, updated.waitingSeatKey.lastIndexOf('_'))
+            : undefined;
+          const ignoreId =
+            updated.state === 'walking_to_wait' || updated.state === 'waiting_checkin'
+              ? seatItemId
+              : updated.state === 'walking_to_station' ||
+                  updated.state === 'ready_for_exam' ||
+                  updated.state === 'in_treatment'
+                ? updated.assignedStationId || undefined
+                : updated.state === 'treated_leaving'
+                  ? updated.leavingItemId || seatItemId || updated.assignedStationId || undefined
+                  : undefined;
 
           if (updated.path.length > 0) {
-            let rem = 0.115;
-            while (rem > 0.001 && updated.path.length > 0) {
-              const nextNode = updated.path[0];
-              const dx = nextNode.x - updated.gridX;
-              const dy = nextNode.y - updated.gridY;
-              const dist = Math.hypot(dx, dy);
-              if (dist <= rem) {
-                updated.gridX = nextNode.x;
-                updated.gridY = nextNode.y;
-                updated.path = updated.path.slice(1);
-                rem -= dist;
-              } else {
-                updated.gridX += (dx / dist) * rem;
-                updated.gridY += (dy / dist) * rem;
-                rem = 0;
-              }
+            // Smooth corner rounding when next-next waypoint has clear obstacle-free sightline
+            let activePath = updated.path;
+            if (
+              activePath.length >= 2 &&
+              hasContinuousLineOfSight(
+                updated.gridX,
+                updated.gridY,
+                activePath[1].x,
+                activePath[1].y,
+                0.24,
+                obstacleBoxes,
+                ignoreId
+              )
+            ) {
+              activePath = activePath.slice(1);
+              updated.path = activePath;
             }
-            updated.walkPhase += 0.42;
+
+            const nextNode = activePath[0];
+            const dx = nextNode.x - updated.gridX;
+            const dy = nextNode.y - updated.gridY;
+            const dist = Math.hypot(dx, dy);
+            // Natural brisk walking speed (~1.62 tiles/sec) independent of tick jitter
+            const speedStep = 1.62 * dtSec;
+
+            if (activePath.length > 1 && dist <= 0.34) {
+              updated.path = activePath.slice(1);
+            } else if (dist <= speedStep) {
+              const res = resolveTileStep(
+                updated.gridX,
+                updated.gridY,
+                nextNode.x,
+                nextNode.y,
+                0.22,
+                obstacleBoxes,
+                ignoreId
+              );
+              updated.gridX = res.x;
+              updated.gridY = res.y;
+              updated.path = activePath.slice(1);
+            } else {
+              // Gentle separation steering only in open spaces (never push anyone into walls)
+              let avoidX = 0;
+              let avoidY = 0;
+              for (let j = 0; j < prev.length; j++) {
+                if (j === idx) continue;
+                const other = prev[j];
+                if (other.state === 'ready_for_exam' || other.state === 'in_treatment') continue;
+                const sx = updated.gridX - other.gridX;
+                const sy = updated.gridY - other.gridY;
+                const sd = Math.hypot(sx, sy);
+                if (sd > 0.01 && sd < 0.7) {
+                  const push = (0.7 - sd) * 0.36;
+                  avoidX += (sx / sd) * push;
+                  avoidY += (sy / sd) * push;
+                }
+              }
+
+              const steerX = dx / dist + avoidX;
+              const steerY = dy / dist + avoidY;
+              const steerLen = Math.hypot(steerX, steerY) || 1;
+              const candX = updated.gridX + (steerX / steerLen) * speedStep;
+              const candY = updated.gridY + (steerY / steerLen) * speedStep;
+              const res = resolveTileStep(
+                updated.gridX,
+                updated.gridY,
+                candX,
+                candY,
+                0.22,
+                obstacleBoxes,
+                ignoreId
+              );
+              updated.gridX = res.x;
+              updated.gridY = res.y;
+            }
+
+            updated.walkPhase += speedStep * 3.4;
             changed = true;
           } else {
             // Reached current waypoint
             if (updated.state === 'arriving') {
-              // Step 1 complete: Arrived at Reception Desk to check in
               updated.state = 'checkin_at_desk';
               updated.waitTimer = 0;
               changed = true;
             } else if (updated.state === 'checkin_at_desk') {
-              updated.waitTimer += 100;
-              const checkinMs = receptionistHired ? 900 : 1400;
+              updated.waitTimer += dtMs;
+              const checkinMs = receptionistHired ? 780 : 1200;
               if (updated.waitTimer >= checkinMs) {
-                // Step 2: Walk to sit on outdoor park bench or indoor waiting chairs
-                const seat = pickWaitingSeat(prev, updated.id);
-                updated.state = 'walking_to_wait';
-                updated.targetX = seat.x;
-                updated.targetY = seat.y;
-                updated.seatOffsetX = seat.offX;
-                updated.seatOffsetZ = seat.offZ;
-                updated.seatFacingRad = seat.facingRad;
-                updated.waitTimer = 0;
-                updated.path = findGridPath(
-                  updated.gridX,
-                  updated.gridY,
-                  seat.x,
-                  seat.y,
-                  clinic.rooms,
-                  clinic.placedItems,
-                  itemFootprints
-                );
+                const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                const coolerSpot =
+                  Math.random() < 0.46
+                    ? pickFreeWaterCoolerSpot(claimedSoFar, updated.id)
+                    : null;
+
+                const coolerPath = coolerSpot
+                  ? findGridPath(
+                      updated.gridX,
+                      updated.gridY,
+                      coolerSpot.x,
+                      coolerSpot.y,
+                      clinic.rooms,
+                      clinic.placedItems,
+                      itemFootprints,
+                      obstacleBoxes
+                    )
+                  : [];
+
+                if (coolerSpot && coolerPath.length > 0) {
+                  updated.state = 'walking_to_water';
+                  updated.waitTimer = 0;
+                  updated.waterCoolerId = coolerSpot.coolerId;
+                  updated.targetX = coolerSpot.x;
+                  updated.targetY = coolerSpot.y;
+                  updated.headingRad = coolerSpot.facingRad;
+                  updated.path = coolerPath;
+                } else {
+                  assignWaitingDestination(updated, claimedSoFar);
+                }
+                changed = true;
+              }
+            } else if (updated.state === 'walking_to_water') {
+              updated.state = 'drinking_water';
+              updated.waitTimer = 0;
+              changed = true;
+            } else if (updated.state === 'drinking_water') {
+              updated.waitTimer += dtMs;
+              if (updated.waitTimer >= 3650) {
+                const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                assignWaitingDestination(updated, claimedSoFar);
                 changed = true;
               }
             } else if (updated.state === 'walking_to_wait') {
-              // Step 3: Seated and waiting to be called by the specialist
               updated.state = 'waiting_checkin';
               updated.waitTimer = 0;
+              if (updated.isSeatedWait === false) {
+                updated.idleMoveTimer = 2200 + Math.random() * 1800;
+              }
               changed = true;
             } else if (updated.state === 'waiting_checkin') {
-              updated.waitTimer += 100;
-              const autoCallMs = receptionistHired ? 2200 : 4800;
+              updated.waitTimer += dtMs;
+
+              if (updated.isSeatedWait === false) {
+                if (updated.waitTimer % 500 < dtMs) {
+                  const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                  const openSeat = pickNearestFreeWaitingSeat(
+                    updated.gridX,
+                    updated.gridY,
+                    claimedSoFar,
+                    updated.id
+                  );
+                  if (openSeat) {
+                    updated.state = 'walking_to_wait';
+                    updated.isSeatedWait = true;
+                    updated.waitingSeatKey = openSeat.seatKey;
+                    updated.seatHeight = openSeat.seatHeight;
+                    updated.targetX = openSeat.x;
+                    updated.targetY = openSeat.y;
+                    updated.seatOffsetX = openSeat.offX;
+                    updated.seatOffsetZ = openSeat.offZ;
+                    updated.seatFacingRad = openSeat.facingRad;
+                    updated.idleMoveTimer = undefined;
+                    updated.path = findGridPath(
+                      updated.gridX,
+                      updated.gridY,
+                      openSeat.x,
+                      openSeat.y,
+                      clinic.rooms,
+                      clinic.placedItems,
+                      itemFootprints,
+                      obstacleBoxes,
+                      openSeat.itemId
+                    );
+                    changed = true;
+                    nextList.push(updated);
+                    continue;
+                  }
+                }
+
+                // Natural standing waiting idle movements
+                const nextIdle = (updated.idleMoveTimer ?? 2400) - dtMs;
+                if (nextIdle <= 0) {
+                  updated.idleMoveTimer = 2600 + Math.random() * 2400;
+                  if (Math.random() < 0.5) {
+                    const drift = findStandingWaitSpot([...nextList, ...prev.slice(idx + 1)], updated.id);
+                    if (Math.hypot(drift.x - updated.gridX, drift.y - updated.gridY) <= 2.6) {
+                      updated.targetX = drift.x;
+                      updated.targetY = drift.y;
+                      updated.path = findGridPath(
+                        updated.gridX,
+                        updated.gridY,
+                        drift.x,
+                        drift.y,
+                        clinic.rooms,
+                        clinic.placedItems,
+                        itemFootprints,
+                        obstacleBoxes
+                      );
+                    }
+                  } else {
+                    updated.headingRad = Math.PI + (Math.random() - 0.5) * 1.4;
+                  }
+                } else {
+                  updated.idleMoveTimer = nextIdle;
+                }
+                changed = true;
+              }
+
+              const autoCallMs = receptionistHired ? 2400 : 4800;
               if (updated.waitTimer >= autoCallMs) {
-                const station = findFreeStation(prev);
+                const station = findFreeStation(
+                  [...nextList, ...prev.slice(idx + 1)],
+                  updated.clinicalCase.specialty
+                );
                 if (station) {
-                  // Step 4: Called by specialist -> walks through doors to treatment wing
                   updated.assignedStationId = station.instanceId;
                   updated.state = 'walking_to_station';
                   updated.targetX = station.gridX;
                   updated.targetY = station.gridY;
+                  updated.isSeatedWait = undefined;
+                  updated.waitingSeatKey = undefined;
+                  updated.seatHeight = undefined;
                   updated.seatOffsetX = undefined;
                   updated.seatOffsetZ = undefined;
                   updated.seatFacingRad = undefined;
+                  updated.waterCoolerId = undefined;
+                  updated.idleMoveTimer = undefined;
+                  updated.headingRad = undefined;
                   updated.path = findGridPath(
                     updated.gridX,
                     updated.gridY,
@@ -584,7 +968,9 @@ export default function App() {
                     station.gridY,
                     clinic.rooms,
                     clinic.placedItems,
-                    itemFootprints
+                    itemFootprints,
+                    obstacleBoxes,
+                    station.instanceId
                   );
                   changed = true;
                 }
@@ -593,7 +979,14 @@ export default function App() {
               updated.state = 'ready_for_exam';
               changed = true;
             } else if (updated.state === 'in_treatment') {
-              const nextProg = Math.min(1, (updated.treatmentProgress || 0) + 0.025);
+              const stItem = updated.assignedStationId
+                ? clinic.placedItems.find((it) => it.instanceId === updated.assignedStationId)
+                : undefined;
+              const stBoost = stItem ? catalogById.get(stItem.catalogId)?.speedBonus || 0 : 0;
+              const nextProg = Math.min(
+                1,
+                (updated.treatmentProgress || 0) + dtSec * 0.245 * (1 + stBoost / 100)
+              );
               if (nextProg !== updated.treatmentProgress) {
                 updated.treatmentProgress = nextProg;
                 changed = true;
@@ -607,10 +1000,10 @@ export default function App() {
           nextList.push(updated);
         }
 
-        // Actor-to-actor collision avoidance for walking patients
+        // Non-clipping personal-space resolution for standing/walking patients
         for (let i = 0; i < nextList.length; i++) {
           const a = nextList[i];
-          if (a.path.length === 0) continue;
+          if (a.state === 'ready_for_exam' || a.state === 'in_treatment' || a.isSeatedWait) continue;
           for (let j = 0; j < nextList.length; j++) {
             if (i === j) continue;
             const b = nextList[j];
@@ -620,104 +1013,21 @@ export default function App() {
             const d = Math.hypot(sx, sy);
             if (d > 0.001 && d < 0.62) {
               const push = (0.62 - d) * 0.22;
-              const nx = a.gridX + (sx / d) * push;
-              const ny = a.gridY + (sy / d) * push;
-              if (
-                canStepBetween(
-                  Math.round(a.gridX),
-                  Math.round(a.gridY),
-                  Math.round(nx),
-                  Math.round(ny),
-                  clinic.rooms
-                )
-              ) {
-                a.gridX = nx;
-                a.gridY = ny;
+              const candX = a.gridX + (sx / d) * push;
+              const candY = a.gridY + (sy / d) * push;
+              const res = resolveTileStep(a.gridX, a.gridY, candX, candY, 0.22, obstacleBoxes);
+              if (res.x !== a.gridX || res.y !== a.gridY) {
+                a.gridX = res.x;
+                a.gridY = res.y;
                 changed = true;
               }
             }
           }
         }
 
-        latestPatientsSnapshot = nextList;
         return changed ? nextList : prev;
       });
-
-      // Therapist AI: attends active station patients, calls waiting patients, or strolls rooms freely
-      setClinic((prev) => {
-        let staffChanged = false;
-        const nextStaff = prev.staff.map((st) => {
-          if (!st.hired || st.role !== 'therapist') return st;
-          const copy = { ...st };
-          if (copy.path.length > 0) {
-            let rem = 0.095;
-            while (rem > 0.001 && copy.path.length > 0) {
-              const nextNode = copy.path[0];
-              const dx = nextNode.x - copy.gridX;
-              const dy = nextNode.y - copy.gridY;
-              const dist = Math.hypot(dx, dy);
-              if (dist <= rem) {
-                copy.gridX = nextNode.x;
-                copy.gridY = nextNode.y;
-                copy.path = copy.path.slice(1);
-                rem -= dist;
-              } else {
-                copy.gridX += (dx / dist) * rem;
-                copy.gridY += (dy / dist) * rem;
-                rem = 0;
-              }
-            }
-            copy.walkPhase += 0.36;
-            staffChanged = true;
-          } else if (Math.random() < 0.065) {
-            const activeTarget =
-              latestPatientsSnapshot.find((pt) => pt.state === 'in_treatment') ||
-              latestPatientsSnapshot.find((pt) => pt.state === 'ready_for_exam');
-            const waitingTarget = latestPatientsSnapshot.find((pt) => pt.state === 'waiting_checkin');
-
-            let tx: number | null = null;
-            let ty: number | null = null;
-
-            if (activeTarget) {
-              tx = Math.min(20, Math.max(3, Math.round(activeTarget.gridX) + 1));
-              ty = Math.min(20, Math.max(3, Math.round(activeTarget.gridY) + 1));
-            } else if (waitingTarget) {
-              // Step to reception doorway / courtyard entrance to call waiting patient
-              tx = waitingTarget.gridX >= 22 ? 20 : 12;
-              ty = 14;
-            } else if (Math.random() < 0.25) {
-              // Occasionally step into the sunlit courtyard garden for fresh air
-              tx = 22 + Math.floor(Math.random() * 4);
-              ty = 10 + Math.floor(Math.random() * 8);
-            } else {
-              // Patrol naturally across any point inside unlocked clinic rooms
-              const unlocked = prev.rooms.filter((r) => r.unlocked);
-              const pickRoom = unlocked[Math.floor(Math.random() * unlocked.length)];
-              if (pickRoom) {
-                tx = pickRoom.minX + 1 + Math.floor(Math.random() * Math.max(1, pickRoom.maxX - pickRoom.minX - 1));
-                ty = pickRoom.minY + 1 + Math.floor(Math.random() * Math.max(1, pickRoom.maxY - pickRoom.minY - 1));
-              }
-            }
-
-            if (tx !== null && ty !== null && Math.hypot(tx - copy.gridX, ty - copy.gridY) > 0.8) {
-              copy.path = findGridPath(
-                copy.gridX,
-                copy.gridY,
-                tx,
-                ty,
-                prev.rooms,
-                prev.placedItems,
-                itemFootprints
-              );
-              staffChanged = true;
-            }
-          }
-          return copy;
-        });
-
-        return staffChanged ? { ...prev, staff: nextStaff } : prev;
-      });
-    }, 100);
+    }, 95);
 
     return () => clearInterval(tick);
   }, [
@@ -726,10 +1036,12 @@ export default function App() {
     clinic.rooms,
     clinic.placedItems,
     clinic.staff,
-    catalogById,
     findFreeStation,
-    pickWaitingSeat,
+    pickNearestFreeWaitingSeat,
+    pickFreeWaterCoolerSpot,
+    findStandingWaitSpot,
     itemFootprints,
+    obstacleBoxes,
   ]);
 
   // Handle tapping a patient
@@ -740,6 +1052,8 @@ export default function App() {
     if (
       patient.state === 'arriving' ||
       patient.state === 'checkin_at_desk' ||
+      patient.state === 'walking_to_water' ||
+      patient.state === 'drinking_water' ||
       patient.state === 'walking_to_wait' ||
       patient.state === 'waiting_checkin'
     ) {
@@ -760,9 +1074,15 @@ export default function App() {
                 ...p,
                 assignedStationId: station.instanceId,
                 state: 'walking_to_station',
+                isSeatedWait: undefined,
+                waitingSeatKey: undefined,
+                seatHeight: undefined,
                 seatOffsetX: undefined,
                 seatOffsetZ: undefined,
                 seatFacingRad: undefined,
+                waterCoolerId: undefined,
+                idleMoveTimer: undefined,
+                headingRad: undefined,
                 path: findGridPath(
                   p.gridX,
                   p.gridY,
@@ -770,7 +1090,9 @@ export default function App() {
                   station.gridY,
                   clinic.rooms,
                   clinic.placedItems,
-                  itemFootprints
+                  itemFootprints,
+                  obstacleBoxes,
+                  station.instanceId
                 ),
               }
             : p
@@ -852,23 +1174,26 @@ export default function App() {
             ? {
                 ...pt,
                 state: 'treated_leaving',
+                leavingItemId: pt.assignedStationId || undefined,
                 assignedStationId: null,
                 treatmentProgress: undefined,
                 path: findGridPath(
                   pt.gridX,
                   pt.gridY,
-                  28,
-                  14,
+                  32,
+                  15,
                   clinic.rooms,
                   clinic.placedItems,
-                  itemFootprints
+                  itemFootprints,
+                  obstacleBoxes,
+                  pt.assignedStationId || undefined
                 ),
               }
             : pt
         )
       );
     },
-    [addFloatingFeedback, bumpMission, clinic.placedItems, clinic.rooms, itemFootprints]
+    [addFloatingFeedback, bumpMission, clinic.placedItems, clinic.rooms, itemFootprints, obstacleBoxes]
   );
 
   // Complete clinical reasoning modal -> run live 3D therapy session (or immediate ER referral)
@@ -888,11 +1213,24 @@ export default function App() {
       return;
     }
 
+    const station = p.assignedStationId
+      ? clinic.placedItems.find((it) => it.instanceId === p.assignedStationId)
+      : undefined;
+    const stationCat = station ? catalogById.get(station.catalogId) : undefined;
+    const speedBoost = stationCat?.speedBonus || 0;
+    const durationMs = Math.max(2000, Math.round(4100 / (1 + speedBoost / 100)));
+
     soundFx.tap();
     addFloatingFeedback(
       p.gridX,
       p.gridY,
-      clinic.language === 'ar' ? 'جلسة علاج نشطة ⚡' : 'Therapy Active ⚡',
+      clinic.language === 'ar'
+        ? stationCat
+          ? `جلسة ${stationCat.nameEn} ⚡`
+          : 'جلسة علاج نشطة ⚡'
+        : stationCat
+          ? `${stationCat.nameEn} Session ⚡`
+          : 'Therapy Active ⚡',
       '#38bdf8'
     );
     setPatients((prev) =>
@@ -905,7 +1243,7 @@ export default function App() {
 
     setTimeout(() => {
       finishTreatmentAndReward({ ...result, gridX: p.gridX, gridY: p.gridY });
-    }, 4100);
+    }, durationMs);
   };
 
   // Bottom Nav selection
@@ -1131,7 +1469,11 @@ export default function App() {
   const canUnlockAnyRoom = clinic.rooms.some((r) => !r.unlocked && clinic.coins >= r.unlockCost);
 
   return (
-    <main className="relative w-screen h-screen overflow-hidden bg-[#5aa332]">
+    <main
+      className={`relative w-screen h-screen overflow-hidden transition-colors duration-500 ${
+        lightingMode === 'night' ? 'bg-[#050a18]' : 'bg-[#5aa332]'
+      }`}
+    >
       {/* 2.5D Isometric Clinic Canvas */}
       <ClinicCanvas
         rooms={displayedRooms}
@@ -1145,7 +1487,7 @@ export default function App() {
         isBlurred={Boolean(focusedPatient)}
         language={clinic.language}
         orbitStep={orbitStep}
-        goldenHour={goldenHour}
+        lightingMode={lightingMode}
         onTapPatient={handleTapPatient}
         onTapLockedRoom={(room) => {
           if (!visitingFriend) {
@@ -1180,6 +1522,25 @@ export default function App() {
           });
         }}
         onTapReceptionDesk={handleTapReceptionDesk}
+        onInspectItem={(item) => {
+          const assignedPatient = patients.find(
+            (pt) => pt.assignedStationId === item.instanceId && pt.state !== 'treated_leaving'
+          );
+          if (assignedPatient) {
+            handleTapPatient(assignedPatient);
+            return;
+          }
+          const cat = catalogById.get(item.catalogId);
+          if (cat && (cat.isTreatmentStation || cat.speedBonus > 0)) {
+            soundFx.tap();
+            addFloatingFeedback(
+              item.gridX,
+              item.gridY,
+              `${cat.nameEn} · ⚡ +${cat.speedBonus}%`,
+              '#38bdf8'
+            );
+          }
+        }}
         onUpdatePlacementHover={(gx, gy) =>
           setPlacementDraft((prev) => (prev ? { ...prev, hoverX: gx, hoverY: gy } : null))
         }
@@ -1206,6 +1567,7 @@ export default function App() {
         onlineFriends={friends.filter((f) => f.online).length}
         satisfaction={clinic.satisfaction}
         language={clinic.language}
+        lightingMode={lightingMode}
         visitingFriendName={
           visitingFriend ? (isAr ? visitingFriend.nameAr : visitingFriend.nameEn) : null
         }
@@ -1232,6 +1594,7 @@ export default function App() {
         activeTab={activeNavTab}
         editMode={editMode && !visitingFriend}
         language={clinic.language}
+        lightingMode={lightingMode}
         storeAlert={canUnlockAnyRoom}
         disabled={Boolean(visitingFriend) || Boolean(focusedPatient)}
         onSelectTab={handleSelectNavTab}
@@ -1253,6 +1616,7 @@ export default function App() {
         rooms={clinic.rooms}
         staff={clinic.staff}
         language={clinic.language}
+        lightingMode={lightingMode}
         onClose={() => {
           setStoreOpen(false);
           setActiveNavTab(null);
@@ -1270,6 +1634,7 @@ export default function App() {
         room={unlockTargetRoom}
         coins={clinic.coins}
         language={clinic.language}
+        lightingMode={lightingMode}
         onClose={() => setUnlockTargetRoom(null)}
         onConfirmUnlock={handleConfirmUnlockRoom}
       />
@@ -1279,8 +1644,10 @@ export default function App() {
         key={focusedPatient?.id || 'none'}
         patient={focusedPatient}
         language={clinic.language}
+        lightingMode={lightingMode}
         onClose={() => setFocusedPatientId(null)}
         onCompleteCase={handleCompleteCase}
+        onUpdatePatientCase={handleUpdatePatientCase}
       />
 
       {/* Daily Missions */}
@@ -1290,6 +1657,7 @@ export default function App() {
         patientsTreatedTotal={clinic.patientsTreatedTotal}
         redFlagsCaughtTotal={clinic.redFlagsCaughtTotal}
         language={clinic.language}
+        lightingMode={lightingMode}
         onClose={() => {
           setMissionsOpen(false);
           setActiveNavTab(null);
@@ -1302,6 +1670,7 @@ export default function App() {
         open={friendsOpen}
         friends={friends}
         language={clinic.language}
+        lightingMode={lightingMode}
         onClose={() => setFriendsOpen(false)}
         onVisitFriend={handleVisitFriend}
         onSendGift={handleSendFriendGift}
@@ -1312,15 +1681,15 @@ export default function App() {
         open={settingsOpen}
         language={clinic.language}
         soundEnabled={clinic.soundEnabled}
-        goldenHour={goldenHour}
+        lightingMode={lightingMode}
         studentId={clinic.studentId}
         lastSyncedAt={clinic.lastSyncedAt}
         onClose={() => setSettingsOpen(false)}
         onToggleLanguage={handleToggleLanguage}
         onToggleSound={handleToggleSound}
-        onToggleGoldenHour={() => {
+        onChangeLightingMode={(mode) => {
           soundFx.tap();
-          setGoldenHour((g) => !g);
+          setClinic((prev) => ({ ...prev, lightingMode: mode }));
         }}
         onManualSync={() => {
           soundFx.tap();
@@ -1335,6 +1704,7 @@ export default function App() {
       <BonusQuizModal
         open={bonusOpen}
         language={clinic.language}
+        lightingMode={lightingMode}
         onClose={() => setBonusOpen(false)}
         onEarnReward={(c, s) => {
           soundFx.starSuccess();

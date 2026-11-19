@@ -2,7 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CATALOG_ITEMS, GRID_SIZE } from '../data/catalog';
-import { findGridPath } from '../engine/isometricMath';
+import {
+  buildObstacleBoxes,
+  findGridPath,
+  hasContinuousLineOfSight,
+  isTileWalkable,
+  isWorldWalkable,
+  ObstacleBox,
+  resolveTileStep,
+} from '../engine/isometricMath';
 import { glbRegistry, startPreloadGlbs } from '../engine3d/glbRegistry';
 import {
   animateHumanoid3D,
@@ -16,7 +24,9 @@ import {
   ClinicWorldHandle,
   createCatalogMesh3D,
   disposeObject3D,
+  SmartLightMeta,
   updateDoors3D,
+  WaterCoolerRigMeta,
 } from '../engine3d/models3d';
 import { createTextureBundle, TextureBundle } from '../engine3d/textures3d';
 import {
@@ -24,6 +34,7 @@ import {
   ClinicRoom,
   FloatingFeedback,
   Language,
+  LightingMode,
   PatientEntity,
   PlacedItem,
   StaffMember,
@@ -49,12 +60,13 @@ interface ClinicCanvasProps {
   isBlurred: boolean;
   language: Language;
   orbitStep?: number;
-  goldenHour?: boolean;
+  lightingMode?: LightingMode;
   onTapPatient: (patient: PatientEntity) => void;
   onTapLockedRoom: (room: ClinicRoom) => void;
   onTapPlacedItem: (item: PlacedItem) => void;
   onLongPressPlacedItem?: (item: PlacedItem) => void;
   onTapReceptionDesk?: () => void;
+  onInspectItem?: (item: PlacedItem) => void;
   onUpdatePlacementHover: (gx: number, gy: number) => void;
   onConfirmPlacement: (gx: number, gy: number) => void;
   onCancelPlacement: () => void;
@@ -94,12 +106,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   isBlurred,
   language,
   orbitStep = 0,
-  goldenHour = false,
+  lightingMode = 'day',
   onTapPatient,
   onTapLockedRoom,
   onTapPlacedItem,
   onLongPressPlacedItem,
   onTapReceptionDesk,
+  onInspectItem,
   onUpdatePlacementHover,
   onConfirmPlacement,
   onCancelPlacement,
@@ -123,18 +136,24 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const effW = draft.rotation % 2 === 0 ? draft.catalogItem.width : draft.catalogItem.depth;
     const effD = draft.rotation % 2 === 0 ? draft.catalogItem.depth : draft.catalogItem.width;
 
-    if (gx < 1 || gy < 1 || gx + effW > GRID_SIZE - 2 || gy + effD > GRID_SIZE - 2) {
+    if (gx < 1 || gy < 1 || gx + effW > GRID_SIZE + 2 || gy + effD > GRID_SIZE - 2) {
       return false;
     }
+
+    const isStreetOrGardenLamp =
+      draft.catalogItem.sprite === 'street_lamp_post' ||
+      draft.catalogItem.sprite === 'garden_lamp' ||
+      draft.catalogItem.sprite === 'garden_spot_lamp';
 
     for (let dx = 0; dx < effW; dx++) {
       for (let dy = 0; dy < effD; dy++) {
         const tx = gx + dx;
         const ty = gy + dy;
 
-        if (tx >= 27) return false;
+        // Keep outer garden lane beyond edge lamps unobstructed (street/garden lamps allowed up to tx=29)
+        if (tx >= (isStreetOrGardenLamp ? 30 : 29)) return false;
         // Clear sliding main entrance path & gate promenade
-        if (tx >= 21 && tx <= 26 && (ty === 14 || ty === 15)) return false;
+        if (tx >= 21 && tx <= 29 && (ty === 14 || ty === 15)) return false;
         // Clear central reflecting fountain basin in courtyard
         if ((tx === 24 || tx === 25) && (ty === 7 || ty === 8)) return false;
 
@@ -147,7 +166,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           if (draft.catalogItem.indoorAllowed === false) return false;
         } else {
           const inCourtyard = tx >= 22 && tx <= 26 && ty >= 2 && ty <= 21;
-          if (!inCourtyard) return false;
+          const onSidewalkPromenade =
+            isStreetOrGardenLamp && (tx === 27 || tx === 28 || tx === 29) && ty >= 2 && ty <= 21;
+          if (!inCourtyard && !onSidewalkPromenade) return false;
           if (draft.catalogItem.outdoorAllowed === false) return false;
         }
 
@@ -182,7 +203,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     editMode,
     language,
     zoomUi,
-    goldenHour,
+    lightingMode,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -204,7 +225,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     editMode,
     language,
     zoomUi,
-    goldenHour,
+    lightingMode,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -231,7 +252,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     rebuildWorld: (rooms: ClinicRoom[]) => void;
     syncItems: (items: PlacedItem[], movingId?: string) => void;
     syncDraft: (draft: PlacementDraft | null) => void;
-    applyAtmosphere: (isGolden: boolean) => void;
     screenToGrid: (clientX: number, clientY: number) => { gx: number; gy: number; rawX: number; rawZ: number };
     hitTestPatient: (clientX: number, clientY: number) => PatientEntity | null;
     getPanVectors: () => { right: THREE.Vector3; forward: THREE.Vector3; scale: number };
@@ -254,23 +274,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     camStateRef.current.targetYaw = Math.PI / 4 + (orbitStep + localOrbit) * (Math.PI / 2);
   }, [orbitStep, localOrbit]);
 
-  useEffect(() => {
-    sceneHooksRef.current?.applyAtmosphere(goldenHour);
-  }, [goldenHour]);
-
   // Mount Three.js Perspective 3D Engine ONCE
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
 
     const isSoftwareGl = probeSoftwareWebGL();
+    const isMobileGpu =
+      /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
     const renderer = new THREE.WebGLRenderer({
-      antialias: !isSoftwareGl,
+      antialias: !isSoftwareGl && !isMobileGpu,
       powerPreference: 'high-performance',
     });
     const gl = renderer.getContext();
 
-    const dpr = isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = isSoftwareGl
+      ? 1
+      : isMobileGpu
+        ? Math.min(window.devicePixelRatio || 1, 1.5)
+        : Math.min(window.devicePixelRatio || 1, 2);
     renderer.setPixelRatio(dpr);
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -303,8 +326,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const sunLight = new THREE.DirectionalLight(0xfff1dc, 1.42);
     sunLight.position.set(25, 32, 18);
     if (!isSoftwareGl) {
+      const shadowRes = isMobileGpu ? 1024 : 2048;
       sunLight.castShadow = true;
-      sunLight.shadow.mapSize.set(2048, 2048);
+      sunLight.shadow.mapSize.set(shadowRes, shadowRes);
       sunLight.shadow.camera.near = 6;
       sunLight.shadow.camera.far = 90;
       sunLight.shadow.camera.left = -22;
@@ -328,21 +352,70 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const itemsLayer = new THREE.Group();
     const draftLayer = new THREE.Group();
     const actorsLayer = new THREE.Group();
-    scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer);
+    const lightsLayer = new THREE.Group();
+    scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer, lightsLayer);
+
+    // Pre-allocated PointLight Pool (capped tightly on mobile GPUs: wall-wash & lamp halos illuminate standby lights at 0 shader cost)
+    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 5 : isMobileGpu ? 7 : 9;
+    const smartLightPool: THREE.PointLight[] = [];
+    for (let i = 0; i < SMART_LIGHT_POOL_SIZE; i++) {
+      const pl = new THREE.PointLight(0xffdfb0, 0, 14, 1.0);
+      pl.castShadow = false;
+      pl.position.set(14, 2.2, 14);
+      lightsLayer.add(pl);
+      smartLightPool.push(pl);
+    }
 
     let worldHandle: ClinicWorldHandle | null = null;
     const itemMeshes = new Map<string, { sig: string; mesh: THREE.Group }>();
+    const coolerReturnUntil = new Map<string, number>();
     const patientRigs = new Map<
       string,
-      { rig: HumanoidRig; visX: number; visZ: number; walkPhase: number; walkBlend: number; facingRad: number }
+      {
+        rig: HumanoidRig;
+        visX: number;
+        visZ: number;
+        walkPhase: number;
+        walkBlend: number;
+        sitBlend: number;
+        facingRad: number;
+      }
     >();
     const staffRigs = new Map<
       string,
-      { rig: HumanoidRig; visX: number; visZ: number; walkPhase: number; walkBlend: number; facingRad: number }
+      {
+        rig: HumanoidRig;
+        gx: number;
+        gy: number;
+        visX: number;
+        visZ: number;
+        path: Array<{ x: number; y: number }>;
+        pauseTimer: number;
+        stuckTimer: number;
+        walkPhase: number;
+        walkBlend: number;
+        sitBlend: number;
+        facingRad: number;
+        ignoreItemId?: string;
+      }
     >();
 
     const walkerFootprints = new Map<string, { w: number; d: number }>();
     CATALOG_ITEMS.forEach((c) => walkerFootprints.set(c.id, { w: c.width, d: c.depth }));
+
+    let cachedObstacleSig = '';
+    let walkerObstacles: ObstacleBox[] = [];
+    const getWalkerObstacles = (curRooms: ClinicRoom[], curItems: PlacedItem[]): ObstacleBox[] => {
+      const sig =
+        curRooms.map((r) => `${r.id}:${r.unlocked ? 1 : 0}`).join('|') +
+        '#' +
+        curItems.map((it) => `${it.instanceId}:${it.gridX},${it.gridY},${it.rotation}`).join('|');
+      if (sig !== cachedObstacleSig) {
+        cachedObstacleSig = sig;
+        walkerObstacles = buildObstacleBoxes(curRooms, curItems, walkerFootprints);
+      }
+      return walkerObstacles;
+    };
 
     interface AmbientWalker {
       id: string;
@@ -353,11 +426,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       gy: number;
       path: Array<{ x: number; y: number }>;
       pauseTimer: number;
+      stuckTimer: number;
       speed: number;
       visX: number;
       visZ: number;
       walkPhase: number;
       walkBlend: number;
+      sitBlend: number;
       facingRad: number;
       subOffX: number;
       subOffZ: number;
@@ -365,6 +440,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       seatFacingRad?: number;
       seatOffX?: number;
       seatOffZ?: number;
+      seatHeight?: number;
+      ignoreItemId?: string;
     }
 
     const walkerSpecs: Array<{
@@ -378,9 +455,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       {
         id: 'walk_prom_1',
         kind: 'promenade',
-        gx: 29,
-        gy: 3,
-        speed: 1.0,
+        gx: 28,
+        gy: 4,
+        speed: 1.12,
         appearance: {
           skinTone: '#5d3520',
           hairColor: '#17100c',
@@ -395,9 +472,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       {
         id: 'walk_prom_2',
         kind: 'promenade',
-        gx: 30,
-        gy: 12,
-        speed: 0.92,
+        gx: 32,
+        gy: 19,
+        speed: 1.05,
         appearance: {
           skinTone: '#7f4d31',
           hairColor: '#17100c',
@@ -410,11 +487,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         },
       },
       {
-        id: 'walk_prom_3',
-        kind: 'promenade',
-        gx: 19,
-        gy: 24,
-        speed: 1.04,
+        id: 'walk_vis_1',
+        kind: 'visitor',
+        gx: 28,
+        gy: 17,
+        speed: 1.06,
         appearance: {
           skinTone: '#945e3d',
           hairColor: '#17100c',
@@ -427,11 +504,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         },
       },
       {
-        id: 'walk_prom_4',
-        kind: 'promenade',
-        gx: 9,
-        gy: 23,
-        speed: 0.88,
+        id: 'walk_vis_2',
+        kind: 'visitor',
+        gx: 25,
+        gy: 11,
+        speed: 1.02,
         appearance: {
           skinTone: '#bc865f',
           hairColor: '#17100c',
@@ -441,92 +518,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           outfitStyle: 'dress',
           hasHijab: true,
           variantSeed: 3,
-        },
-      },
-      {
-        id: 'walk_prom_5',
-        kind: 'promenade',
-        gx: 29,
-        gy: 20,
-        speed: 1.02,
-        appearance: {
-          skinTone: '#663b24',
-          hairColor: '#17100c',
-          shirtColor: '#e2e8f0',
-          pantsColor: '#334155',
-          isFemale: false,
-          outfitStyle: 'casual',
-          shirtStyle: 'shirt',
-          variantSeed: 5,
-        },
-      },
-      {
-        id: 'walk_vis_1',
-        kind: 'visitor',
-        gx: 28,
-        gy: 17,
-        speed: 0.96,
-        appearance: {
-          skinTone: '#6c4028',
-          hairColor: '#17100c',
-          shirtColor: '#17171b',
-          pantsColor: '#17171b',
-          isFemale: true,
-          outfitStyle: 'abaya',
-          hasHijab: true,
-          variantSeed: 6,
-        },
-      },
-      {
-        id: 'walk_vis_2',
-        kind: 'visitor',
-        gx: 24,
-        gy: 11,
-        speed: 0.94,
-        appearance: {
-          skinTone: '#8b5638',
-          hairColor: '#17100c',
-          shirtColor: '#e6dfd1',
-          pantsColor: '#e6dfd1',
-          isFemale: false,
-          outfitStyle: 'jalabiya',
-          hasTurban: false,
-          variantSeed: 9,
-        },
-      },
-      {
-        id: 'walk_vis_3',
-        kind: 'visitor',
-        gx: 25,
-        gy: 19,
-        speed: 0.9,
-        appearance: {
-          skinTone: '#ab744f',
-          hairColor: '#17100c',
-          shirtColor: '#0e7490',
-          pantsColor: '#1e293b',
-          isFemale: true,
-          outfitStyle: 'casual',
-          hasHijab: true,
-          variantSeed: 11,
-        },
-      },
-      {
-        id: 'walk_vis_4',
-        kind: 'visitor',
-        gx: 23,
-        gy: 8,
-        speed: 1.08,
-        appearance: {
-          skinTone: '#73442a',
-          hairColor: '#17100c',
-          shirtColor: '#15803d',
-          pantsColor: '#1e293b',
-          isFemale: false,
-          outfitStyle: 'casual',
-          shirtStyle: 'tshirt',
-          heightScale: 0.76,
-          variantSeed: 12,
         },
       },
     ];
@@ -543,13 +534,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         rig,
         path: [],
         pauseTimer: 0.2 + Math.random() * 1.4,
+        stuckTimer: 0,
         visX: spec.gx + 0.5,
         visZ: spec.gy + 0.5,
         walkPhase: Math.random() * Math.PI * 2,
         walkBlend: 0,
+        sitBlend: 0,
         facingRad: Math.random() * Math.PI * 2 - Math.PI,
-        subOffX: (Math.random() - 0.5) * 0.45,
-        subOffZ: (Math.random() - 0.5) * 0.45,
+        subOffX: (Math.random() - 0.5) * 0.35,
+        subOffZ: (Math.random() - 0.5) * 0.35,
       };
     });
 
@@ -565,32 +558,317 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     draftPadMesh.visible = false;
     draftLayer.add(draftPadMesh);
 
-    const applyAtmosphere = (isGolden: boolean) => {
-      if (isGolden) {
-        sunLight.color.setHex(0xffb468);
-        sunLight.intensity = 1.62;
-        sunLight.position.set(30, 18, 16);
-        hemi.color.setHex(0xf6cf7c);
-        hemi.intensity = 0.46;
-        hemi.groundColor.setHex(0x3f6212);
-        scene.environmentIntensity = 0.38;
-        (scene.fog as THREE.Fog).color.setHex(0xfed7aa);
-        if (worldHandle) {
-          worldHandle.skyUniforms.uTopColor.value.setHex(0x1e3a8a);
-          worldHandle.skyUniforms.uHorizonColor.value.setHex(0xfdba74);
+    let nightBlend = latestRef.current.lightingMode === 'night' ? 1 : 0;
+    const _dayTop = new THREE.Color(0x4b7cb3);
+    const _nightTop = new THREE.Color(0x0c1b3a);
+    const _dayHor = new THREE.Color(0xd2e0ec);
+    const _nightHor = new THREE.Color(0x1a325c);
+    const _dayFog = new THREE.Color(0xd2e0ec);
+    const _nightFog = new THREE.Color(0x132648);
+    const _daySun = new THREE.Color(0xfff1dc);
+    const _moonSun = new THREE.Color(0xa8c8ff);
+    const _dayHemiSky = new THREE.Color(0xc6dcf0);
+    const _nightHemiSky = new THREE.Color(0x3b63a8);
+    const _dayHemiGround = new THREE.Color(0x4b5c34);
+    const _nightHemiGround = new THREE.Color(0x1e2c3d);
+    const _dayFill = new THREE.Color(0xb8d4f2);
+    const _nightFill = new THREE.Color(0x385a94);
+    const _lightWorldPos = new THREE.Vector3();
+    const _tmpLightColor = new THREE.Color();
+
+    interface LightTarget {
+      x: number;
+      y: number;
+      z: number;
+      color: number;
+      intensity: number;
+      distance: number;
+      decay: number;
+    }
+
+    const updateAtmosphereAndLights = (timeSec: number, dt: number) => {
+      const targetNight = latestRef.current.lightingMode === 'night' ? 1 : 0;
+      nightBlend = THREE.MathUtils.damp(nightBlend, targetNight, 4.2, dt);
+
+      sunLight.color.copy(_daySun).lerp(_moonSun, nightBlend);
+      sunLight.intensity = THREE.MathUtils.lerp(1.42, 0.62, nightBlend);
+      sunLight.position.set(
+        THREE.MathUtils.lerp(25, -22, nightBlend),
+        THREE.MathUtils.lerp(32, 26, nightBlend),
+        THREE.MathUtils.lerp(18, -18, nightBlend)
+      );
+
+      hemi.color.copy(_dayHemiSky).lerp(_nightHemiSky, nightBlend);
+      hemi.groundColor.copy(_dayHemiGround).lerp(_nightHemiGround, nightBlend);
+      hemi.intensity = THREE.MathUtils.lerp(0.52, 0.46, nightBlend);
+
+      fillLight.color.copy(_dayFill).lerp(_nightFill, nightBlend);
+      fillLight.intensity = 0.24;
+
+      scene.environmentIntensity = THREE.MathUtils.lerp(0.42, 0.22, nightBlend);
+      renderer.toneMappingExposure = THREE.MathUtils.lerp(0.85, 1.04, nightBlend);
+
+      const fog = scene.fog as THREE.Fog;
+      fog.color.copy(_dayFog).lerp(_nightFog, nightBlend);
+      fog.near = THREE.MathUtils.lerp(42, 44, nightBlend);
+      fog.far = THREE.MathUtils.lerp(98, 115, nightBlend);
+
+      if (worldHandle) {
+        worldHandle.skyUniforms.uTopColor.value.copy(_dayTop).lerp(_nightTop, nightBlend);
+        worldHandle.skyUniforms.uHorizonColor.value.copy(_dayHor).lerp(_nightHor, nightBlend);
+        worldHandle.skyUniforms.uNightFactor.value = nightBlend;
+        worldHandle.skyUniforms.uTime.value = timeSec;
+
+        worldHandle.villaWinMat.emissiveIntensity = 0.05 + nightBlend * 1.65;
+        worldHandle.interiorCoveMat.emissiveIntensity = 0.08 + nightBlend * 1.15;
+        worldHandle.entranceSconceMat.emissiveIntensity = 0.06 + nightBlend * 1.55;
+        worldHandle.facadeSignMat.emissiveIntensity = 0.1 + nightBlend * 1.45;
+        worldHandle.pillarLanternMat.emissiveIntensity = 0.06 + nightBlend * 0.85;
+      }
+
+      const roomTargets: LightTarget[] = [];
+      const lampTargets: Array<{ score: number; target: LightTarget }> = [];
+      const curRooms = latestRef.current.rooms;
+      const curPatients = latestRef.current.patients;
+      const curStaff = latestRef.current.staff;
+      const camCx = camStateRef.current.curX;
+      const camCz = camStateRef.current.curZ;
+
+      if (nightBlend > 0.005) {
+        // 1. Smart side-wall sconce illumination:
+        //    - Occupied rooms illuminate warmly right from their side wall sconces (1 PointLight + additive wall/floor wash)
+        //    - Empty unlocked rooms glow softly via 0-shader-cost wall-wash & floor-spill halos (saves mobile GPU!)
+        //    - Locked rooms stay off
+        for (const room of curRooms) {
+          const roomMat = worldHandle?.roomLightMats.get(room.id);
+          const washMat = worldHandle?.roomWashMats.get(room.id);
+          const poolMat = worldHandle?.roomPoolMats.get(room.id);
+          if (!room.unlocked) {
+            if (roomMat) roomMat.emissiveIntensity = 0;
+            if (washMat) washMat.opacity = 0;
+            if (poolMat) poolMat.opacity = 0;
+            continue;
+          }
+
+          const occupiedByPatient = curPatients.some(
+            (pt) =>
+              pt.state !== 'treated_leaving' &&
+              pt.gridX + 0.5 >= room.minX - 0.3 &&
+              pt.gridX + 0.5 <= room.maxX + 1.3 &&
+              pt.gridY + 0.5 >= room.minY - 0.3 &&
+              pt.gridY + 0.5 <= room.maxY + 1.3
+          );
+          const occupiedByStaff = curStaff.some((st) => {
+            if (!st.hired) return false;
+            const rigEntry = staffRigs.get(st.id);
+            const sx = rigEntry ? rigEntry.gx + 0.5 : st.gridX + 0.5;
+            const sz = rigEntry ? rigEntry.gy + 0.5 : st.gridY + 0.5;
+            return (
+              sx >= room.minX - 0.3 &&
+              sx <= room.maxX + 1.3 &&
+              sz >= room.minY - 0.3 &&
+              sz <= room.maxY + 1.3
+            );
+          });
+          const isOccupied = occupiedByPatient || occupiedByStaff;
+
+          if (roomMat) {
+            roomMat.emissiveIntensity = (isOccupied ? 2.05 : 0.72) * nightBlend;
+          }
+          if (washMat) {
+            washMat.color.setHex(isOccupied ? 0xffd79e : 0xbddcff);
+            washMat.opacity = (isOccupied ? 0.48 : 0.3) * nightBlend;
+          }
+          if (poolMat) {
+            poolMat.color.setHex(isOccupied ? 0xffd79e : 0xbddcff);
+            poolMat.opacity = (isOccupied ? 0.34 : 0.22) * nightBlend;
+          }
+
+          if (isOccupied) {
+            const anchor = worldHandle?.roomSconceAnchors.get(room.id);
+            roomTargets.push({
+              x: anchor ? anchor.x : room.minX + 1.2,
+              y: anchor ? anchor.y : 2.1,
+              z: anchor ? anchor.z : (room.minY + room.maxY + 1) / 2,
+              color: 0xfff2d8,
+              intensity: 14.5 * nightBlend,
+              distance: 16.5,
+              decay: 0.95,
+            });
+          }
         }
-      } else {
-        sunLight.color.setHex(0xfff1dc);
-        sunLight.intensity = 1.42;
-        sunLight.position.set(25, 32, 18);
-        hemi.color.setHex(0xc6dcf0);
-        hemi.intensity = 0.52;
-        hemi.groundColor.setHex(0x4b5c34);
-        scene.environmentIntensity = 0.42;
-        (scene.fog as THREE.Fog).color.setHex(0xd2e0ec);
-        if (worldHandle) {
-          worldHandle.skyUniforms.uTopColor.value.setHex(0x4b7cb3);
-          worldHandle.skyUniforms.uHorizonColor.value.setHex(0xd2e0ec);
+
+        // 2. Architectural entrance canopy sconce illuminating the courtyard steps & facade
+        roomTargets.push({
+          x: 22.45,
+          y: 2.85,
+          z: 15.0,
+          color: 0xffd796,
+          intensity: 4.8 * nightBlend,
+          distance: 10.0,
+          decay: 1.05,
+        });
+      } else if (worldHandle) {
+        for (const roomMat of worldHandle.roomLightMats.values()) {
+          roomMat.emissiveIntensity = 0.04;
+        }
+        for (const washMat of worldHandle.roomWashMats.values()) {
+          washMat.opacity = 0;
+        }
+        for (const poolMat of worldHandle.roomPoolMats.values()) {
+          poolMat.opacity = 0;
+        }
+      }
+
+      // 3. Player-purchased indoor & outdoor smart lamps (100% get emissive + baked additive floor/wall halos; closest get PBR PointLights)
+      for (const entry of itemMeshes.values()) {
+        const meta = entry.mesh.userData.smartLight as SmartLightMeta | undefined;
+        if (!meta) continue;
+
+        const matGlow =
+          meta.kind === 'street_lamp'
+            ? 0.08 + nightBlend * 2.2
+            : meta.kind === 'garden_lamp'
+              ? 0.08 + nightBlend * 1.95
+              : meta.kind === 'indoor_lamp' || meta.kind === 'wall_lamp'
+                ? 0.06 + nightBlend * 1.85
+                : 0.1 + nightBlend * 1.65;
+        for (const mat of meta.emissiveMats) {
+          mat.emissiveIntensity = matGlow;
+        }
+
+        if (meta.haloMats && meta.haloMaxOpacities) {
+          for (let hi = 0; hi < meta.haloMats.length; hi++) {
+            meta.haloMats[hi].opacity =
+              nightBlend > 0.005 ? (meta.haloMaxOpacities[hi] ?? 0.35) * nightBlend : 0;
+          }
+        }
+
+        if (nightBlend > 0.005) {
+          _lightWorldPos
+            .set(meta.localPos[0], meta.localPos[1], meta.localPos[2])
+            .applyQuaternion(entry.mesh.quaternion)
+            .add(entry.mesh.position);
+
+          const distSq =
+            (_lightWorldPos.x - camCx) * (_lightWorldPos.x - camCx) +
+            (_lightWorldPos.z - camCz) * (_lightWorldPos.z - camCz);
+
+          if (meta.kind === 'street_lamp') {
+            lampTargets.push({
+              score: distSq * 0.8,
+              target: {
+                x: _lightWorldPos.x,
+                y: _lightWorldPos.y,
+                z: _lightWorldPos.z,
+                color: 0xffd591,
+                intensity: 16.0 * nightBlend,
+                distance: 19.0,
+                decay: 1.0,
+              },
+            });
+          } else if (meta.kind === 'garden_lamp') {
+            lampTargets.push({
+              score: distSq + 10,
+              target: {
+                x: _lightWorldPos.x,
+                y: _lightWorldPos.y,
+                z: _lightWorldPos.z,
+                color: 0xffcc78,
+                intensity: 11.0 * nightBlend,
+                distance: 13.5,
+                decay: 1.02,
+              },
+            });
+          } else if (meta.kind === 'indoor_lamp') {
+            lampTargets.push({
+              score: distSq + 16,
+              target: {
+                x: _lightWorldPos.x,
+                y: _lightWorldPos.y,
+                z: _lightWorldPos.z,
+                color: 0xffe8bf,
+                intensity: 8.5 * nightBlend,
+                distance: 11.5,
+                decay: 1.02,
+              },
+            });
+          } else if (meta.kind === 'wall_lamp') {
+            lampTargets.push({
+              score: distSq + 18,
+              target: {
+                x: _lightWorldPos.x,
+                y: _lightWorldPos.y,
+                z: _lightWorldPos.z,
+                color: 0xffd79e,
+                intensity: 7.2 * nightBlend,
+                distance: 10.5,
+                decay: 1.04,
+              },
+            });
+          } else if (meta.kind === 'ir_lamp') {
+            lampTargets.push({
+              score: distSq + 24,
+              target: {
+                x: _lightWorldPos.x,
+                y: _lightWorldPos.y,
+                z: _lightWorldPos.z,
+                color: 0xff6b5a,
+                intensity: 5.2 * nightBlend,
+                distance: 7.5,
+                decay: 1.08,
+              },
+            });
+          } else {
+            lampTargets.push({
+              score: distSq + 36,
+              target: {
+                x: _lightWorldPos.x,
+                y: _lightWorldPos.y,
+                z: _lightWorldPos.z,
+                color: 0x38bdf8,
+                intensity: 5.5 * nightBlend,
+                distance: 9.0,
+                decay: 1.08,
+              },
+            });
+          }
+        }
+      }
+
+      // Reserve slots fairly so store lamps NEVER get starved by room sconces
+      const reservedLampSlots = Math.min(
+        lampTargets.length,
+        Math.max(2, Math.floor(SMART_LIGHT_POOL_SIZE * 0.45))
+      );
+      const maxRoomSlotsNow = Math.max(0, SMART_LIGHT_POOL_SIZE - reservedLampSlots);
+      const targets: LightTarget[] = [];
+
+      for (let i = 0; i < roomTargets.length && targets.length < maxRoomSlotsNow; i++) {
+        targets.push(roomTargets[i]);
+      }
+      if (lampTargets.length > 0) {
+        lampTargets.sort((a, b) => a.score - b.score);
+        for (let i = 0; i < lampTargets.length && targets.length < SMART_LIGHT_POOL_SIZE; i++) {
+          targets.push(lampTargets[i].target);
+        }
+      }
+      for (let i = maxRoomSlotsNow; i < roomTargets.length && targets.length < SMART_LIGHT_POOL_SIZE; i++) {
+        targets.push(roomTargets[i]);
+      }
+
+      for (let i = 0; i < smartLightPool.length; i++) {
+        const pl = smartLightPool[i];
+        const t = targets[i];
+        if (t) {
+          pl.position.set(t.x, t.y, t.z);
+          _tmpLightColor.setHex(t.color);
+          pl.color.copy(_tmpLightColor);
+          pl.intensity = THREE.MathUtils.damp(pl.intensity, t.intensity, 7.5, dt);
+          pl.distance = t.distance;
+          pl.decay = t.decay;
+        } else {
+          pl.intensity = THREE.MathUtils.damp(pl.intensity, 0, 8.5, dt);
         }
       }
     };
@@ -602,7 +880,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
       worldHandle = buildClinicWorld3D(nextRooms, textures);
       worldLayer.add(worldHandle.group);
-      applyAtmosphere(Boolean(latestRef.current.goldenHour));
+      updateAtmosphereAndLights(performance.now() * 0.001, 0.05);
     };
 
     const syncItems = (nextItems: PlacedItem[], movingId?: string) => {
@@ -825,7 +1103,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       rebuildWorld,
       syncItems,
       syncDraft,
-      applyAtmosphere,
       screenToGrid,
       hitTestPatient,
       getPanVectors,
@@ -887,6 +1164,20 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         focusedPatientId: focId,
       } = latestRef.current;
 
+      const curRooms = latestRef.current.rooms;
+      const obstacles = getWalkerObstacles(curRooms, curItems);
+
+      // Reset interactive water cooler parts each frame before active drinkers update them
+      for (const [itemId, entryItem] of itemMeshes.entries()) {
+        const wc = entryItem.mesh.userData.waterCooler as WaterCoolerRigMeta | undefined;
+        if (!wc) continue;
+        wc.alcoveCup.visible = false;
+        wc.stream.visible = false;
+        wc.bubble.visible = false;
+        const keepReturn = coolerReturnUntil.get(itemId);
+        wc.returnedCup.visible = keepReturn !== undefined && timeSec < keepReturn;
+      }
+
       const activePatientIds = new Set<string>();
       for (const p of curPatients) {
         activePatientIds.add(p.id);
@@ -916,6 +1207,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             visZ: p.gridY + 0.5,
             walkPhase: 0,
             walkBlend: 0,
+            sitBlend: 0,
             facingRad: -Math.PI / 2,
           };
           patientRigs.set(p.id, entry);
@@ -927,59 +1219,184 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           ? curItems.find((it) => it.instanceId === p.assignedStationId)
           : null;
         const stationCat = station ? cMap.get(station.catalogId) : null;
-        const isOnBed = Boolean(isAtStation && station && stationCat?.sprite === 'treatment_bed');
-        const isSeated =
-          p.state === 'waiting_checkin' ||
-          Boolean(isAtStation && stationCat?.sprite === 'exercise_bike');
-        const pose = isOnBed ? 'lying' : isSeated ? 'seated' : 'standing';
+        const spr = stationCat?.sprite;
 
-        let targetX = p.gridX + 0.5 + (p.state === 'waiting_checkin' ? p.seatOffsetX || 0 : 0);
-        let targetZ = p.gridY + 0.5 + (p.state === 'waiting_checkin' ? p.seatOffsetZ || 0 : 0);
-        if (isOnBed && station && stationCat) {
+        const isLyingStation = Boolean(
+          isAtStation &&
+            station &&
+            (spr === 'treatment_bed' ||
+              spr === 'traction_table' ||
+              spr === 'magnetotherapy' ||
+              spr === 'exercise_mat' ||
+              spr === 'tilt_table')
+        );
+        const lyingHeight = spr === 'exercise_mat' ? 0.11 : spr === 'tilt_table' ? 0.44 : 0.5;
+        const tiltPitch = spr === 'tilt_table' ? -Math.PI / 2 + 0.52 : -Math.PI / 2;
+        const isBikeStation = Boolean(isAtStation && station && spr === 'exercise_bike');
+        const isActiveGaitStation = Boolean(
+          isAtStation && station && (spr === 'treadmill' || spr === 'parallel_bars')
+        );
+
+        const isSeatedWait = p.state === 'waiting_checkin' && p.isSeatedWait !== false;
+        let targetX = p.gridX + 0.5 + (isSeatedWait ? p.seatOffsetX || 0 : 0);
+        let targetZ = p.gridY + 0.5 + (isSeatedWait ? p.seatOffsetZ || 0 : 0);
+        let stationFacing: number | null = null;
+
+        if (isAtStation && station && stationCat) {
           const effW = station.rotation % 2 === 0 ? stationCat.width : stationCat.depth;
           const effD = station.rotation % 2 === 0 ? stationCat.depth : stationCat.width;
-          targetX = station.gridX + effW / 2;
-          targetZ = station.gridY + effD / 2;
+          const cx = station.gridX + effW / 2;
+          const cz = station.gridY + effD / 2;
+          const ry = (-station.rotation * Math.PI) / 2;
+          const rotLocal = (lx: number, lz: number) => ({
+            x: cx + Math.cos(ry) * lx + Math.sin(ry) * lz,
+            z: cz - Math.sin(ry) * lx + Math.cos(ry) * lz,
+          });
+
+          if (isLyingStation) {
+            if (spr === 'tilt_table') {
+              const pt = rotLocal(0.06, 0);
+              targetX = pt.x;
+              targetZ = pt.z;
+            } else {
+              targetX = cx;
+              targetZ = cz;
+            }
+            stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
+          } else if (isBikeStation) {
+            const pt = rotLocal(-0.22, 0);
+            targetX = pt.x;
+            targetZ = pt.z;
+            stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
+          } else if (spr === 'treadmill') {
+            const pt = rotLocal(-0.14, 0);
+            targetX = pt.x;
+            targetZ = pt.z;
+            stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
+          } else if (spr === 'parallel_bars') {
+            targetX = cx;
+            targetZ = cz;
+            stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
+          } else if (spr === 'balance_trainer') {
+            const pt = rotLocal(-0.04, 0);
+            targetX = pt.x;
+            targetZ = pt.z;
+            stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
+          } else {
+            // Stand comfortably in front of equipment, picking first wall-free side if placed against a wall
+            const frontZ = spr === 'wall_bars' ? 0.28 : 0.56;
+            const localSpots: Array<[number, number, number]> = [
+              [0, frontZ, Math.PI],
+              [0.56, 0, -Math.PI / 2],
+              [-0.56, 0, Math.PI / 2],
+              [0, -frontZ, 0],
+            ];
+            let chosen = { x: cx, z: cz, ang: Math.PI };
+            let foundClear = false;
+            for (const [lx, lz, baseAng] of localSpots) {
+              const pt = rotLocal(lx, lz);
+              if (isWorldWalkable(pt.x, pt.z, 0.17, obstacles, station.instanceId)) {
+                chosen = { x: pt.x, z: pt.z, ang: baseAng - (station.rotation * Math.PI) / 2 };
+                foundClear = true;
+                break;
+              }
+            }
+            if (!foundClear) {
+              const pt = rotLocal(0, frontZ);
+              chosen = { x: pt.x, z: pt.z, ang: Math.PI - (station.rotation * Math.PI) / 2 };
+            }
+            targetX = chosen.x;
+            targetZ = chosen.z;
+            stationFacing = chosen.ang;
+          }
         }
 
         const prevVisX = entry.visX;
         const prevVisZ = entry.visZ;
-        entry.visX = THREE.MathUtils.damp(entry.visX, targetX, 9.5, dt);
-        entry.visZ = THREE.MathUtils.damp(entry.visZ, targetZ, 9.5, dt);
+        entry.visX = THREE.MathUtils.damp(entry.visX, targetX, 11.5, dt);
+        entry.visZ = THREE.MathUtils.damp(entry.visZ, targetZ, 11.5, dt);
 
         const mdx = entry.visX - prevVisX;
         const mdz = entry.visZ - prevVisZ;
         const stepDist = Math.hypot(mdx, mdz);
         const distRem = Math.hypot(targetX - entry.visX, targetZ - entry.visZ);
-        const isMoving = !isOnBed && (p.path.length > 0 || distRem > 0.05);
+        const isMoving = !isLyingStation && (p.path.length > 0 || distRem > 0.05);
 
-        entry.walkBlend = THREE.MathUtils.damp(entry.walkBlend, isMoving ? 1 : 0, 8.5, dt);
+        const shouldSit =
+          (isSeatedWait && distRem < 0.24) ||
+          Boolean(isBikeStation && distRem < 0.28);
+        const pose = isLyingStation ? 'lying' : shouldSit ? 'seated' : 'standing';
+        const effectiveSeatHeight = isBikeStation ? 0.56 : (p.seatHeight ?? 0.34);
+
+        entry.walkBlend = THREE.MathUtils.damp(entry.walkBlend, isMoving ? 1 : 0, 9.0, dt);
+        entry.sitBlend = THREE.MathUtils.damp(entry.sitBlend, shouldSit ? 1 : 0, 7.5, dt);
 
         if (isMoving || entry.walkBlend > 0.04) {
           entry.walkPhase += stepDist * 5.8 + (isMoving && stepDist < 0.002 ? dt * 2.4 : 0);
           if (stepDist > 0.0008 && isMoving) {
             const targetAngle = Math.atan2(mdx, mdz);
-            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 7.6));
+            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 8.4));
           }
         }
 
-        if (!isMoving) {
+        let drinkStage: 'none' | 'filling' | 'sipping' | 'returning' = 'none';
+        if (!isMoving || (isSeatedWait && distRem < 0.26)) {
           if (p.state === 'checkin_at_desk') {
             const desk = curItems.find((it) => it.catalogId === 'reception_desk');
             const lookAngle = desk
               ? Math.atan2(desk.gridX + 1.0 - entry.visX, desk.gridY + 0.5 - entry.visZ)
               : Math.PI;
             entry.facingRad = lerpAngle(entry.facingRad, lookAngle, Math.min(1, dt * 8));
-          } else if (p.state === 'waiting_checkin') {
+          } else if (p.state === 'drinking_water') {
+            const cooler = p.waterCoolerId
+              ? curItems.find((it) => it.instanceId === p.waterCoolerId)
+              : null;
+            const coolerAngle = cooler
+              ? Math.atan2(cooler.gridX + 0.5 - entry.visX, cooler.gridY + 0.5 - entry.visZ)
+              : p.headingRad ?? Math.PI;
+            entry.facingRad = lerpAngle(entry.facingRad, coolerAngle, Math.min(1, dt * 10));
+
+            const wt = p.waitTimer;
+            const coolerEntry = p.waterCoolerId ? itemMeshes.get(p.waterCoolerId) : undefined;
+            const wc = coolerEntry?.mesh.userData.waterCooler as WaterCoolerRigMeta | undefined;
+
+            if (wt < 1450) {
+              drinkStage = 'filling';
+              if (wc) {
+                const fillFrac = THREE.MathUtils.clamp(wt / 1380, 0.05, 1);
+                wc.alcoveCup.visible = true;
+                wc.alcoveWater.scale.y = fillFrac;
+                wc.alcoveWater.position.y = 0.008 + fillFrac * 0.028;
+                wc.stream.visible = wt < 1380;
+                wc.stream.scale.x = 0.85 + 0.18 * Math.sin(timeSec * 30);
+                wc.stream.scale.z = wc.stream.scale.x;
+                wc.bubble.visible = wt < 1380;
+                wc.bubble.position.y = 0.98 + ((timeSec * 0.36) % 0.26);
+              }
+            } else if (wt < 2950) {
+              drinkStage = 'sipping';
+            } else {
+              drinkStage = wt < 3280 ? 'returning' : 'none';
+              if (wt >= 3280 && p.waterCoolerId && wc) {
+                coolerReturnUntil.set(p.waterCoolerId, timeSec + 8.5);
+                wc.returnedCup.visible = true;
+              }
+            }
+          } else if (isSeatedWait) {
             const table = curItems.find((it) => it.catalogId === 'coffee_table');
             const fallbackAngle = table
               ? Math.atan2(table.gridX + 0.5 - entry.visX, table.gridY + 0.5 - entry.visZ)
               : 0;
             const seatAngle = p.seatFacingRad !== undefined ? p.seatFacingRad : fallbackAngle;
-            entry.facingRad = lerpAngle(entry.facingRad, seatAngle, Math.min(1, dt * 8));
-          } else if (isOnBed && station) {
-            const bedAngle = Math.PI / 2 - (station.rotation * Math.PI) / 2;
-            entry.facingRad = lerpAngle(entry.facingRad, bedAngle, Math.min(1, dt * 10));
+            entry.facingRad = lerpAngle(entry.facingRad, seatAngle, Math.min(1, dt * 9.5));
+          } else if (p.state === 'waiting_checkin' && p.isSeatedWait === false) {
+            const lookAngle =
+              p.headingRad !== undefined
+                ? p.headingRad
+                : Math.sin(timeSec * 0.7 + p.id.charCodeAt(p.id.length - 1)) * 0.45 + Math.PI;
+            entry.facingRad = lerpAngle(entry.facingRad, lookAngle, Math.min(1, dt * 4.5));
+          } else if (isAtStation && stationFacing !== null) {
+            entry.facingRad = lerpAngle(entry.facingRad, stationFacing, Math.min(1, dt * 10));
           }
         }
 
@@ -990,10 +1407,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           walkPhase: entry.walkPhase,
           isMoving,
           walkBlend: entry.walkBlend,
+          sitBlend: entry.sitBlend,
+          seatHeight: effectiveSeatHeight,
+          lyingHeight,
+          tiltPitch,
           facingRad: entry.facingRad,
           timeSec,
           isSelected: focId === p.id,
           inTreatment: p.state === 'in_treatment',
+          activeGait: p.state === 'in_treatment' && isActiveGaitStation,
+          isDrinking: p.state === 'drinking_water',
+          drinkStage,
         });
       }
 
@@ -1005,7 +1429,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       }
 
-      // Sync Staff
+      // Sync Staff (60fps local therapist patrol — zero React re-render/IndexedDB overhead!)
       const activeStaffIds = new Set<string>();
       for (const s of curStaff) {
         if (!s.hired) continue;
@@ -1027,45 +1451,202 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           actorsLayer.add(rig.root);
           entry = {
             rig,
+            gx: s.gridX,
+            gy: s.gridY,
             visX: s.gridX + 0.5,
             visZ: s.gridY + 0.5,
+            path: [],
+            pauseTimer: 0.6 + Math.random() * 1.2,
+            stuckTimer: 0,
             walkPhase: 0,
             walkBlend: 0,
+            sitBlend: s.role === 'receptionist' ? 1 : 0,
             facingRad: Math.PI / 2,
           };
           staffRigs.set(s.id, entry);
         }
 
-        const deskItem =
-          s.role === 'receptionist'
-            ? curItems.find((it) => it.catalogId === 'reception_desk')
-            : null;
-        const targetX = deskItem ? deskItem.gridX + 0.9 : s.gridX + 0.5;
-        const targetZ = deskItem ? deskItem.gridY + 0.08 : s.gridY + 0.5;
+        let targetX = entry.gx + 0.5;
+        let targetZ = entry.gy + 0.5;
+        let recSeatFacing = 0;
+        let isMoving = false;
+
+        if (s.role === 'receptionist') {
+          const deskItem = curItems.find((it) => it.catalogId === 'reception_desk');
+          if (deskItem) {
+            if (deskItem.rotation === 0) {
+              targetX = deskItem.gridX + 0.9;
+              targetZ = deskItem.gridY + 0.08;
+              recSeatFacing = 0;
+            } else if (deskItem.rotation === 2) {
+              targetX = deskItem.gridX + 1.1;
+              targetZ = deskItem.gridY + 0.92;
+              recSeatFacing = Math.PI;
+            } else if (deskItem.rotation === 1) {
+              targetX = deskItem.gridX + 0.92;
+              targetZ = deskItem.gridY + 0.9;
+              recSeatFacing = -Math.PI / 2;
+            } else {
+              targetX = deskItem.gridX + 0.08;
+              targetZ = deskItem.gridY + 1.1;
+              recSeatFacing = Math.PI / 2;
+            }
+          }
+          entry.gx = targetX - 0.5;
+          entry.gy = targetZ - 0.5;
+        } else {
+          // Therapist autonomous smooth patrol across unlocked rooms & near active patients
+          if (entry.path.length > 0) {
+            if (
+              entry.path.length >= 2 &&
+              hasContinuousLineOfSight(
+                entry.gx,
+                entry.gy,
+                entry.path[1].x,
+                entry.path[1].y,
+                0.24,
+                obstacles
+              )
+            ) {
+              entry.path.shift();
+            }
+
+            const nextNode = entry.path[0];
+            const dx = nextNode.x - entry.gx;
+            const dy = nextNode.y - entry.gy;
+            const dist = Math.hypot(dx, dy);
+            const step = 1.48 * dt;
+
+            let avoidX = 0;
+            let avoidY = 0;
+            for (const pt of curPatients) {
+              if (pt.state === 'in_treatment' || pt.state === 'ready_for_exam') continue;
+              const ox = entry.gx - pt.gridX;
+              const oy = entry.gy - pt.gridY;
+              const od = Math.hypot(ox, oy);
+              if (od > 0.01 && od < 0.78) {
+                const push = (0.78 - od) * 0.42;
+                avoidX += (ox / od) * push;
+                avoidY += (oy / od) * push;
+              }
+            }
+
+            if (entry.path.length > 1 && dist <= 0.36) {
+              entry.path.shift();
+            } else if (dist <= Math.max(0.08, step)) {
+              const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.22, obstacles);
+              entry.gx = res.x;
+              entry.gy = res.y;
+              entry.path.shift();
+              entry.stuckTimer = 0;
+            } else {
+              const steerX = dx / dist + avoidX;
+              const steerY = dy / dist + avoidY;
+              const steerLen = Math.hypot(steerX, steerY) || 1;
+              const candX = entry.gx + (steerX / steerLen) * step;
+              const candY = entry.gy + (steerY / steerLen) * step;
+              const res = resolveTileStep(entry.gx, entry.gy, candX, candY, 0.22, obstacles);
+              const movedDist = Math.hypot(res.x - entry.gx, res.y - entry.gy);
+              entry.gx = res.x;
+              entry.gy = res.y;
+              if (res.blocked && movedDist < step * 0.22) {
+                entry.stuckTimer += dt;
+                if (entry.stuckTimer > 0.55) {
+                  entry.path = [];
+                  entry.pauseTimer = 0.4;
+                  entry.stuckTimer = 0;
+                }
+              } else {
+                entry.stuckTimer = 0;
+              }
+            }
+          } else {
+            entry.pauseTimer -= dt;
+            if (entry.pauseTimer <= 0) {
+              const activePt =
+                curPatients.find((pt) => pt.state === 'in_treatment') ||
+                curPatients.find((pt) => pt.state === 'ready_for_exam');
+
+              let pickedDest: { x: number; y: number } | null = null;
+              if (activePt && Math.random() < 0.65) {
+                const adjOffsets = [
+                  [1, 0],
+                  [-1, 0],
+                  [0, 1],
+                  [0, -1],
+                  [1, 1],
+                  [-1, 1],
+                ];
+                for (const [ox, oy] of adjOffsets) {
+                  const cx = Math.round(activePt.gridX) + ox;
+                  const cy = Math.round(activePt.gridY) + oy;
+                  if (isTileWalkable(cx, cy, 0.24, obstacles)) {
+                    pickedDest = { x: cx, y: cy };
+                    break;
+                  }
+                }
+              }
+
+              if (!pickedDest) {
+                const unlockedRooms = curRooms.filter((r) => r.unlocked);
+                for (let tries = 0; tries < 6; tries++) {
+                  const rm = unlockedRooms[Math.floor(Math.random() * unlockedRooms.length)];
+                  if (!rm) break;
+                  const rx = Math.floor(rm.minX + 1 + Math.random() * Math.max(1, rm.maxX - rm.minX - 1));
+                  const ry = Math.floor(rm.minY + 1 + Math.random() * Math.max(1, rm.maxY - rm.minY - 1));
+                  if (isTileWalkable(rx, ry, 0.24, obstacles)) {
+                    pickedDest = { x: rx, y: ry };
+                    break;
+                  }
+                }
+              }
+
+              if (pickedDest && Math.hypot(pickedDest.x - entry.gx, pickedDest.y - entry.gy) > 1.0) {
+                entry.path = findGridPath(
+                  entry.gx,
+                  entry.gy,
+                  pickedDest.x,
+                  pickedDest.y,
+                  curRooms,
+                  curItems,
+                  walkerFootprints,
+                  obstacles
+                );
+              }
+              entry.pauseTimer = 2.0 + Math.random() * 2.5;
+            }
+          }
+
+          targetX = entry.gx + 0.5;
+          targetZ = entry.gy + 0.5;
+        }
+
         const prevVisX = entry.visX;
         const prevVisZ = entry.visZ;
-        entry.visX = THREE.MathUtils.damp(entry.visX, targetX, 9.5, dt);
-        entry.visZ = THREE.MathUtils.damp(entry.visZ, targetZ, 9.5, dt);
+        entry.visX = THREE.MathUtils.damp(entry.visX, targetX, 11.5, dt);
+        entry.visZ = THREE.MathUtils.damp(entry.visZ, targetZ, 11.5, dt);
 
         const mdx = entry.visX - prevVisX;
         const mdz = entry.visZ - prevVisZ;
         const stepDist = Math.hypot(mdx, mdz);
         const distRem = Math.hypot(targetX - entry.visX, targetZ - entry.visZ);
-        const isMoving = s.path.length > 0 || distRem > 0.05;
+        isMoving = s.role !== 'receptionist' && (entry.path.length > 0 || distRem > 0.05);
 
         entry.walkBlend = THREE.MathUtils.damp(entry.walkBlend, isMoving ? 1 : 0, 8.5, dt);
+        const shouldStaffSit = s.role === 'receptionist' && distRem < 0.25;
+        entry.sitBlend = THREE.MathUtils.damp(entry.sitBlend, shouldStaffSit ? 1 : 0, 7.5, dt);
 
         if (isMoving || entry.walkBlend > 0.04) {
           entry.walkPhase += stepDist * 5.8 + (isMoving && stepDist < 0.002 ? dt * 2.2 : 0);
           if (stepDist > 0.0008 && isMoving) {
             const targetAngle = Math.atan2(mdx, mdz);
-            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 7.6));
+            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 8.2));
           }
         }
 
         if (!isMoving) {
           if (s.role === 'receptionist') {
-            entry.facingRad = lerpAngle(entry.facingRad, 0.2, Math.min(1, dt * 8));
+            entry.facingRad = lerpAngle(entry.facingRad, recSeatFacing, Math.min(1, dt * 8));
           } else {
             const watchPatient =
               curPatients.find((pt) => pt.state === 'in_treatment') ||
@@ -1083,10 +1664,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         entry.rig.root.position.set(entry.visX, 0.02, entry.visZ);
         animateHumanoid3D(entry.rig, {
-          pose: s.role === 'receptionist' ? 'seated' : 'standing',
+          pose: shouldStaffSit ? 'seated' : 'standing',
           walkPhase: entry.walkPhase,
           isMoving,
           walkBlend: entry.walkBlend,
+          sitBlend: entry.sitBlend,
+          seatHeight: 0.36,
           facingRad: entry.facingRad,
           timeSec,
           isSelected: false,
@@ -1101,24 +1684,39 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       }
 
-      // Sync Free-Roaming Park Strollers & Compound/Lobby Visitors (zero React re-renders)
-      const curRooms = latestRef.current.rooms;
+      // Sync Natural Outdoor Garden-Lane & Courtyard Walkers (fewer crowd, zero indoor clutter)
       for (let wi = 0; wi < walkerRigs.length; wi++) {
         const w = walkerRigs[wi];
         if (w.path.length > 0) {
           w.seatedMode = false;
+          // Look-ahead smoothing: skip intermediate tile center when next-next waypoint has clear line of sight
+          if (
+            w.path.length >= 2 &&
+            hasContinuousLineOfSight(
+              w.gx,
+              w.gy,
+              w.path[1].x,
+              w.path[1].y,
+              0.24,
+              obstacles,
+              w.ignoreItemId
+            )
+          ) {
+            w.path.shift();
+          }
+
           const nextNode = w.path[0];
           const isFinal = w.path.length === 1;
-          const laneX = isFinal && w.seatOffX !== undefined ? w.seatOffX : w.subOffX * (isFinal ? 0.5 : 1);
-          const laneZ = isFinal && w.seatOffZ !== undefined ? w.seatOffZ : w.subOffZ * (isFinal ? 0.5 : 1);
+          const laneX = isFinal && w.seatOffX !== undefined ? w.seatOffX : isFinal ? w.subOffX * 0.45 : w.subOffX;
+          const laneZ = isFinal && w.seatOffZ !== undefined ? w.seatOffZ : isFinal ? w.subOffZ * 0.45 : w.subOffZ;
           const goalX = nextNode.x + laneX;
           const goalY = nextNode.y + laneZ;
 
-          let dx = goalX - w.gx;
-          let dy = goalY - w.gy;
+          const dx = goalX - w.gx;
+          const dy = goalY - w.gy;
           const dist = Math.hypot(dx, dy);
 
-          // Gentle personal-space repulsion so walkers naturally steer around other people
+          // Personal-space repulsion vs other walkers, patients & staff
           let avoidX = 0;
           let avoidY = 0;
           for (let oj = 0; oj < walkerRigs.length; oj++) {
@@ -1127,27 +1725,63 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             const ox = w.gx - other.gx;
             const oy = w.gy - other.gy;
             const od = Math.hypot(ox, oy);
-            if (od > 0.01 && od < 0.85) {
-              const push = (0.85 - od) * 0.45;
+            if (od > 0.01 && od < 0.9) {
+              const push = (0.9 - od) * 0.48;
+              avoidX += (ox / od) * push;
+              avoidY += (oy / od) * push;
+            }
+          }
+          for (const pt of curPatients) {
+            if (pt.state === 'in_treatment' || pt.state === 'ready_for_exam') continue;
+            const ox = w.gx - pt.gridX;
+            const oy = w.gy - pt.gridY;
+            const od = Math.hypot(ox, oy);
+            if (od > 0.01 && od < 0.8) {
+              const push = (0.8 - od) * 0.45;
+              avoidX += (ox / od) * push;
+              avoidY += (oy / od) * push;
+            }
+          }
+          for (const sr of staffRigs.values()) {
+            const ox = w.gx - sr.gx;
+            const oy = w.gy - sr.gy;
+            const od = Math.hypot(ox, oy);
+            if (od > 0.01 && od < 0.78) {
+              const push = (0.78 - od) * 0.42;
               avoidX += (ox / od) * push;
               avoidY += (oy / od) * push;
             }
           }
 
           const step = w.speed * dt;
-          if (!isFinal && dist <= 0.36) {
-            // Corner-anticipation rounding: seamlessly curve onto the next leg without halting
+          if (!isFinal && dist <= 0.42) {
             w.path.shift();
           } else if (dist <= Math.max(0.08, step)) {
-            w.gx = goalX;
-            w.gy = goalY;
+            const res = resolveTileStep(w.gx, w.gy, goalX, goalY, 0.22, obstacles, w.ignoreItemId);
+            w.gx = res.x;
+            w.gy = res.y;
             w.path.shift();
+            w.stuckTimer = 0;
           } else {
             const steerX = dx / dist + avoidX;
             const steerY = dy / dist + avoidY;
             const steerLen = Math.hypot(steerX, steerY) || 1;
-            w.gx += (steerX / steerLen) * step;
-            w.gy += (steerY / steerLen) * step;
+            const candX = w.gx + (steerX / steerLen) * step;
+            const candY = w.gy + (steerY / steerLen) * step;
+            const res = resolveTileStep(w.gx, w.gy, candX, candY, 0.22, obstacles, w.ignoreItemId);
+            const movedDist = Math.hypot(res.x - w.gx, res.y - w.gy);
+            w.gx = res.x;
+            w.gy = res.y;
+            if (res.blocked && movedDist < step * 0.22) {
+              w.stuckTimer += dt;
+              if (w.stuckTimer > 0.55) {
+                w.path = [];
+                w.pauseTimer = 0.25;
+                w.stuckTimer = 0;
+              }
+            } else {
+              w.stuckTimer = 0;
+            }
           }
         } else {
           w.pauseTimer -= dt;
@@ -1156,105 +1790,157 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             w.seatOffX = undefined;
             w.seatOffZ = undefined;
             w.seatFacingRad = undefined;
-            w.subOffX = (Math.random() - 0.5) * 0.52;
-            w.subOffZ = (Math.random() - 0.5) * 0.52;
+            w.seatHeight = undefined;
+            w.stuckTimer = 0;
+            w.subOffX = (Math.random() - 0.5) * 0.4;
+            w.subOffZ = (Math.random() - 0.5) * 0.4;
 
             let destX = w.gx;
             let destY = w.gy;
+            let destIgnoreItem: string | undefined;
+
             if (w.kind === 'promenade') {
-              // Roam freely across the entire open eastern sidewalk/lawn & southern garden park
-              if (Math.random() < 0.65) {
-                destX = 28 + Math.floor(Math.random() * 4); // 28..31
-                destY = 1 + Math.floor(Math.random() * 25); // 1..25
+              // Free-roaming across flagstone walkway & packed-earth garden lane + south garden lawn
+              w.ignoreItemId = undefined;
+              if (Math.random() < 0.72) {
+                destX = 27.4 + Math.random() * 7.8;
+                destY = 2.0 + Math.random() * 21.0;
               } else {
-                destX = 3 + Math.floor(Math.random() * 27); // 3..29
-                destY = 23 + Math.floor(Math.random() * 3); // 23..25
+                destX = 4.0 + Math.random() * 26.0;
+                destY = 23.0 + Math.random() * 2.2;
               }
-              w.pauseTimer = 0.8 + Math.random() * 2.6;
+              w.pauseTimer = 1.1 + Math.random() * 2.5;
             } else {
-              // Clinic visitor roams freely: open avenue, courtyard garden, free bench seats, or reception lounge
+              // Courtyard & park-bench stroller (keeps indoor reception calm & uncrowded)
               const roll = Math.random();
-              const bench = curItems.find((it) => it.catalogId === 'park_bench');
-              const couch = curItems.find((it) => it.catalogId === 'waiting_chairs');
-              const patientOccupying = (sx: number, sy: number) =>
+              const benches = curItems.filter((it) => it.catalogId === 'park_bench');
+              const isSeatOccupied = (sx: number, sy: number, key: string) =>
                 curPatients.some(
                   (pt) =>
-                    (pt.state === 'walking_to_wait' || pt.state === 'waiting_checkin') &&
-                    Math.round(pt.targetX) === sx &&
-                    Math.round(pt.targetY) === sy
+                    pt.waitingSeatKey === key ||
+                    ((pt.state === 'walking_to_wait' || pt.state === 'waiting_checkin') &&
+                      pt.isSeatedWait !== false &&
+                      Math.round(pt.targetX) === sx &&
+                      Math.round(pt.targetY) === sy)
+                ) ||
+                walkerRigs.some(
+                  (ow, oidx) =>
+                    oidx !== wi &&
+                    ow.seatedMode &&
+                    Math.round(ow.gx) === sx &&
+                    Math.round(ow.gy) === sy
                 );
 
-              if (roll < 0.28 && bench && !patientOccupying(bench.gridX, bench.gridY)) {
-                destX = bench.gridX;
-                destY = bench.gridY + (Math.random() > 0.5 ? 1 : 0);
-                w.seatedMode = true;
-                w.seatOffX = bench.rotation === 0 ? 0.12 : bench.rotation === 2 ? -0.12 : 0;
-                w.seatOffZ = bench.rotation === 1 ? 0.12 : bench.rotation === 3 ? -0.12 : 0;
-                w.seatFacingRad =
-                  bench.rotation === 0 ? Math.PI / 2 : bench.rotation === 2 ? -Math.PI / 2 : bench.rotation === 1 ? 0 : Math.PI;
-                w.pauseTimer = 3.2 + Math.random() * 2.8;
-              } else if (roll < 0.44 && couch && !patientOccupying(couch.gridX, couch.gridY)) {
-                destX = couch.gridX + (Math.random() > 0.5 ? 1 : 0);
-                destY = couch.gridY;
-                w.seatedMode = true;
-                w.seatOffX = couch.rotation === 1 ? -0.15 : couch.rotation === 3 ? 0.15 : 0;
-                w.seatOffZ = couch.rotation === 0 ? 0.15 : couch.rotation === 2 ? -0.15 : 0;
-                w.seatFacingRad =
-                  couch.rotation === 0 ? 0 : couch.rotation === 2 ? Math.PI : couch.rotation === 1 ? -Math.PI / 2 : Math.PI / 2;
-                w.pauseTimer = 3.2 + Math.random() * 2.5;
-              } else if (roll < 0.7) {
-                // Courtyard garden stroll (avoid fountain basin 24..25, 7..8)
-                destX = 22 + Math.floor(Math.random() * 5);
-                destY = 4 + Math.floor(Math.random() * 16);
-                if (destX >= 24 && destX <= 25 && destY >= 7 && destY <= 8) destX = 23;
-                w.pauseTimer = 1.4 + Math.random() * 2.2;
-              } else if (roll < 0.88) {
-                // Inside Reception Lounge
-                destX = 14 + Math.floor(Math.random() * 7);
-                destY = 14 + Math.floor(Math.random() * 6);
-                w.pauseTimer = 1.8 + Math.random() * 2.4;
-              } else {
-                // Out onto the park & sidewalk
-                destX = 28 + Math.floor(Math.random() * 3);
-                destY = 2 + Math.floor(Math.random() * 22);
-                w.pauseTimer = 1.2 + Math.random() * 2.0;
+              let pickedSeat = false;
+              if (roll < 0.32 && benches.length > 0) {
+                const bench = benches[Math.floor(Math.random() * benches.length)];
+                const slot = Math.random() > 0.5 ? 1 : 0;
+                const sx = bench.rotation === 1 || bench.rotation === 3 ? bench.gridX + slot : bench.gridX;
+                const sy = bench.rotation === 0 || bench.rotation === 2 ? bench.gridY + slot : bench.gridY;
+                const skey = `${bench.instanceId}_${slot}`;
+                if (!isSeatOccupied(sx, sy, skey)) {
+                  destX = sx;
+                  destY = sy;
+                  destIgnoreItem = bench.instanceId;
+                  w.seatedMode = true;
+                  w.seatHeight = 0.40;
+                  if (bench.rotation === 0) {
+                    w.seatOffX = 0.04;
+                    w.seatOffZ = slot === 0 ? 0.12 : -0.12;
+                    w.seatFacingRad = Math.PI / 2;
+                  } else if (bench.rotation === 2) {
+                    w.seatOffX = -0.04;
+                    w.seatOffZ = slot === 0 ? 0.12 : -0.12;
+                    w.seatFacingRad = -Math.PI / 2;
+                  } else if (bench.rotation === 1) {
+                    w.seatOffX = slot === 0 ? 0.12 : -0.12;
+                    w.seatOffZ = 0.04;
+                    w.seatFacingRad = 0;
+                  } else {
+                    w.seatOffX = slot === 0 ? 0.12 : -0.12;
+                    w.seatOffZ = -0.04;
+                    w.seatFacingRad = Math.PI;
+                  }
+                  w.pauseTimer = 3.2 + Math.random() * 2.8;
+                  pickedSeat = true;
+                }
+              }
+
+              if (!pickedSeat) {
+                if (roll < 0.65) {
+                  destX = 22.3 + Math.random() * 3.8;
+                  destY = 4.2 + Math.random() * 15.2;
+                  if (destX >= 23.6 && destX <= 26.2 && destY >= 6.6 && destY <= 9.4) destX = 22.6;
+                  w.pauseTimer = 1.4 + Math.random() * 2.2;
+                } else {
+                  destX = 27.5 + Math.random() * 6.8;
+                  destY = 2.5 + Math.random() * 20.0;
+                  w.pauseTimer = 1.2 + Math.random() * 2.2;
+                }
               }
             }
 
-            if (Math.hypot(destX - w.gx, destY - w.gy) > 1.2) {
-              w.path = findGridPath(w.gx, w.gy, destX, destY, curRooms, curItems, walkerFootprints);
+            const goalTileX = Math.round(destX);
+            const goalTileY = Math.round(destY);
+            if (w.seatedMode || isTileWalkable(goalTileX, goalTileY, 0.24, obstacles, destIgnoreItem)) {
+              if (Math.hypot(goalTileX - w.gx, goalTileY - w.gy) > 1.0) {
+                w.ignoreItemId = destIgnoreItem;
+                w.path = findGridPath(
+                  w.gx,
+                  w.gy,
+                  goalTileX,
+                  goalTileY,
+                  curRooms,
+                  curItems,
+                  walkerFootprints,
+                  obstacles,
+                  destIgnoreItem
+                );
+                if (!w.seatedMode && Math.random() < 0.45) {
+                  w.subOffX = destX - goalTileX;
+                  w.subOffZ = destY - goalTileY;
+                }
+              }
             }
           }
         }
 
-        const targetX = w.gx + 0.5 + (w.path.length === 0 && w.seatOffX ? w.seatOffX : 0);
-        const targetZ = w.gy + 0.5 + (w.path.length === 0 && w.seatOffZ ? w.seatOffZ : 0);
+        const atSeatTarget = w.path.length === 0 && Boolean(w.seatedMode);
+        const targetX = w.gx + 0.5 + (atSeatTarget && w.seatOffX !== undefined ? w.seatOffX : 0);
+        const targetZ = w.gy + 0.5 + (atSeatTarget && w.seatOffZ !== undefined ? w.seatOffZ : 0);
         const prevVisX = w.visX;
         const prevVisZ = w.visZ;
-        w.visX = THREE.MathUtils.damp(w.visX, targetX, 9.0, dt);
-        w.visZ = THREE.MathUtils.damp(w.visZ, targetZ, 9.0, dt);
+        w.visX = THREE.MathUtils.damp(w.visX, targetX, 10.5, dt);
+        w.visZ = THREE.MathUtils.damp(w.visZ, targetZ, 10.5, dt);
 
         const mdx = w.visX - prevVisX;
         const mdz = w.visZ - prevVisZ;
         const stepDist = Math.hypot(mdx, mdz);
-        const isMoving = w.path.length > 0 || Math.hypot(targetX - w.visX, targetZ - w.visZ) > 0.06;
+        const distRem = Math.hypot(targetX - w.visX, targetZ - w.visZ);
+        const isMoving = w.path.length > 0 || distRem > 0.06;
 
-        w.walkBlend = THREE.MathUtils.damp(w.walkBlend, isMoving ? 1 : 0, 8.0, dt);
+        const shouldSit = atSeatTarget && distRem < 0.24;
+        w.walkBlend = THREE.MathUtils.damp(w.walkBlend, isMoving ? 1 : 0, 8.5, dt);
+        w.sitBlend = THREE.MathUtils.damp(w.sitBlend, shouldSit ? 1 : 0, 7.5, dt);
+
         if (isMoving || w.walkBlend > 0.04) {
           w.walkPhase += stepDist * 5.8 + (isMoving && stepDist < 0.002 ? dt * 2.2 : 0);
           if (stepDist > 0.0008 && isMoving) {
-            w.facingRad = lerpAngle(w.facingRad, Math.atan2(mdx, mdz), Math.min(1, dt * 6.8));
+            w.facingRad = lerpAngle(w.facingRad, Math.atan2(mdx, mdz), Math.min(1, dt * 7.2));
           }
-        } else if (w.seatedMode && w.seatFacingRad !== undefined) {
-          w.facingRad = lerpAngle(w.facingRad, w.seatFacingRad, Math.min(1, dt * 8));
+        }
+        if ((!isMoving || (atSeatTarget && distRem < 0.26)) && w.seatedMode && w.seatFacingRad !== undefined) {
+          w.facingRad = lerpAngle(w.facingRad, w.seatFacingRad, Math.min(1, dt * 9));
         }
 
         w.rig.root.position.set(w.visX, 0.02, w.visZ);
         animateHumanoid3D(w.rig, {
-          pose: !isMoving && w.seatedMode ? 'seated' : 'standing',
+          pose: shouldSit ? 'seated' : 'standing',
           walkPhase: w.walkPhase,
           isMoving,
           walkBlend: w.walkBlend,
+          sitBlend: w.sitBlend,
+          seatHeight: w.seatHeight ?? 0.34,
           facingRad: w.facingRad,
           timeSec,
           isSelected: false,
@@ -1330,8 +2016,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           }
         }
         if (allowOut) {
+          const allowSidewalkGrid =
+            curDraft &&
+            (curDraft.catalogItem.sprite === 'street_lamp_post' ||
+              curDraft.catalogItem.sprite === 'garden_lamp' ||
+              curDraft.catalogItem.sprite === 'garden_spot_lamp');
+          const maxOutX = allowSidewalkGrid ? 30 : 27;
           ctx.strokeStyle = curDraft ? 'rgba(16, 185, 129, 0.34)' : 'rgba(16, 185, 129, 0.2)';
-          for (let gx = 22; gx <= 27; gx++) {
+          for (let gx = 22; gx <= maxOutX; gx++) {
             const p1 = projectToScreen(gx, 0.09, 2);
             const p2 = projectToScreen(gx, 0.09, 22);
             ctx.beginPath();
@@ -1341,7 +2033,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           }
           for (let gz = 2; gz <= 22; gz++) {
             const p1 = projectToScreen(22, 0.09, gz);
-            const p2 = projectToScreen(27, 0.09, gz);
+            const p2 = projectToScreen(maxOutX, 0.09, gz);
             ctx.beginPath();
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
@@ -1543,12 +2235,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       updateCameraTransform();
 
       // Living world subtle animations: courtyard fountain water shimmer
+      const tSec = nowMs * 0.001;
       if (worldHandle) {
-        const t = nowMs * 0.001;
-        worldHandle.waterMesh.position.y = 0.16 + Math.sin(t * 3.2) * 0.009;
+        worldHandle.waterMesh.position.y = 0.16 + Math.sin(tSec * 3.2) * 0.009;
       }
 
-      syncAndAnimateActors(nowMs * 0.001, dt);
+      syncAndAnimateActors(tSec, dt);
+      updateAtmosphereAndLights(tSec, dt);
 
       // Proximity-driven real clinic doors & courtyard gate
       if (worldHandle) {
@@ -1701,6 +2394,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     // Smart context action: tapping reception desk checks in waiting patient or opens staff hire
     if (hitItem && hitItem.catalogId === 'reception_desk') {
       onTapReceptionDesk?.();
+    } else if (hitItem) {
+      onInspectItem?.(hitItem);
     }
   };
 

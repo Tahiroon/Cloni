@@ -13,11 +13,12 @@ import {
   Stethoscope,
   X,
 } from 'lucide-react';
-import { Language, PatientEntity } from '../types/clinic';
+import { Language, LightingMode, PatientEntity } from '../types/clinic';
 
 interface ClinicalAssessmentModalProps {
   patient: PatientEntity | null;
   language: Language;
+  lightingMode?: LightingMode;
   onClose: () => void;
   onCompleteCase: (result: {
     patientId: string;
@@ -33,6 +34,7 @@ type ExamStep = 'subjective' | 'redflags' | 'objective' | 'plan' | 'summary';
 export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = ({
   patient,
   language,
+  lightingMode = 'day',
   onClose,
   onCompleteCase,
 }) => {
@@ -57,6 +59,7 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
   if (!patient) return null;
   const c = patient.clinicalCase;
   const isAr = language === 'ar';
+  const isNight = lightingMode === 'night';
 
   const quickQuestions = isAr
     ? [
@@ -175,9 +178,19 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-950/75">
-      <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-sky-200 overflow-hidden flex flex-col max-h-[90vh]">
+      <div
+        className={`w-full max-w-lg rounded-3xl shadow-2xl border overflow-hidden flex flex-col max-h-[90vh] ${
+          isNight ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-sky-200 text-slate-900'
+        }`}
+      >
         {/* Header */}
-        <div className="px-4 py-3.5 bg-gradient-to-r from-[#0f294a] via-[#15457a] to-[#0284c7] text-white flex items-center justify-between gap-3">
+        <div
+          className={`px-4 py-3.5 text-white flex items-center justify-between gap-3 ${
+            isNight
+              ? 'bg-gradient-to-r from-[#061124] via-[#0c264a] to-[#083358]'
+              : 'bg-gradient-to-r from-[#0f294a] via-[#15457a] to-[#0284c7]'
+          }`}
+        >
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0">
               <Stethoscope className="w-5 h-5 text-sky-200" />
@@ -209,7 +222,7 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
         {/* Clinical Vitals EMR Strip */}
         <div
           dir="ltr"
-          className="px-4 py-2 bg-slate-900 text-slate-200 border-b border-slate-800 flex items-center justify-between gap-2 text-[11px] font-mono tabular-nums overflow-x-auto"
+          className="px-4 py-2 bg-slate-950 text-slate-200 border-b border-slate-800 flex items-center justify-between gap-2 text-[11px] font-mono tabular-nums overflow-x-auto"
         >
           <span>BP {c.vitals?.bp ?? '120/78'}</span>
           <span className="text-slate-600">·</span>
@@ -224,7 +237,11 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
 
         {/* Step Indicator */}
         {step !== 'summary' && (
-          <div className="grid grid-cols-4 gap-1 p-2 bg-slate-100 border-b border-slate-200">
+          <div
+            className={`grid grid-cols-4 gap-1 p-2 border-b ${
+              isNight ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
+            }`}
+          >
             {steps.map((s) => {
               const active = step === s.id;
               return (
@@ -234,8 +251,12 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                   onClick={() => setStep(s.id)}
                   className={`py-2 px-1 rounded-xl text-[11px] font-extrabold transition-colors truncate ${
                     active
-                      ? 'bg-white text-sky-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800'
+                      ? isNight
+                        ? 'bg-sky-600 text-white shadow-sm'
+                        : 'bg-white text-sky-700 shadow-sm'
+                      : isNight
+                        ? 'text-slate-400 hover:text-slate-200'
+                        : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   {isAr ? s.labelAr : s.labelEn}
@@ -249,40 +270,44 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
         <div className="p-4 overflow-y-auto custom-scroll space-y-4 flex-1">
           {step === 'subjective' && (
             <>
-              <div className="bg-sky-50/80 border border-sky-200 rounded-2xl p-3.5 space-y-2">
+              <div
+                className={`border rounded-2xl p-3.5 space-y-2 ${
+                  isNight ? 'bg-sky-950/45 border-sky-800/70' : 'bg-sky-50/80 border-sky-200'
+                }`}
+              >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-extrabold text-sky-800">
+                  <span className={`text-xs font-extrabold ${isNight ? 'text-sky-300' : 'text-sky-800'}`}>
                     {isAr ? 'الشكوى الرئيسية' : 'Chief Complaint'}
                   </span>
-                  <span className="text-xs font-black text-rose-600 tabular-nums">
+                  <span className="text-xs font-black text-rose-500 tabular-nums">
                     VAS {c.vasPain}/10
                   </span>
                 </div>
-                <p className="text-sm font-bold text-slate-900 leading-relaxed">
+                <p className={`text-sm font-bold leading-relaxed ${isNight ? 'text-slate-100' : 'text-slate-900'}`}>
                   {isAr ? c.chiefComplaintAr : c.chiefComplaintEn}
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-sky-200/70 text-xs">
+                <div className={`grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t text-xs ${isNight ? 'border-sky-800/60' : 'border-sky-200/70'}`}>
                   <div>
-                    <span className="font-bold text-slate-500 block">
+                    <span className={`font-bold block ${isNight ? 'text-slate-400' : 'text-slate-500'}`}>
                       {isAr ? 'البداية:' : 'Onset:'}
                     </span>
-                    <span className="font-semibold text-slate-800">
+                    <span className={`font-semibold ${isNight ? 'text-slate-200' : 'text-slate-800'}`}>
                       {isAr ? c.onsetAr : c.onsetEn}
                     </span>
                   </div>
                   <div>
-                    <span className="font-bold text-slate-500 block">
+                    <span className={`font-bold block ${isNight ? 'text-slate-400' : 'text-slate-500'}`}>
                       {isAr ? 'يزيد الألم:' : 'Aggravating:'}
                     </span>
-                    <span className="font-semibold text-slate-800">
+                    <span className={`font-semibold ${isNight ? 'text-slate-200' : 'text-slate-800'}`}>
                       {isAr ? c.aggravatingAr : c.aggravatingEn}
                     </span>
                   </div>
                   <div>
-                    <span className="font-bold text-slate-500 block">
+                    <span className={`font-bold block ${isNight ? 'text-slate-400' : 'text-slate-500'}`}>
                       {isAr ? 'يخفف الألم:' : 'Easing:'}
                     </span>
-                    <span className="font-semibold text-slate-800">
+                    <span className={`font-semibold ${isNight ? 'text-slate-200' : 'text-slate-800'}`}>
                       {isAr ? c.easingAr : c.easingEn}
                     </span>
                   </div>
@@ -291,8 +316,8 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
 
               {/* Interactive AI Patient History Chat */}
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-700">
-                  <MessageSquare className="w-4 h-4 text-sky-600" />
+                <div className={`flex items-center gap-1.5 text-xs font-extrabold ${isNight ? 'text-slate-200' : 'text-slate-700'}`}>
+                  <MessageSquare className="w-4 h-4 text-sky-500" />
                   <span>{isAr ? 'اسأل المريض (مقابلة تفاعلية)' : 'Ask Patient (Interactive History)'}</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -301,7 +326,11 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                       key={qq}
                       type="button"
                       onClick={() => handleAskPatient(qq)}
-                      className="text-[11px] font-bold bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-800 px-2.5 py-1.5 rounded-xl transition-colors text-start"
+                      className={`text-[11px] font-bold px-2.5 py-1.5 rounded-xl transition-colors text-start ${
+                        isNight
+                          ? 'bg-slate-800 hover:bg-sky-900/60 text-slate-200 hover:text-sky-200'
+                          : 'bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-800'
+                      }`}
                     >
                       {qq}
                     </button>
@@ -309,13 +338,23 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                 </div>
 
                 {chatLog.length > 0 && (
-                  <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-2xl p-3 max-h-36 overflow-y-auto custom-scroll">
+                  <div
+                    className={`space-y-2 border rounded-2xl p-3 max-h-36 overflow-y-auto custom-scroll ${
+                      isNight ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
                     {chatLog.map((entry, idx) => (
                       <div key={idx} className="space-y-1 text-xs">
-                        <div className="font-bold text-sky-800">
+                        <div className={`font-bold ${isNight ? 'text-sky-400' : 'text-sky-800'}`}>
                           {isAr ? 'أنت:' : 'You:'} {entry.q}
                         </div>
-                        <div className="text-slate-700 bg-white p-2 rounded-xl border border-slate-200">
+                        <div
+                          className={`p-2 rounded-xl border ${
+                            isNight
+                              ? 'text-slate-200 bg-slate-900 border-slate-800'
+                              : 'text-slate-700 bg-white border-slate-200'
+                          }`}
+                        >
                           {entry.a}
                         </div>
                       </div>
@@ -332,7 +371,9 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                       if (e.key === 'Enter') handleAskPatient(questionInput);
                     }}
                     placeholder={isAr ? 'اكتب سؤالاً سريرياً للمريض...' : 'Ask the patient a clinical question...'}
-                    className="flex-1 px-3 py-2.5 rounded-xl bg-slate-100 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    className={`flex-1 px-3 py-2.5 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                      isNight ? 'bg-slate-800 text-slate-100 placeholder:text-slate-400' : 'bg-slate-100 text-slate-900'
+                    }`}
                   />
                   <button
                     type="button"
@@ -349,9 +390,13 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
 
           {step === 'redflags' && (
             <div className="space-y-3">
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-start gap-2.5">
-                <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                <div className="text-xs text-amber-950 space-y-1">
+              <div
+                className={`border rounded-2xl p-3.5 flex items-start gap-2.5 ${
+                  isNight ? 'bg-amber-950/45 border-amber-800/70' : 'bg-amber-50 border-amber-200'
+                }`}
+              >
+                <ShieldAlert className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                <div className={`text-xs space-y-1 ${isNight ? 'text-amber-100' : 'text-amber-950'}`}>
                   <div className="font-extrabold text-sm">
                     {isAr ? 'فحص العلامات التحذيرية (Red Flags)' : 'Red Flags Clinical Screening'}
                   </div>
@@ -369,16 +414,20 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                   onClick={() => setRedFlagChoice('safe')}
                   className={`p-3.5 rounded-2xl border-2 text-start transition-all flex items-center gap-3 ${
                     redFlagChoice === 'safe'
-                      ? 'border-emerald-500 bg-emerald-50'
-                      : 'border-slate-200 hover:border-slate-300'
+                      ? isNight
+                        ? 'border-emerald-500 bg-emerald-950/50'
+                        : 'border-emerald-500 bg-emerald-50'
+                      : isNight
+                        ? 'border-slate-700 hover:border-slate-600'
+                        : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
                   <div>
-                    <div className="text-sm font-extrabold text-slate-900">
+                    <div className={`text-sm font-extrabold ${isNight ? 'text-slate-100' : 'text-slate-900'}`}>
                       {isAr ? 'آمن للعلاج الطبيعي (لا توجد موانع خطرة)' : 'Cleared for Physiotherapy (No Red Flags)'}
                     </div>
-                    <div className="text-xs text-slate-500">
+                    <div className={`text-xs ${isNight ? 'text-slate-400' : 'text-slate-500'}`}>
                       {isAr ? 'يمكن متابعة الفحص السريري والخطة التأهيلية' : 'Proceed safely with physical exam & rehab'}
                     </div>
                   </div>
@@ -389,16 +438,20 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                   onClick={() => setRedFlagChoice('refer')}
                   className={`p-3.5 rounded-2xl border-2 text-start transition-all flex items-center gap-3 ${
                     redFlagChoice === 'refer'
-                      ? 'border-rose-500 bg-rose-50'
-                      : 'border-slate-200 hover:border-slate-300'
+                      ? isNight
+                        ? 'border-rose-500 bg-rose-950/50'
+                        : 'border-rose-500 bg-rose-50'
+                      : isNight
+                        ? 'border-slate-700 hover:border-slate-600'
+                        : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                  <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0" />
                   <div>
-                    <div className="text-sm font-extrabold text-slate-900">
+                    <div className={`text-sm font-extrabold ${isNight ? 'text-slate-100' : 'text-slate-900'}`}>
                       {isAr ? 'علامة تحذيرية خطيرة — تحويل طبي طارئ' : 'Red Flag Detected — Urgent Medical Referral'}
                     </div>
-                    <div className="text-xs text-slate-500">
+                    <div className={`text-xs ${isNight ? 'text-slate-400' : 'text-slate-500'}`}>
                       {isAr ? 'تمنع الجلسة ويجب التحويل الفوري للطبيب/الطوارئ' : 'Contraindicates PT; refer urgently to physician/ER'}
                     </div>
                   </div>
@@ -409,7 +462,7 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
 
           {step === 'objective' && (
             <div className="space-y-3">
-              <p className="text-xs text-slate-600 font-semibold">
+              <p className={`text-xs font-semibold ${isNight ? 'text-slate-300' : 'text-slate-600'}`}>
                 {isAr
                   ? 'اضغط على الاختبارات السريرية لإجرائها واكتشاف النتائج:'
                   : 'Tap clinical tests below to perform examination and reveal findings:'}
@@ -421,20 +474,24 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                   return (
                     <div
                       key={test.id}
-                      className="rounded-2xl border border-slate-200 overflow-hidden bg-white"
+                      className={`rounded-2xl border overflow-hidden ${
+                        isNight ? 'border-slate-700 bg-slate-800/80' : 'border-slate-200 bg-white'
+                      }`}
                     >
                       <button
                         type="button"
                         onClick={() => toggleObjectiveTest(test.id)}
-                        className="w-full p-3.5 flex items-center justify-between gap-2 text-start hover:bg-slate-50"
+                        className={`w-full p-3.5 flex items-center justify-between gap-2 text-start ${
+                          isNight ? 'hover:bg-slate-800' : 'hover:bg-slate-50'
+                        }`}
                       >
                         <div className="flex items-center gap-2.5">
-                          <Activity className="w-4 h-4 text-sky-600 shrink-0" />
-                          <span className="text-sm font-extrabold text-slate-900">
+                          <Activity className="w-4 h-4 text-sky-500 shrink-0" />
+                          <span className={`text-sm font-extrabold ${isNight ? 'text-slate-100' : 'text-slate-900'}`}>
                             {isAr ? test.nameAr : test.nameEn}
                           </span>
                         </div>
-                        <span className="text-xs font-bold text-sky-600 whitespace-nowrap">
+                        <span className="text-xs font-bold text-sky-500 whitespace-nowrap">
                           {revealed
                             ? isAr
                               ? '✓ تم الفحص'
@@ -449,8 +506,12 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                         <div
                           className={`px-3.5 py-2.5 text-xs font-bold border-t ${
                             test.isPositive
-                              ? 'bg-amber-50 text-amber-900 border-amber-200'
-                              : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                              ? isNight
+                                ? 'bg-amber-950/50 text-amber-200 border-amber-800/70'
+                                : 'bg-amber-50 text-amber-900 border-amber-200'
+                              : isNight
+                                ? 'bg-emerald-950/50 text-emerald-200 border-emerald-800/70'
+                                : 'bg-emerald-50 text-emerald-900 border-emerald-200'
                           }`}
                         >
                           {test.isPositive ? '▲ ' : '● '}
@@ -467,7 +528,7 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
           {step === 'plan' && (
             <div className="space-y-4">
               <div className="space-y-2">
-                <h3 className="text-xs font-extrabold text-slate-700">
+                <h3 className={`text-xs font-extrabold ${isNight ? 'text-slate-300' : 'text-slate-700'}`}>
                   {isAr ? 'التشخيص السريري المرجح:' : 'Primary Clinical Impression:'}
                 </h3>
                 {c.diagnosisOptions.map((d) => (
@@ -477,8 +538,12 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                     onClick={() => setSelectedDiag(d.id)}
                     className={`w-full text-start p-3 rounded-2xl border-2 text-xs sm:text-sm font-bold transition-all ${
                       selectedDiag === d.id
-                        ? 'border-sky-600 bg-sky-50 text-sky-900'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-800'
+                        ? isNight
+                          ? 'border-sky-500 bg-sky-950/60 text-sky-200'
+                          : 'border-sky-600 bg-sky-50 text-sky-900'
+                        : isNight
+                          ? 'border-slate-700 hover:border-slate-600 text-slate-200'
+                          : 'border-slate-200 hover:border-slate-300 text-slate-800'
                     }`}
                   >
                     {isAr ? d.labelAr : d.labelEn}
@@ -487,7 +552,7 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-xs font-extrabold text-slate-700">
+                <h3 className={`text-xs font-extrabold ${isNight ? 'text-slate-300' : 'text-slate-700'}`}>
                   {isAr ? 'الخطة العلاجية المبنية على الدليل:' : 'Evidence-Based Intervention Plan:'}
                 </h3>
                 {c.treatmentOptions.map((t) => (
@@ -497,8 +562,12 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                     onClick={() => setSelectedTx(t.id)}
                     className={`w-full text-start p-3 rounded-2xl border-2 text-xs sm:text-sm font-bold transition-all ${
                       selectedTx === t.id
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-800'
+                        ? isNight
+                          ? 'border-emerald-500 bg-emerald-950/60 text-emerald-200'
+                          : 'border-emerald-600 bg-emerald-50 text-emerald-950'
+                        : isNight
+                          ? 'border-slate-700 hover:border-slate-600 text-slate-200'
+                          : 'border-slate-200 hover:border-slate-300 text-slate-800'
                     }`}
                   >
                     {isAr ? t.labelAr : t.labelEn}
@@ -507,7 +576,7 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-extrabold text-slate-600 block">
+                <label className={`text-xs font-extrabold block ${isNight ? 'text-slate-300' : 'text-slate-600'}`}>
                   {isAr
                     ? 'الجرعة السريرية وملاحظة المتابعة (اختياري):'
                     : 'Dosage Parameters & Clinical Rationale Note (Optional):'}
@@ -523,7 +592,11 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                       onClick={() =>
                         setStudentNote((prev) => (prev ? `${prev} · ${preset}` : preset))
                       }
-                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-sky-100 text-[11px] font-bold text-slate-700"
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                        isNight
+                          ? 'bg-slate-800 hover:bg-sky-900/60 text-slate-200'
+                          : 'bg-slate-100 hover:bg-sky-100 text-slate-700'
+                      }`}
                     >
                       + {preset}
                     </button>
@@ -538,7 +611,9 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
                       ? 'اكتب سبب اختيارك لهذه الخطة أو احتياطات الأمان...'
                       : 'Explain your clinical rationale or key precautions...'
                   }
-                  className="w-full p-2.5 rounded-xl bg-slate-100 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className={`w-full p-2.5 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                    isNight ? 'bg-slate-800 text-slate-100 placeholder:text-slate-400' : 'bg-slate-100 text-slate-900'
+                  }`}
                 />
               </div>
             </div>
@@ -546,35 +621,39 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
 
           {step === 'summary' && evaluationResult && (
             <div className="space-y-4 text-center py-2">
-              <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+              <div className="w-16 h-16 rounded-3xl bg-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto shadow-inner">
                 <ClipboardCheck className="w-9 h-9" />
               </div>
               <div>
-                <h3 className="text-lg font-black text-slate-900">
+                <h3 className={`text-lg font-black ${isNight ? 'text-slate-100' : 'text-slate-900'}`}>
                   {isAr ? 'اكتمل التقييم السريري!' : 'Clinical Assessment Complete!'}
                 </h3>
-                <p className="text-sm font-bold text-sky-700 tabular-nums mt-0.5">
+                <p className="text-sm font-bold text-sky-500 tabular-nums mt-0.5">
                   {isAr ? `الدقة السريرية: ${evaluationResult.score}%` : `Clinical Accuracy: ${evaluationResult.score}%`}
                 </p>
               </div>
 
               <div className="flex items-center justify-center gap-4">
-                <div className="flex items-center gap-1.5 bg-amber-100 text-amber-900 px-4 py-2 rounded-2xl font-black text-sm tabular-nums">
-                  <Coins className="w-4 h-4 text-amber-600" />
+                <div className="flex items-center gap-1.5 bg-amber-500/20 text-amber-400 px-4 py-2 rounded-2xl font-black text-sm tabular-nums">
+                  <Coins className="w-4 h-4 text-amber-500" />
                   +{evaluationResult.coinsEarned}
                 </div>
-                <div className="flex items-center gap-1.5 bg-sky-100 text-sky-900 px-4 py-2 rounded-2xl font-black text-sm tabular-nums">
+                <div className="flex items-center gap-1.5 bg-sky-500/20 text-sky-400 px-4 py-2 rounded-2xl font-black text-sm tabular-nums">
                   <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
                   +{evaluationResult.starsEarned}
                 </div>
               </div>
 
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-start space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-extrabold text-sky-700">
+              <div
+                className={`border rounded-2xl p-3.5 text-start space-y-1.5 ${
+                  isNight ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-xs font-extrabold text-sky-500">
                   <Sparkles className="w-4 h-4" />
                   <span>{isAr ? 'ملاحظة المشرف الإكلينيكي:' : 'Clinical Mentor Feedback:'}</span>
                 </div>
-                <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                <p className={`text-xs sm:text-sm leading-relaxed ${isNight ? 'text-slate-200' : 'text-slate-700'}`}>
                   {evaluationResult.feedback}
                 </p>
               </div>
@@ -583,7 +662,11 @@ export const ClinicalAssessmentModal: React.FC<ClinicalAssessmentModalProps> = (
         </div>
 
         {/* Footer CTA */}
-        <div className="p-3.5 border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+        <div
+          className={`p-3.5 border-t flex items-center justify-between gap-2 ${
+            isNight ? 'border-slate-800 bg-slate-950' : 'border-slate-200 bg-slate-50'
+          }`}
+        >
           {step === 'subjective' && (
             <button
               type="button"

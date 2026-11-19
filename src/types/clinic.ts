@@ -29,16 +29,49 @@ export type SpriteKind =
   | 'exercise_mat'
   | 'parallel_bars'
   | 'hydro_sink'
+  | 'shockwave_eswt'
+  | 'laser_hilt'
+  | 'swd_unit'
+  | 'cpm_device'
+  | 'cryo_unit'
+  | 'balance_trainer'
+  | 'emg_biofeedback'
+  | 'paraffin_bath'
+  | 'infrared_lamp'
+  | 'magnetotherapy'
+  | 'tilt_table'
+  | 'multi_gym_pulley'
+  | 'hand_rehab_table'
+  | 'pt_toolkit_cart'
   | 'potted_plant'
   | 'park_bench'
   | 'garden_lamp'
+  | 'garden_spot_lamp'
   | 'flower_bed'
   | 'therason_sign'
   | 'partition_wall'
+  | 'privacy_screen'
+  | 'wood_slat_divider'
+  | 'sanitizing_kiosk'
+  | 'arch_pergola'
   | 'anatomy_poster'
   | 'office_desk'
+  | 'corner_desk'
   | 'supply_shelf'
-  | 'skeleton_stand';
+  | 'med_cabinet'
+  | 'lounge_chair'
+  | 'wheelchair_bay'
+  | 'doctor_stool'
+  | 'skeleton_stand'
+  | 'clinic_floor_lamp'
+  | 'wall_sconce_lamp'
+  | 'table_lamp'
+  | 'waste_bin'
+  | 'floor_rug'
+  | 'outdoor_tree'
+  | 'street_lamp_post';
+
+export type LightingMode = 'day' | 'night';
 
 export interface CatalogItem {
   id: string;
@@ -164,6 +197,8 @@ export interface ClinicalCase {
 export type PatientState =
   | 'arriving'
   | 'checkin_at_desk'
+  | 'walking_to_water'
+  | 'drinking_water'
   | 'walking_to_wait'
   | 'waiting_checkin'
   | 'walking_to_station'
@@ -200,6 +235,13 @@ export interface PatientEntity {
   seatOffsetX?: number;
   seatOffsetZ?: number;
   seatFacingRad?: number;
+  seatHeight?: number;
+  isSeatedWait?: boolean;
+  waitingSeatKey?: string;
+  waterCoolerId?: string;
+  leavingItemId?: string;
+  idleMoveTimer?: number;
+  headingRad?: number;
   treatmentProgress?: number; // 0..1 while in_treatment
   pendingReward?: {
     coins: number;
@@ -256,6 +298,7 @@ export interface ClinicSaveState {
   clinicName: string;
   language: Language;
   soundEnabled: boolean;
+  lightingMode?: LightingMode;
   coins: number;
   stars: number;
   xp?: number;

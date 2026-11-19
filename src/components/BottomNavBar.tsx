@@ -1,11 +1,12 @@
 import React from 'react';
 import { Check, Move, ShoppingCart } from 'lucide-react';
-import { Language, NavTab } from '../types/clinic';
+import { Language, LightingMode, NavTab } from '../types/clinic';
 
 interface BottomNavBarProps {
   activeTab: NavTab | null;
   editMode: boolean;
   language: Language;
+  lightingMode?: LightingMode;
   storeAlert: boolean;
   disabled?: boolean;
   onSelectTab: (tab: NavTab) => void;
@@ -16,12 +17,14 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
   activeTab,
   editMode,
   language,
+  lightingMode = 'day',
   storeAlert,
   disabled = false,
   onSelectTab,
   onToggleEditMode,
 }) => {
   const isAr = language === 'ar';
+  const isNight = lightingMode === 'night';
 
   return (
     <nav
@@ -30,12 +33,16 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
       className="fixed bottom-0 left-0 right-0 z-30 px-3.5 pb-3.5 pt-2 pointer-events-none"
     >
       <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
-        {/* Bottom-Left: Royal Blue Store Button (matching reference hero UI) */}
+        {/* Bottom-Left: Royal Blue Store Button */}
         <button
           type="button"
           disabled={disabled}
           onClick={() => onSelectTab('store')}
-          className={`pointer-events-auto relative min-w-[138px] h-12 px-5 rounded-2xl flex items-center justify-center gap-2 text-white border border-sky-300/40 bg-gradient-to-b from-sky-500 to-blue-800 shadow-[0_6px_20px_rgba(30,64,175,0.45)] transition-transform whitespace-nowrap shrink-0 ${
+          className={`pointer-events-auto relative min-w-[138px] h-12 px-5 rounded-2xl flex items-center justify-center gap-2 text-white border transition-transform whitespace-nowrap shrink-0 ${
+            isNight
+              ? 'border-sky-400/50 bg-gradient-to-b from-sky-600 to-slate-900 shadow-[0_6px_24px_rgba(14,165,233,0.35)]'
+              : 'border-sky-300/40 bg-gradient-to-b from-sky-500 to-blue-800 shadow-[0_6px_20px_rgba(30,64,175,0.45)]'
+          } ${
             activeTab === 'store' ? 'ring-2 ring-white -translate-y-0.5' : ''
           } ${disabled ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 hover:brightness-110'}`}
         >

@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Brain, Coins, Sparkles, Star, X } from 'lucide-react';
-import { Language } from '../types/clinic';
+import { Language, LightingMode } from '../types/clinic';
 
 interface BonusQuizModalProps {
   open: boolean;
   language: Language;
+  lightingMode?: LightingMode;
   onClose: () => void;
   onEarnReward: (coins: number, stars: number) => void;
 }
@@ -48,6 +49,7 @@ const QUESTIONS: QuizQuestion[] = [
 export const BonusQuizModal: React.FC<BonusQuizModalProps> = ({
   open,
   language,
+  lightingMode = 'day',
   onClose,
   onEarnReward,
 }) => {
@@ -56,6 +58,7 @@ export const BonusQuizModal: React.FC<BonusQuizModalProps> = ({
 
   if (!open) return null;
   const isAr = language === 'ar';
+  const isNight = lightingMode === 'night';
   const q = QUESTIONS[idx % QUESTIONS.length];
 
   const handlePick = (isCorrect: boolean) => {
@@ -75,7 +78,11 @@ export const BonusQuizModal: React.FC<BonusQuizModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80">
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
+      <div
+        className={`w-full max-w-md rounded-3xl shadow-2xl border overflow-hidden ${
+          isNight ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+        }`}
+      >
         <div className="px-5 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Brain className="w-5 h-5" />
@@ -93,22 +100,26 @@ export const BonusQuizModal: React.FC<BonusQuizModalProps> = ({
         </div>
 
         <div className="p-4 space-y-4">
-          <div className="flex items-center justify-between text-xs font-extrabold text-slate-600">
-            <span className="flex items-center gap-1 text-sky-700">
+          <div className={`flex items-center justify-between text-xs font-extrabold ${isNight ? 'text-slate-300' : 'text-slate-600'}`}>
+            <span className={`flex items-center gap-1 ${isNight ? 'text-sky-400' : 'text-sky-700'}`}>
               <Sparkles className="w-4 h-4" />
               {isAr ? 'أجب لربح مكافأة فورية' : 'Answer to earn instant clinic rewards'}
             </span>
             <span className="flex items-center gap-2 tabular-nums">
-              <span className="flex items-center gap-0.5 text-amber-600">
+              <span className="flex items-center gap-0.5 text-amber-500">
                 <Coins className="w-3.5 h-3.5" />+45
               </span>
-              <span className="flex items-center gap-0.5 text-sky-600">
+              <span className="flex items-center gap-0.5 text-sky-500">
                 <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />+1
               </span>
             </span>
           </div>
 
-          <p className="text-sm font-extrabold text-slate-900 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+          <p
+            className={`text-sm font-extrabold leading-relaxed p-3.5 rounded-2xl border ${
+              isNight ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-200 text-slate-900'
+            }`}
+          >
             {isAr ? q.qAr : q.qEn}
           </p>
 
@@ -122,9 +133,15 @@ export const BonusQuizModal: React.FC<BonusQuizModalProps> = ({
                 className={`w-full text-start p-3 rounded-2xl border-2 text-xs sm:text-sm font-bold transition-colors ${
                   answered
                     ? opt.correct
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-900'
-                      : 'border-slate-200 text-slate-400'
-                    : 'border-slate-200 hover:border-sky-400 hover:bg-sky-50 text-slate-800'
+                      ? isNight
+                        ? 'border-emerald-500 bg-emerald-950/60 text-emerald-200'
+                        : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                      : isNight
+                        ? 'border-slate-700 text-slate-500'
+                        : 'border-slate-200 text-slate-400'
+                    : isNight
+                      ? 'border-slate-700 hover:border-sky-500 hover:bg-slate-800 text-slate-100'
+                      : 'border-slate-200 hover:border-sky-400 hover:bg-sky-50 text-slate-800'
                 }`}
               >
                 {isAr ? opt.ar : opt.en}
@@ -133,10 +150,10 @@ export const BonusQuizModal: React.FC<BonusQuizModalProps> = ({
           </div>
 
           {answered && (
-            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <div className={`flex items-center justify-between pt-2 border-t ${isNight ? 'border-slate-800' : 'border-slate-100'}`}>
               <span
                 className={`text-xs font-extrabold ${
-                  answered === 'correct' ? 'text-emerald-600' : 'text-rose-600'
+                  answered === 'correct' ? 'text-emerald-500' : 'text-rose-500'
                 }`}
               >
                 {answered === 'correct'
