@@ -1,0 +1,271 @@
+export type Language = 'ar' | 'en';
+
+export type NavTab = 'build' | 'furniture' | 'equipment' | 'decor' | 'missions' | 'store';
+
+export type RoomSpecialty =
+  | 'reception'
+  | 'electrotherapy'
+  | 'kinesiotherapy'
+  | 'orthopedics'
+  | 'neurorehab'
+  | 'hydrotherapy';
+
+export type ItemCategory = 'build' | 'furniture' | 'equipment' | 'decor';
+
+export type SpriteKind =
+  | 'reception_desk'
+  | 'waiting_chairs'
+  | 'coffee_table'
+  | 'water_cooler'
+  | 'file_cabinet'
+  | 'treatment_bed'
+  | 'tens_unit'
+  | 'ultrasound_unit'
+  | 'traction_table'
+  | 'treadmill'
+  | 'exercise_bike'
+  | 'wall_bars'
+  | 'ball_rack'
+  | 'exercise_mat'
+  | 'parallel_bars'
+  | 'hydro_sink'
+  | 'potted_plant'
+  | 'park_bench'
+  | 'garden_lamp'
+  | 'flower_bed'
+  | 'therason_sign'
+  | 'partition_wall'
+  | 'anatomy_poster'
+  | 'office_desk'
+  | 'supply_shelf'
+  | 'skeleton_stand';
+
+export interface CatalogItem {
+  id: string;
+  sprite: SpriteKind;
+  category: ItemCategory;
+  nameAr: string;
+  nameEn: string;
+  descAr: string;
+  descEn: string;
+  priceCoins: number;
+  priceStars?: number;
+  width: number; // grid footprint X
+  depth: number; // grid footprint Y
+  satisfactionBonus: number;
+  speedBonus: number; // % treatment speed or capacity value
+  isTreatmentStation?: boolean;
+  stationSpecialty?: RoomSpecialty | 'any';
+  outdoorAllowed?: boolean;
+  indoorAllowed?: boolean;
+  isWallDecor?: boolean;
+}
+
+export interface PlacedItem {
+  instanceId: string;
+  catalogId: string;
+  gridX: number;
+  gridY: number;
+  rotation: 0 | 1 | 2 | 3; // 0 = default, 1 = 90deg, 2 = 180deg, 3 = 270deg
+  roomId: string;
+}
+
+export interface ClinicRoom {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  unlocked: boolean;
+  unlockCost: number;
+  specialty: RoomSpecialty | null;
+  floorTheme: 'tile_blue' | 'gym_royal' | 'tile_mint' | 'wood_warm' | 'locked';
+}
+
+export type StaffRole = 'receptionist' | 'therapist';
+
+export interface StaffMember {
+  id: string;
+  role: StaffRole;
+  nameAr: string;
+  nameEn: string;
+  hired: boolean;
+  hireCost: number;
+  gridX: number;
+  gridY: number;
+  targetX: number;
+  targetY: number;
+  path: Array<{ x: number; y: number }>;
+  skinTone: string;
+  hairColor: string;
+  scrubColor: string;
+  facing: number; // 0..3
+  walkPhase: number;
+  state: 'idle' | 'walking' | 'assisting';
+}
+
+export interface ObjectiveTest {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  category: 'rom' | 'mmt' | 'special' | 'palpation';
+  findingAr: string;
+  findingEn: string;
+  isPositive: boolean;
+}
+
+export interface ClinicalCase {
+  id: string;
+  specialty: RoomSpecialty;
+  patientNameAr: string;
+  patientNameEn: string;
+  age: number;
+  gender: 'male' | 'female';
+  occupationAr: string;
+  occupationEn: string;
+  chiefComplaintAr: string;
+  chiefComplaintEn: string;
+  vasPain: number; // 0-10
+  onsetAr: string;
+  onsetEn: string;
+  aggravatingAr: string;
+  aggravatingEn: string;
+  easingAr: string;
+  easingEn: string;
+  redFlagsPresent: boolean;
+  redFlagClueAr: string;
+  redFlagClueEn: string;
+  objectiveTests: ObjectiveTest[];
+  diagnosisOptions: Array<{
+    id: string;
+    labelAr: string;
+    labelEn: string;
+    isCorrect: boolean;
+  }>;
+  treatmentOptions: Array<{
+    id: string;
+    labelAr: string;
+    labelEn: string;
+    isRecommended: boolean;
+  }>;
+  clinicalPearlAr: string;
+  clinicalPearlEn: string;
+  vitals?: {
+    bp: string;
+    hr: number;
+    spo2: number;
+    temp: string;
+  };
+  mobilityAid?: 'none' | 'cane' | 'crutches';
+}
+
+export type PatientState =
+  | 'arriving'
+  | 'checkin_at_desk'
+  | 'walking_to_wait'
+  | 'waiting_checkin'
+  | 'walking_to_station'
+  | 'ready_for_exam'
+  | 'in_exam'
+  | 'in_treatment'
+  | 'treated_leaving';
+
+export type CharacterPose = 'standing' | 'seated' | 'lying';
+
+export interface PatientEntity {
+  id: string;
+  gridX: number;
+  gridY: number;
+  targetX: number;
+  targetY: number;
+  path: Array<{ x: number; y: number }>;
+  walkPhase: number;
+  facing: number;
+  skinTone: string;
+  hairColor: string;
+  shirtColor: string;
+  pantsColor: string;
+  hasHijab?: boolean;
+  hasBeard?: boolean;
+  hasTurban?: boolean;
+  outfitStyle?: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress';
+  shirtStyle?: 'tshirt' | 'shirt';
+  heightScale?: number;
+  pose?: CharacterPose;
+  state: PatientState;
+  assignedStationId: string | null;
+  waitTimer: number;
+  seatOffsetX?: number;
+  seatOffsetZ?: number;
+  seatFacingRad?: number;
+  treatmentProgress?: number; // 0..1 while in_treatment
+  pendingReward?: {
+    coins: number;
+    stars: number;
+    satisfactionDelta: number;
+    caughtRedFlag: boolean;
+  };
+  clinicalCase: ClinicalCase;
+  isAiGenerated?: boolean;
+}
+
+export interface Mission {
+  id: string;
+  titleAr: string;
+  titleEn: string;
+  descAr: string;
+  descEn: string;
+  type: 'treat_patients' | 'buy_equipment' | 'unlock_room' | 'red_flag_catch' | 'visit_friend';
+  target: number;
+  progress: number;
+  rewardCoins: number;
+  rewardStars: number;
+  claimed: boolean;
+}
+
+export interface FriendClinic {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  universityAr: string;
+  universityEn: string;
+  level: number;
+  stars: number;
+  satisfaction: number;
+  online: boolean;
+  giftedToday: boolean;
+  avatarColor: string;
+  rooms: ClinicRoom[];
+  placedItems: PlacedItem[];
+}
+
+export interface FloatingFeedback {
+  id: string;
+  gridX: number;
+  gridY: number;
+  text: string;
+  color: string;
+  createdAt: number;
+}
+
+export interface ClinicSaveState {
+  version: number;
+  studentId: string;
+  clinicName: string;
+  language: Language;
+  soundEnabled: boolean;
+  coins: number;
+  stars: number;
+  xp?: number;
+  level?: number;
+  satisfaction: number;
+  patientsTreatedTotal: number;
+  redFlagsCaughtTotal: number;
+  rooms: ClinicRoom[];
+  placedItems: PlacedItem[];
+  staff: StaffMember[];
+  missions: Mission[];
+  lastSyncedAt: string | null;
+}

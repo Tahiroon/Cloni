@@ -1,0 +1,307 @@
+{
+  "pt_student_x7w5no": {
+    "studentId": "pt_student_x7w5no",
+    "coins": 1000089,
+    "stars": 10,
+    "satisfaction": 100,
+    "patientsTreatedTotal": 2,
+    "rooms": [
+      {
+        "id": "room_reception",
+        "unlocked": true,
+        "specialty": "reception",
+        "floorTheme": "tile_blue"
+      },
+      {
+        "id": "room_bay_1",
+        "unlocked": true,
+        "specialty": "electrotherapy",
+        "floorTheme": "tile_blue"
+      },
+      {
+        "id": "room_gym",
+        "unlocked": true,
+        "specialty": "kinesiotherapy",
+        "floorTheme": "gym_royal"
+      },
+      {
+        "id": "room_specialty_2",
+        "unlocked": true,
+        "specialty": "neurorehab",
+        "floorTheme": "gym_royal"
+      }
+    ],
+    "placedItems": [
+      {
+        "id": "init_desk",
+        "c": "reception_desk",
+        "x": 10,
+        "y": 10,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_chairs",
+        "c": "waiting_chairs",
+        "x": 12,
+        "y": 13,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_table",
+        "c": "coffee_table",
+        "x": 11,
+        "y": 14,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_cooler",
+        "c": "water_cooler",
+        "x": 9,
+        "y": 9,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_cabinet",
+        "c": "file_cabinet",
+        "x": 9,
+        "y": 8,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_plant_rec",
+        "c": "potted_plant",
+        "x": 13,
+        "y": 9,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_bed_1",
+        "c": "treatment_bed",
+        "x": 3,
+        "y": 13,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_bed_2",
+        "c": "treatment_bed",
+        "x": 3,
+        "y": 11,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_bed_3",
+        "c": "treatment_bed",
+        "x": 3,
+        "y": 9,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_tens_1",
+        "c": "tens_unit",
+        "x": 6,
+        "y": 9,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_us_1",
+        "c": "ultrasound_unit",
+        "x": 6,
+        "y": 14,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_plant_bay",
+        "c": "potted_plant",
+        "x": 2,
+        "y": 14,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_sign",
+        "c": "therason_sign",
+        "x": 16,
+        "y": 13,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_bench_1",
+        "c": "park_bench",
+        "x": 16,
+        "y": 4,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_lamp_1",
+        "c": "garden_lamp",
+        "x": 18,
+        "y": 10,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_lamp_2",
+        "c": "garden_lamp",
+        "x": 18,
+        "y": 13,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_1",
+        "c": "flower_bed",
+        "x": 18,
+        "y": 14,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_2",
+        "c": "flower_bed",
+        "x": 15,
+        "y": 13,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_3",
+        "c": "flower_bed",
+        "x": 17,
+        "y": 3,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "item_1794824837081_nkrx",
+        "c": "garden_lamp",
+        "x": 16,
+        "y": 10,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "item_1794824868169_dctw",
+        "c": "therason_sign",
+        "x": 17,
+        "y": 13,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "item_1794824892281_vjw7",
+        "c": "partition_wall",
+        "x": 3,
+        "y": 10,
+        "r": 1,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1794824907478_sti4",
+        "c": "anatomy_poster",
+        "x": 5,
+        "y": 10,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1794824926334_nb8p",
+        "c": "garden_lamp",
+        "x": 17,
+        "y": 9,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "item_1794824957900_ma0s",
+        "c": "potted_plant",
+        "x": 12,
+        "y": 11,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "item_1794824982366_fapq",
+        "c": "reception_desk",
+        "x": 5,
+        "y": 11,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1794825096044_vkcb",
+        "c": "traction_table",
+        "x": 5,
+        "y": 4,
+        "r": 0,
+        "rm": "room_gym"
+      },
+      {
+        "id": "item_1794825109006_072l",
+        "c": "treadmill",
+        "x": 2,
+        "y": 2,
+        "r": 3,
+        "rm": "room_gym"
+      },
+      {
+        "id": "item_1794825261674_x3kt",
+        "c": "treatment_bed",
+        "x": 10,
+        "y": 12,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "item_1794903635037_18hr",
+        "c": "treatment_bed",
+        "x": 13,
+        "y": 2,
+        "r": 1,
+        "rm": "room_specialty_2"
+      },
+      {
+        "id": "item_1794906853529_wn3f",
+        "c": "skeleton_stand",
+        "x": 10,
+        "y": 9,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "item_1794906905321_n2o4",
+        "c": "ball_rack",
+        "x": 11,
+        "y": 2,
+        "r": 0,
+        "rm": "room_specialty_2"
+      },
+      {
+        "id": "item_1794909760395_yvyn",
+        "c": "coffee_table",
+        "x": 10,
+        "y": 13,
+        "r": 0,
+        "rm": "room_reception"
+      }
+    ],
+    "hiredStaffIds": [
+      "staff_therapist_1",
+      "staff_receptionist"
+    ],
+    "updatedAt": "2026-11-19T11:06:18.169Z",
+    "syncedAt": "2026-11-19T11:06:18.931Z"
+  }
+}
