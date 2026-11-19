@@ -22,7 +22,7 @@ const MODEL_PATHS: Record<string, string> = {
   // Rigged Characters
   char_doctor: '/models/chars/woman_doctor.glb',
   char_woman: '/models/chars/woman_casual.glb',
-  char_woman_formal: '/models/chars/woman_formal.glb',
+  char_woman_formal: '/models/chars/woman_doctor.glb',
   char_woman_suit: '/models/chars/woman_suit.glb',
   char_man1: '/models/chars/man_casual1.glb',
   char_man2: '/models/chars/man_casual2.glb',
