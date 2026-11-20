@@ -70,7 +70,7 @@ export function renderThumbBatch(
   scene.add(hemi, keyLight, rimLight);
 
   const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 40);
-  const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy());
+  const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy(), { catalogOnly: true });
   const box = new THREE.Box3();
   const center = new THREE.Vector3();
   const dims = new THREE.Vector3();

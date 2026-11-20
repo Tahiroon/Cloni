@@ -46,16 +46,6 @@ export interface HumanoidRig {
   hipHeight?: number;
   heightScale?: number;
   bones?: Record<string, SkinnedBoneRef>;
-  // Procedural fallback references
-  torso?: THREE.Group;
-  headGroup?: THREE.Group;
-  leftArm?: THREE.Group;
-  rightArm?: THREE.Group;
-  leftLeg?: THREE.Group;
-  rightLeg?: THREE.Group;
-  leftShin?: THREE.Group;
-  rightShin?: THREE.Group;
-  robePivot?: THREE.Group;
 }
 
 const _euler = new THREE.Euler();
@@ -1166,165 +1156,12 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     };
   }
 
-  // Fallback anatomical procedural rig during the initial <200ms GLB preload
-  const skinMat = makeSkinMat(skinCol.getHex(), appearance, 0.62);
-  const hairMat = colorMat(appearance.hairColor, 0.84, 0.02);
-  const shirtMat = makeClothMat(appearance.shirtColor, appearance, 0.8, 0.45);
-  const isFullRobeFallback =
-    outfitStyle === 'jalabiya' ||
-    outfitStyle === 'abaya' ||
-    outfitStyle === 'abaya_open' ||
-    outfitStyle === 'dress';
-  const pantsMat = makeClothMat(
-    isFullRobeFallback ? appearance.shirtColor : appearance.pantsColor,
-    appearance,
-    0.82,
-    0.35
-  );
-  const shoeMat = makeLeatherMat(appearance.isStaff ? 0xf8fafc : 0x1e293b, appearance, 0.48);
-  const coatMat = makeClothMat(0xf1f5f9, appearance, 0.72, 0.38);
-
-  const makeLeg = (xOffset: number) => {
-    const legPivot = new THREE.Group();
-    legPivot.position.set(xOffset, 0.44, 0);
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.048, 0.22, 16), pantsMat);
-    thigh.position.y = -0.11;
-    legPivot.add(thigh);
-    const shinPivot = new THREE.Group();
-    shinPivot.position.set(0, -0.22, 0);
-    legPivot.add(shinPivot);
-    const calf = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.038, 0.21, 16), pantsMat);
-    calf.position.y = -0.1;
-    shinPivot.add(calf);
-    const shoe = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.07, 6, 12), shoeMat);
-    shoe.rotation.x = Math.PI / 2;
-    shoe.position.set(0, -0.205, 0.03);
-    shinPivot.add(shoe);
-    return { legPivot, shinPivot };
-  };
-  const leftL = makeLeg(-0.078);
-  const rightL = makeLeg(0.078);
-  bodyPivot.add(leftL.legPivot, rightL.legPivot);
-
-  const torso = new THREE.Group();
-  torso.position.set(0, 0.44, 0);
-  bodyPivot.add(torso);
-  const torsoProfile = [
-    new THREE.Vector2(0.02, 0.0),
-    new THREE.Vector2(0.115, 0.03),
-    new THREE.Vector2(0.102, 0.14),
-    new THREE.Vector2(0.132, 0.28),
-    new THREE.Vector2(0.122, 0.34),
-    new THREE.Vector2(0.052, 0.365),
-  ];
-  const torsoMesh = new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 20), shirtMat);
-  torsoMesh.scale.set(1.08, 1.0, 0.72);
-  torso.add(torsoMesh);
-
-  let robePivot: THREE.Group | undefined;
-  if (isFullRobeFallback) {
-    robePivot = new THREE.Group();
-    const robeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.128, 0.175, 0.38, 20), shirtMat);
-    robeMesh.scale.set(1.06, 1, 0.8);
-    robeMesh.position.y = -0.19;
-    robePivot.add(robeMesh);
-    torso.add(robePivot);
-  }
-
-  const makeArm = (xOffset: number) => {
-    const armPivot = new THREE.Group();
-    armPivot.position.set(xOffset, 0.31, 0);
-    const sleeveMat = appearance.isStaff && appearance.role === 'therapist' ? coatMat : shirtMat;
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.032, 0.26, 14), sleeveMat);
-    arm.position.y = -0.13;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.034, 14, 10), skinMat);
-    hand.position.y = -0.27;
-    armPivot.add(arm, hand);
-    return armPivot;
-  };
-  const leftArm = makeArm(-0.16);
-  const rightArm = makeArm(0.16);
-  const fallbackCup = new THREE.Group();
-  const fbCupBody = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.034, 0.024, 0.08, 14),
-    colorMat(0xf8fafc, 0.45, 0.02)
-  );
-  const fbCupWater = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.03, 0.027, 0.014, 14),
-    colorMat(0x38bdf8, 0.18, 0.05)
-  );
-  fbCupWater.position.y = 0.026;
-  fallbackCup.add(fbCupBody, fbCupWater);
-  fallbackCup.position.set(0, -0.27, 0.045);
-  fallbackCup.visible = false;
-  rightArm.add(fallbackCup);
-  const fallbackFile = new THREE.Group();
-  const fbFolder = new THREE.Mesh(
-    new THREE.BoxGeometry(0.2, 0.016, 0.26),
-    colorMat(0x0284c7, 0.5, 0.04)
-  );
-  const fbPages = new THREE.Mesh(
-    new THREE.BoxGeometry(0.175, 0.009, 0.235),
-    colorMat(0xf8fafc, 0.65, 0.0)
-  );
-  fbPages.position.set(0.005, 0.004, 0.008);
-  fallbackFile.add(fbFolder, fbPages);
-  fallbackFile.position.set(-0.01, -0.26, 0.045);
-  fallbackFile.rotation.set(0.15, 0, 1.25);
-  fallbackFile.visible = false;
-  rightArm.add(fallbackFile);
-  torso.add(leftArm, rightArm);
-
-  const headGroup = new THREE.Group();
-  headGroup.position.set(0, 0.365, 0);
-  torso.add(headGroup);
-  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.102, 20, 16), skinMat);
-  cranium.position.y = 0.135;
-  headGroup.add(cranium);
-  if (appearance.hasHijab) {
-    const hood = new THREE.Mesh(
-      new THREE.SphereGeometry(0.114, 20, 16),
-      colorMat(tarhaCol.getHex())
-    );
-    hood.position.set(0, 0.14, -0.014);
-    headGroup.add(hood);
-  } else if (appearance.hasTurban) {
-    const emma = new THREE.Mesh(new THREE.CylinderGeometry(0.118, 0.112, 0.08, 20), colorMat(0xf4f2ec));
-    emma.position.set(0, 0.215, 0);
-    headGroup.add(emma);
-  } else {
-    const hair = new THREE.Mesh(
-      new THREE.SphereGeometry(0.106, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.6),
-      hairMat
-    );
-    hair.position.set(0, 0.142, -0.01);
-    headGroup.add(hair);
-  }
-
-  bodyPivot.traverse((child) => {
-    if ((child as THREE.Mesh).isMesh) {
-      child.castShadow = true;
-      child.receiveShadow = true;
-    }
-  });
-
   return {
     root,
     bodyPivot,
     selectRing,
     hitMesh,
-    handCup: fallbackCup,
-    handFile: fallbackFile,
     isSkinnedGlb: false,
-    robePivot,
-    torso,
-    headGroup,
-    leftArm,
-    rightArm,
-    leftLeg: leftL.legPivot,
-    rightLeg: rightL.legPivot,
-    leftShin: leftL.shinPivot,
-    rightShin: rightL.shinPivot,
   };
 }
 
@@ -2160,70 +1997,6 @@ export function animateHumanoid3D(
     );
     return;
   }
-
-  // Fallback procedural rig animation
-  if (!rig.torso || !rig.leftLeg || !rig.rightLeg || !rig.leftArm || !rig.rightArm || !rig.leftShin || !rig.rightShin || !rig.headGroup) {
-    return;
-  }
-  rig.root.rotation.y = facingRad;
-  if (lie > 0.05) {
-    const fbHipH = 0.62 * hScale;
-    const fbSitY = THREE.MathUtils.clamp(0.08 + seatHeight - 0.39, -0.4, 0.18);
-    const fbTheta = THREE.MathUtils.lerp(0, tiltPitch, lie);
-    const fbLieZ = bedBodyZOffset ?? -0.35;
-    const fbHipStartY = fbSitY + fbHipH;
-    const fbHipEndY = lyingHeight + 0.05 + fbHipH * Math.cos(tiltPitch);
-    const fbHipEndZ = fbLieZ + fbHipH * Math.sin(tiltPitch);
-    const fbHipY = THREE.MathUtils.lerp(fbHipStartY, fbHipEndY, lie);
-    const fbHipZ = THREE.MathUtils.lerp(0, fbHipEndZ, lie);
-    rig.bodyPivot.rotation.set(fbTheta, 0, 0);
-    rig.bodyPivot.position.set(
-      0,
-      fbHipY - fbHipH * Math.cos(fbTheta),
-      fbHipZ - fbHipH * Math.sin(fbTheta)
-    );
-    const fbShinFrac = THREE.MathUtils.clamp((lie - 0.1) / 0.72, 0, 1);
-    const fbShinBlend = fbShinFrac * fbShinFrac * (3 - 2 * fbShinFrac);
-    rig.leftLeg.rotation.x = THREE.MathUtils.lerp(-Math.PI * 0.45, 0, lie);
-    rig.rightLeg.rotation.x = THREE.MathUtils.lerp(-Math.PI * 0.45, 0, lie);
-    rig.leftShin.rotation.x = THREE.MathUtils.lerp(Math.PI * 0.45, 0, fbShinBlend);
-    rig.rightShin.rotation.x = THREE.MathUtils.lerp(Math.PI * 0.45, 0, fbShinBlend);
-    rig.headGroup.rotation.y = Math.sin(t * 0.3) * 0.15;
-    return;
-  }
-  rig.bodyPivot.rotation.set(0, 0, 0);
-  if (sit > 0.05) {
-    const fbSitY = THREE.MathUtils.clamp(0.08 + seatHeight - 0.39, -0.4, 0.18);
-    rig.bodyPivot.position.set(0, THREE.MathUtils.lerp(0.05, fbSitY, sit), THREE.MathUtils.lerp(0, -0.01, sit));
-    rig.leftLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.44, sit);
-    rig.rightLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.44, sit);
-    rig.leftShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.45, sit);
-    rig.rightShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.45, sit);
-    const fbArm = seatedActivity === 'typing' ? -0.45 - Math.sin(timeSec * 12) * 0.05 : -0.15;
-    rig.leftArm.rotation.x = THREE.MathUtils.lerp(0, fbArm, sit);
-    rig.rightArm.rotation.x = THREE.MathUtils.lerp(0, fbArm, sit);
-    rig.headGroup.rotation.y = Math.sin(t * 0.45) * 0.18;
-    return;
-  }
-  rig.bodyPivot.position.set(0, 0.05, 0);
-  const fbClimb = THREE.MathUtils.clamp(stairClimb, 0, 1);
-  const fbDesc = THREE.MathUtils.clamp(-stairClimb, 0, 1);
-  const swing = isMoving ? Math.sin(walkPhase) * (0.42 + 0.12 * fbClimb - 0.1 * fbDesc) : 0;
-  const fbCos = Math.cos(walkPhase);
-  rig.leftLeg.rotation.x = swing - (isMoving ? Math.max(0, fbCos) * 0.24 * fbClimb : 0);
-  rig.rightLeg.rotation.x = -swing - (isMoving ? Math.max(0, -fbCos) * 0.24 * fbClimb : 0);
-  rig.leftShin.rotation.x = isMoving ? Math.max(0, fbCos) * (0.58 + 0.25 * fbClimb) + 0.22 * fbDesc : 0.04;
-  rig.rightShin.rotation.x = isMoving ? Math.max(0, -fbCos) * (0.58 + 0.25 * fbClimb) + 0.22 * fbDesc : 0.04;
-  rig.torso.rotation.x = isMoving ? 0.1 * fbClimb - 0.04 * fbDesc : activePlaceFile ? 0.18 * placeReach : 0;
-  rig.leftArm.rotation.x = -swing * 0.65;
-  rig.rightArm.rotation.x = activePickFile
-    ? -0.92
-    : activePlaceFile
-      ? THREE.MathUtils.lerp(-0.45, -1.05, placeReach)
-      : holdingFile && !activePickFile
-        ? -0.45
-        : THREE.MathUtils.lerp(swing * 0.65, -0.95, THREE.MathUtils.clamp(doorPush, 0, 1));
-  rig.headGroup.rotation.y = Math.sin(t * 0.5) * 0.14;
 }
 
 export function disposeHumanoid3D(rig: HumanoidRig) {

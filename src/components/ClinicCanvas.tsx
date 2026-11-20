@@ -216,6 +216,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const pointerSurfaceRef = useRef<HTMLDivElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [zoomUi, setZoomUi] = useState(DEFAULT_ZOOM);
+  const [glbsReady, setGlbsReady] = useState<boolean>(() => glbRegistry.ready);
   const zoomUiRef = useRef(DEFAULT_ZOOM);
   zoomUiRef.current = zoomUi;
   const hoveredEditItemIdRef = useRef<string | null>(null);
@@ -481,8 +482,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     });
     const gl = renderer.getContext();
 
-    const initW = Math.max(1, container.clientWidth);
-    const initH = Math.max(1, container.clientHeight);
+    let containerW = Math.max(1, container.clientWidth);
+    let containerH = Math.max(1, container.clientHeight);
+    const initW = containerW;
+    const initH = containerH;
     const maxTexSize = renderer.capabilities.maxTextureSize || 2048;
     const maxRbSize = Number(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)) || maxTexSize;
     const maxSurfaceSize = Math.max(512, Math.min(maxTexSize, maxRbSize));
@@ -530,11 +533,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     sunLight.target.position.set(13, 0, 12);
     scene.add(sunLight.target);
     if (!isSoftwareGl) {
-      const shadowRes = isMobileGpu
-        ? Math.min(2048, maxTexSize)
-        : maxTexSize >= 8192
-          ? 4096
-          : Math.min(2048, maxTexSize);
+      const shadowRes = Math.min(2048, maxTexSize);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
       sunLight.shadow.camera.near = 6;
@@ -864,38 +863,42 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       },
     ];
 
-    const walkerRigs: AmbientWalker[] = walkerSpecs.map((spec) => {
-      const rig = createHumanoid3D({
-        ...spec.appearance,
-        ...pbrCharMaps,
-      });
-      rig.hitMesh.visible = false;
-      actorsLayer.add(rig.root);
-      return {
-        ...spec,
-        rig,
-        path: [],
-        pauseTimer: 0.2 + Math.random() * 1.4,
-        stuckTimer: 0,
-        visX: spec.gx + 0.5,
-        visZ: spec.gy + 0.5,
-        groundY: getSurfaceElevation(spec.gx + 0.5, spec.gy + 0.5).actorY,
-        stairClimb: 0,
-        vx: 0,
-        vz: 0,
-        walkPhase: Math.random() * Math.PI * 2,
-        walkBlend: 0,
-        sitBlend: 0,
-        doorPush: 0,
-        facingRad: Math.random() * Math.PI * 2 - Math.PI,
-        subOffX: (Math.random() - 0.5) * 0.26,
-        subOffZ: (Math.random() - 0.5) * 0.26,
-        progressTimer: 0,
-        progressRefX: spec.gx,
-        progressRefY: spec.gy,
-        turnWaitTimer: 0,
-      };
-    });
+    const walkerRigs: AmbientWalker[] = [];
+    const initWalkers = () => {
+      if (walkerRigs.length > 0) return;
+      for (const spec of walkerSpecs) {
+        const rig = createHumanoid3D({
+          ...spec.appearance,
+          ...pbrCharMaps,
+        });
+        rig.hitMesh.visible = false;
+        actorsLayer.add(rig.root);
+        walkerRigs.push({
+          ...spec,
+          rig,
+          path: [],
+          pauseTimer: 0.2 + Math.random() * 1.4,
+          stuckTimer: 0,
+          visX: spec.gx + 0.5,
+          visZ: spec.gy + 0.5,
+          groundY: getSurfaceElevation(spec.gx + 0.5, spec.gy + 0.5).actorY,
+          stairClimb: 0,
+          vx: 0,
+          vz: 0,
+          walkPhase: Math.random() * Math.PI * 2,
+          walkBlend: 0,
+          sitBlend: 0,
+          doorPush: 0,
+          facingRad: Math.random() * Math.PI * 2 - Math.PI,
+          subOffX: (Math.random() - 0.5) * 0.26,
+          subOffZ: (Math.random() - 0.5) * 0.26,
+          progressTimer: 0,
+          progressRefX: spec.gx,
+          progressRefY: spec.gy,
+          turnWaitTimer: 0,
+        });
+      }
+    };
 
     let draftMeshSig = '';
     let draftGhost: THREE.Group | null = null;
@@ -936,6 +939,75 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       distance: number;
       decay: number;
     }
+
+    const _roomTargetPool: LightTarget[] = Array.from({ length: 16 }, () => ({
+      x: 0, y: 0, z: 0, color: 0, intensity: 0, distance: 0, decay: 1,
+    }));
+    const _lampTargetPool: Array<{ score: number; target: LightTarget }> = Array.from(
+      { length: 48 },
+      () => ({
+        score: 0,
+        target: { x: 0, y: 0, z: 0, color: 0, intensity: 0, distance: 0, decay: 1 },
+      })
+    );
+    const _roomTargetsScratch: LightTarget[] = [];
+    const _lampTargetsScratch: Array<{ score: number; target: LightTarget }> = [];
+    const _selectedTargetsScratch: LightTarget[] = [];
+
+    const pushRoomTarget = (
+      x: number,
+      y: number,
+      z: number,
+      color: number,
+      intensity: number,
+      distance: number,
+      decay: number
+    ) => {
+      const idx = _roomTargetsScratch.length;
+      if (idx >= _roomTargetPool.length) {
+        _roomTargetPool.push({ x, y, z, color, intensity, distance, decay });
+      } else {
+        const slot = _roomTargetPool[idx];
+        slot.x = x;
+        slot.y = y;
+        slot.z = z;
+        slot.color = color;
+        slot.intensity = intensity;
+        slot.distance = distance;
+        slot.decay = decay;
+      }
+      _roomTargetsScratch.push(_roomTargetPool[idx]);
+    };
+
+    const pushLampTarget = (
+      score: number,
+      x: number,
+      y: number,
+      z: number,
+      color: number,
+      intensity: number,
+      distance: number,
+      decay: number
+    ) => {
+      const idx = _lampTargetsScratch.length;
+      if (idx >= _lampTargetPool.length) {
+        _lampTargetPool.push({
+          score,
+          target: { x, y, z, color, intensity, distance, decay },
+        });
+      } else {
+        const slot = _lampTargetPool[idx];
+        slot.score = score;
+        slot.target.x = x;
+        slot.target.y = y;
+        slot.target.z = z;
+        slot.target.color = color;
+        slot.target.intensity = intensity;
+        slot.target.distance = distance;
+        slot.target.decay = decay;
+      }
+      _lampTargetsScratch.push(_lampTargetPool[idx]);
+    };
 
     const updateAtmosphereAndLights = (timeSec: number, dt: number) => {
       const targetNight = latestRef.current.lightingMode === 'night' ? 1 : 0;
@@ -983,8 +1055,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         worldHandle.pillarLanternMat.emissiveIntensity = 0.06 + nightBlend * 0.85;
       }
 
-      const roomTargets: LightTarget[] = [];
-      const lampTargets: Array<{ score: number; target: LightTarget }> = [];
+      _roomTargetsScratch.length = 0;
+      _lampTargetsScratch.length = 0;
       const curRooms = latestRef.current.rooms;
       const curPatients = latestRef.current.patients;
       const curStaff = latestRef.current.staff;
@@ -1043,28 +1115,28 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
           if (isOccupied) {
             const anchor = worldHandle?.roomSconceAnchors.get(room.id);
-            roomTargets.push({
-              x: anchor ? anchor.x : room.minX + 1.2,
-              y: anchor ? anchor.y : 2.1,
-              z: anchor ? anchor.z : (room.minY + room.maxY + 1) / 2,
-              color: 0xfff2d8,
-              intensity: 14.5 * nightBlend,
-              distance: 16.5,
-              decay: 0.95,
-            });
+            pushRoomTarget(
+              anchor ? anchor.x : room.minX + 1.2,
+              anchor ? anchor.y : 2.1,
+              anchor ? anchor.z : (room.minY + room.maxY + 1) / 2,
+              0xfff2d8,
+              14.5 * nightBlend,
+              16.5,
+              0.95
+            );
           }
         }
 
         // 2. Architectural entrance canopy sconce illuminating the courtyard steps & facade
-        roomTargets.push({
-          x: 22.45,
-          y: 2.85 + CLINIC_FLOOR_ELEV,
-          z: 15.0,
-          color: 0xffd796,
-          intensity: 4.8 * nightBlend,
-          distance: 10.0,
-          decay: 1.05,
-        });
+        pushRoomTarget(
+          22.45,
+          2.85 + CLINIC_FLOOR_ELEV,
+          15.0,
+          0xffd796,
+          4.8 * nightBlend,
+          10.0,
+          1.05
+        );
       } else if (worldHandle) {
         for (const roomMat of worldHandle.roomLightMats.values()) {
           roomMat.emissiveIntensity = 0.04;
@@ -1112,111 +1184,99 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             (_lightWorldPos.z - camCz) * (_lightWorldPos.z - camCz);
 
           if (meta.kind === 'street_lamp') {
-            lampTargets.push({
-              score: distSq * 0.8,
-              target: {
-                x: _lightWorldPos.x,
-                y: _lightWorldPos.y,
-                z: _lightWorldPos.z,
-                color: 0xffd591,
-                intensity: 16.0 * nightBlend,
-                distance: 19.0,
-                decay: 1.0,
-              },
-            });
+            pushLampTarget(
+              distSq * 0.8,
+              _lightWorldPos.x,
+              _lightWorldPos.y,
+              _lightWorldPos.z,
+              0xffd591,
+              16.0 * nightBlend,
+              19.0,
+              1.0
+            );
           } else if (meta.kind === 'garden_lamp') {
-            lampTargets.push({
-              score: distSq + 10,
-              target: {
-                x: _lightWorldPos.x,
-                y: _lightWorldPos.y,
-                z: _lightWorldPos.z,
-                color: 0xffcc78,
-                intensity: 11.0 * nightBlend,
-                distance: 13.5,
-                decay: 1.02,
-              },
-            });
+            pushLampTarget(
+              distSq + 10,
+              _lightWorldPos.x,
+              _lightWorldPos.y,
+              _lightWorldPos.z,
+              0xffcc78,
+              11.0 * nightBlend,
+              13.5,
+              1.02
+            );
           } else if (meta.kind === 'indoor_lamp') {
-            lampTargets.push({
-              score: distSq + 16,
-              target: {
-                x: _lightWorldPos.x,
-                y: _lightWorldPos.y,
-                z: _lightWorldPos.z,
-                color: 0xffe8bf,
-                intensity: 8.5 * nightBlend,
-                distance: 11.5,
-                decay: 1.02,
-              },
-            });
+            pushLampTarget(
+              distSq + 16,
+              _lightWorldPos.x,
+              _lightWorldPos.y,
+              _lightWorldPos.z,
+              0xffe8bf,
+              8.5 * nightBlend,
+              11.5,
+              1.02
+            );
           } else if (meta.kind === 'wall_lamp') {
-            lampTargets.push({
-              score: distSq + 18,
-              target: {
-                x: _lightWorldPos.x,
-                y: _lightWorldPos.y,
-                z: _lightWorldPos.z,
-                color: 0xffd79e,
-                intensity: 7.2 * nightBlend,
-                distance: 10.5,
-                decay: 1.04,
-              },
-            });
+            pushLampTarget(
+              distSq + 18,
+              _lightWorldPos.x,
+              _lightWorldPos.y,
+              _lightWorldPos.z,
+              0xffd79e,
+              7.2 * nightBlend,
+              10.5,
+              1.04
+            );
           } else if (meta.kind === 'ir_lamp') {
-            lampTargets.push({
-              score: distSq + 24,
-              target: {
-                x: _lightWorldPos.x,
-                y: _lightWorldPos.y,
-                z: _lightWorldPos.z,
-                color: 0xff6b5a,
-                intensity: 5.2 * nightBlend,
-                distance: 7.5,
-                decay: 1.08,
-              },
-            });
+            pushLampTarget(
+              distSq + 24,
+              _lightWorldPos.x,
+              _lightWorldPos.y,
+              _lightWorldPos.z,
+              0xff6b5a,
+              5.2 * nightBlend,
+              7.5,
+              1.08
+            );
           } else {
-            lampTargets.push({
-              score: distSq + 36,
-              target: {
-                x: _lightWorldPos.x,
-                y: _lightWorldPos.y,
-                z: _lightWorldPos.z,
-                color: 0x38bdf8,
-                intensity: 5.5 * nightBlend,
-                distance: 9.0,
-                decay: 1.08,
-              },
-            });
+            pushLampTarget(
+              distSq + 36,
+              _lightWorldPos.x,
+              _lightWorldPos.y,
+              _lightWorldPos.z,
+              0x38bdf8,
+              5.5 * nightBlend,
+              9.0,
+              1.08
+            );
           }
         }
       }
 
       // Reserve slots fairly so store lamps NEVER get starved by room sconces
       const reservedLampSlots = Math.min(
-        lampTargets.length,
+        _lampTargetsScratch.length,
         Math.max(2, Math.floor(SMART_LIGHT_POOL_SIZE * 0.45))
       );
       const maxRoomSlotsNow = Math.max(0, SMART_LIGHT_POOL_SIZE - reservedLampSlots);
-      const targets: LightTarget[] = [];
+      _selectedTargetsScratch.length = 0;
 
-      for (let i = 0; i < roomTargets.length && targets.length < maxRoomSlotsNow; i++) {
-        targets.push(roomTargets[i]);
+      for (let i = 0; i < _roomTargetsScratch.length && _selectedTargetsScratch.length < maxRoomSlotsNow; i++) {
+        _selectedTargetsScratch.push(_roomTargetsScratch[i]);
       }
-      if (lampTargets.length > 0) {
-        lampTargets.sort((a, b) => a.score - b.score);
-        for (let i = 0; i < lampTargets.length && targets.length < SMART_LIGHT_POOL_SIZE; i++) {
-          targets.push(lampTargets[i].target);
+      if (_lampTargetsScratch.length > 0) {
+        _lampTargetsScratch.sort((a, b) => a.score - b.score);
+        for (let i = 0; i < _lampTargetsScratch.length && _selectedTargetsScratch.length < SMART_LIGHT_POOL_SIZE; i++) {
+          _selectedTargetsScratch.push(_lampTargetsScratch[i].target);
         }
       }
-      for (let i = maxRoomSlotsNow; i < roomTargets.length && targets.length < SMART_LIGHT_POOL_SIZE; i++) {
-        targets.push(roomTargets[i]);
+      for (let i = maxRoomSlotsNow; i < _roomTargetsScratch.length && _selectedTargetsScratch.length < SMART_LIGHT_POOL_SIZE; i++) {
+        _selectedTargetsScratch.push(_roomTargetsScratch[i]);
       }
 
       for (let i = 0; i < smartLightPool.length; i++) {
         const pl = smartLightPool[i];
-        const t = targets[i];
+        const t = _selectedTargetsScratch[i];
         if (t) {
           pl.position.set(t.x, t.y, t.z);
           _tmpLightColor.setHex(t.color);
@@ -1231,6 +1291,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     };
 
     const rebuildWorld = (nextRooms: ClinicRoom[], nextRemovedTreeIds: string[] = []) => {
+      if (!glbRegistry.ready) return;
       if (worldHandle) worldHandle.dispose();
       while (worldLayer.children.length > 0) {
         worldLayer.remove(worldLayer.children[0]);
@@ -1271,6 +1332,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       gx >= 1.98 && gx < 22 && gy >= 1.98 && gy < 22;
 
     const syncItems = (nextItems: PlacedItem[], movingId?: string) => {
+      if (!glbRegistry.ready) return;
       const keepIds = new Set<string>();
       const catMap = latestRef.current.catalogMap;
       let foundKiosk = false;
@@ -1318,6 +1380,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     };
 
     const syncDraft = (draft: PlacementDraft | null) => {
+      if (!glbRegistry.ready) return;
       hasDraftDisplayKiosk = Boolean(draft && draft.catalogItem.sprite === 'reception_display_stand');
       if (!draft) {
         draftPadMesh.visible = false;
@@ -1377,52 +1440,28 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
     };
 
-    startPreloadGlbs(maxAniso);
-    rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
-    syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
-    syncDraft(latestRef.current.placementDraft);
-
-    const unsubGlb = glbRegistry.onReady(() => {
-      if (disposed) return;
+    let sceneAssetsInitialized = false;
+    const initSceneAssets = () => {
+      if (disposed || sceneAssetsInitialized || !glbRegistry.ready) return;
+      sceneAssetsInitialized = true;
+      initWalkers();
       rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
-      for (const entry of itemMeshes.values()) {
-        itemsLayer.remove(entry.mesh);
-        disposeObject3D(entry.mesh);
-      }
-      itemMeshes.clear();
       syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
-      if (latestRef.current.placementDraft) {
-        draftMeshSig = '';
-        syncDraft(latestRef.current.placementDraft);
+      syncDraft(latestRef.current.placementDraft);
+      updateCameraTransform();
+      if (!isSoftwareGl) {
+        renderer.compile(scene, camera);
       }
-      for (const [id, entry] of patientRigs.entries()) {
-        if (!entry.rig.isSkinnedGlb) {
-          actorsLayer.remove(entry.rig.root);
-          disposeHumanoid3D(entry.rig);
-          patientRigs.delete(id);
-        }
-      }
-      for (const [id, entry] of staffRigs.entries()) {
-        if (!entry.rig.isSkinnedGlb) {
-          actorsLayer.remove(entry.rig.root);
-          disposeHumanoid3D(entry.rig);
-          staffRigs.delete(id);
-        }
-      }
-      for (const w of walkerRigs) {
-        if (!w.rig.isSkinnedGlb) {
-          actorsLayer.remove(w.rig.root);
-          disposeHumanoid3D(w.rig);
-          const nextRig = createHumanoid3D({
-            ...w.appearance,
-            ...pbrCharMaps,
-          });
-          nextRig.hitMesh.visible = false;
-          actorsLayer.add(nextRig.root);
-          w.rig = nextRig;
-        }
-      }
+      setGlbsReady(true);
+    };
+
+    startPreloadGlbs(maxAniso);
+    const unsubGlb = glbRegistry.onReady(() => {
+      initSceneAssets();
     });
+    if (glbRegistry.ready) {
+      initSceneAssets();
+    }
 
     // Pre-allocated scratch vectors
     const _raycaster = new THREE.Raycaster();
@@ -1437,8 +1476,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const _upVec = new THREE.Vector3(0, 1, 0);
 
     const updateCameraTransform = () => {
-      const w = Math.max(1, container.clientWidth);
-      const h = Math.max(1, container.clientHeight);
+      const w = containerW;
+      const h = containerH;
       const aspect = w / h;
       if (Math.abs(camera.aspect - aspect) > 0.001) {
         camera.aspect = aspect;
@@ -1715,7 +1754,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       _camFwd.y = 0;
       _camFwd.normalize();
       _camRight.crossVectors(_camFwd, _upVec).normalize();
-      const h = Math.max(1, container.clientHeight);
+      const h = containerH;
       const dist = camera.position.distanceTo(
         _hitPoint.set(camStateRef.current.curX, 0.35, camStateRef.current.curZ)
       );
@@ -1739,16 +1778,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       getPanVectors,
     };
 
-    if (!isSoftwareGl) {
-      updateCameraTransform();
-      renderer.compile(scene, camera);
-    }
-
     let lastComposerDpr = dpr;
     const onResize = () => {
       if (!container) return;
-      const w = Math.max(1, container.clientWidth);
-      const h = Math.max(1, container.clientHeight);
+      containerW = Math.max(1, container.clientWidth);
+      containerH = Math.max(1, container.clientHeight);
+      const w = containerW;
+      const h = containerH;
       const curDpr = getTargetDpr(w, h);
       renderer.setPixelRatio(curDpr);
       renderer.setSize(w, h);
@@ -1797,7 +1833,25 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     let lastMs = performance.now();
     const doorActorsScratch: DoorActorInput[] = [];
 
+    let cachedUnlockedRoomsSig = '';
+    const cachedUnlockedRoomsSet = new Set<string>();
+    const getUnlockedRoomsSet = (curRooms: ClinicRoom[]) => {
+      let sig = '';
+      for (let i = 0; i < curRooms.length; i++) {
+        if (curRooms[i].unlocked) sig += curRooms[i].id + ',';
+      }
+      if (sig !== cachedUnlockedRoomsSig) {
+        cachedUnlockedRoomsSig = sig;
+        cachedUnlockedRoomsSet.clear();
+        for (let i = 0; i < curRooms.length; i++) {
+          if (curRooms[i].unlocked) cachedUnlockedRoomsSet.add(curRooms[i].id);
+        }
+      }
+      return cachedUnlockedRoomsSet;
+    };
+
     const syncAndAnimateActors = (timeSec: number, dt: number) => {
+      if (!glbRegistry.ready) return;
       const {
         patients: curPatients,
         staff: curStaff,
@@ -1812,7 +1866,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         curItems,
         latestRef.current.removedTreeIds || []
       );
-      const unlockedSet = new Set(curRooms.filter((r) => r.unlocked).map((r) => r.id));
+      const unlockedSet = getUnlockedRoomsSet(curRooms);
       const worldDoors = worldHandle ? worldHandle.doors : [];
 
       if (layoutChanged) {
@@ -4241,23 +4295,37 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
     };
 
+    let cachedOverlayCanvas: HTMLCanvasElement | null = null;
+    let cachedOverlayCtx: CanvasRenderingContext2D | null = null;
+    const _sp0 = { x: 0, y: 0 };
+    const _sp1 = { x: 0, y: 0 };
+    const _sp2 = { x: 0, y: 0 };
+    const _sp3 = { x: 0, y: 0 };
+
     const drawOverlayBadges = (timeMs: number) => {
       const overlay = overlayCanvasRef.current;
       if (!overlay) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
+      const w = containerW;
+      const h = containerH;
       if (w < 1 || h < 1) return;
 
       const odpr = getTargetDpr(w, h);
-      if (overlay.width !== Math.floor(w * odpr) || overlay.height !== Math.floor(h * odpr)) {
-        overlay.width = Math.floor(w * odpr);
-        overlay.height = Math.floor(h * odpr);
+      const targetOvW = Math.floor(w * odpr);
+      const targetOvH = Math.floor(h * odpr);
+      if (overlay.width !== targetOvW || overlay.height !== targetOvH) {
+        overlay.width = targetOvW;
+        overlay.height = targetOvH;
       }
 
-      const ctx = overlay.getContext('2d');
+      if (overlay !== cachedOverlayCanvas) {
+        cachedOverlayCanvas = overlay;
+        cachedOverlayCtx = overlay.getContext('2d');
+      }
+      const ctx = cachedOverlayCtx;
       if (!ctx) return;
       ctx.setTransform(odpr, 0, 0, odpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      if (!sceneAssetsInitialized) return;
 
       const {
         rooms: curRooms,
@@ -4271,12 +4339,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         isPlacementValid: checkValid,
       } = latestRef.current;
 
-      const projectToScreen = (wx: number, wy: number, wz: number) => {
+      const projectToScreen = (
+        wx: number,
+        wy: number,
+        wz: number,
+        out: { x: number; y: number } = _sp0
+      ) => {
         _projVec.set(wx, wy, wz).project(camera);
-        return {
-          x: (_projVec.x * 0.5 + 0.5) * w,
-          y: (-_projVec.y * 0.5 + 0.5) * h,
-        };
+        out.x = (_projVec.x * 0.5 + 0.5) * w;
+        out.y = (-_projVec.y * 0.5 + 0.5) * h;
+        return out;
       };
 
       const drawWallBracket = (
@@ -4290,30 +4362,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const onOuter = (rot === 0 && gx === 2) || (rot === 1 && gy === 2);
         const yLow = (onOuter ? 1.18 : 0.78) + CLINIC_FLOOR_ELEV;
         const yHigh = (onOuter ? 2.18 : 1.72) + CLINIC_FLOOR_ELEV;
-        let w1: { x: number; y: number };
-        let w2: { x: number; y: number };
-        let w3: { x: number; y: number };
-        let w4: { x: number; y: number };
         if (rot === 0) {
           const wx = gx === 2 ? 2.155 : 12.105;
-          w1 = projectToScreen(wx, yLow, gy + 0.08);
-          w2 = projectToScreen(wx, yLow, gy + 0.92);
-          w3 = projectToScreen(wx, yHigh, gy + 0.92);
-          w4 = projectToScreen(wx, yHigh, gy + 0.08);
+          projectToScreen(wx, yLow, gy + 0.08, _sp0);
+          projectToScreen(wx, yLow, gy + 0.92, _sp1);
+          projectToScreen(wx, yHigh, gy + 0.92, _sp2);
+          projectToScreen(wx, yHigh, gy + 0.08, _sp3);
         } else {
           const wz = gy === 2 ? 2.155 : 10.105;
-          w1 = projectToScreen(gx + 0.08, yLow, wz);
-          w2 = projectToScreen(gx + 0.92, yLow, wz);
-          w3 = projectToScreen(gx + 0.92, yHigh, wz);
-          w4 = projectToScreen(gx + 0.08, yHigh, wz);
+          projectToScreen(gx + 0.08, yLow, wz, _sp0);
+          projectToScreen(gx + 0.92, yLow, wz, _sp1);
+          projectToScreen(gx + 0.92, yHigh, wz, _sp2);
+          projectToScreen(gx + 0.08, yHigh, wz, _sp3);
         }
         if (fillColor) {
           ctx.fillStyle = fillColor;
           ctx.beginPath();
-          ctx.moveTo(w1.x, w1.y);
-          ctx.lineTo(w2.x, w2.y);
-          ctx.lineTo(w3.x, w3.y);
-          ctx.lineTo(w4.x, w4.y);
+          ctx.moveTo(_sp0.x, _sp0.y);
+          ctx.lineTo(_sp1.x, _sp1.y);
+          ctx.lineTo(_sp2.x, _sp2.y);
+          ctx.lineTo(_sp3.x, _sp3.y);
           ctx.closePath();
           ctx.fill();
         }
@@ -4322,10 +4390,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.beginPath();
-        ctx.moveTo(w1.x, w1.y);
-        ctx.lineTo(w2.x, w2.y);
-        ctx.lineTo(w3.x, w3.y);
-        ctx.lineTo(w4.x, w4.y);
+        ctx.moveTo(_sp0.x, _sp0.y);
+        ctx.lineTo(_sp1.x, _sp1.y);
+        ctx.lineTo(_sp2.x, _sp2.y);
+        ctx.lineTo(_sp3.x, _sp3.y);
         ctx.closePath();
         ctx.stroke();
       };
@@ -4350,40 +4418,38 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const lineY = floorSurfY + 0.025;
 
         if (fillColor) {
-          const p1 = projectToScreen(ax, fillY, az);
-          const p2 = projectToScreen(bx, fillY, az);
-          const p3 = projectToScreen(bx, fillY, bz);
-          const p4 = projectToScreen(ax, fillY, bz);
+          projectToScreen(ax, fillY, az, _sp0);
+          projectToScreen(bx, fillY, az, _sp1);
+          projectToScreen(bx, fillY, bz, _sp2);
+          projectToScreen(ax, fillY, bz, _sp3);
           ctx.fillStyle = fillColor;
           ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.lineTo(p3.x, p3.y);
-          ctx.lineTo(p4.x, p4.y);
+          ctx.moveTo(_sp0.x, _sp0.y);
+          ctx.lineTo(_sp1.x, _sp1.y);
+          ctx.lineTo(_sp2.x, _sp2.y);
+          ctx.lineTo(_sp3.x, _sp3.y);
           ctx.closePath();
           ctx.fill();
         }
 
-        const corners: Array<[number, number, number, number]> = [
-          [ax, az, 1, 1],
-          [bx, az, -1, 1],
-          [bx, bz, -1, -1],
-          [ax, bz, 1, -1],
-        ];
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = lineWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        for (const [cx, cz, sx, sz] of corners) {
-          const pA = projectToScreen(cx + sx * arm, lineY, cz);
-          const pC = projectToScreen(cx, lineY, cz);
-          const pB = projectToScreen(cx, lineY, cz + sz * arm);
+        const drawCorner = (cx: number, cz: number, sx: number, sz: number) => {
+          projectToScreen(cx + sx * arm, lineY, cz, _sp0);
+          projectToScreen(cx, lineY, cz, _sp1);
+          projectToScreen(cx, lineY, cz + sz * arm, _sp2);
           ctx.beginPath();
-          ctx.moveTo(pA.x, pA.y);
-          ctx.lineTo(pC.x, pC.y);
-          ctx.lineTo(pB.x, pB.y);
+          ctx.moveTo(_sp0.x, _sp0.y);
+          ctx.lineTo(_sp1.x, _sp1.y);
+          ctx.lineTo(_sp2.x, _sp2.y);
           ctx.stroke();
-        }
+        };
+        drawCorner(ax, az, 1, 1);
+        drawCorner(bx, az, -1, 1);
+        drawCorner(bx, bz, -1, -1);
+        drawCorner(ax, bz, 1, -1);
       };
 
       // 0. Clean Architectural Placement Outline (zero full-clinic wireframe clutter!)
@@ -4697,9 +4763,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             isMoving: w.walkBlend > 0.15 && w.sitBlend < 0.4,
           });
         }
-        const unlockedSet = new Set(
-          latestRef.current.rooms.filter((r) => r.unlocked).map((r) => r.id)
-        );
+        const unlockedSet = getUnlockedRoomsSet(latestRef.current.rooms);
         updateDoors3D(worldHandle.doors, doorActorsScratch, unlockedSet, dt);
       }
 
@@ -5287,6 +5351,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         {isBlurred && (
           <div className="pointer-events-none absolute inset-0 bg-slate-950/50 transition-opacity duration-300" />
         )}
+        {!glbsReady && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#0e2239]/85">
+            <div className="flex items-center gap-3 rounded-2xl bg-slate-900/95 px-5 py-3 text-white border border-white/15 shadow-2xl">
+              <span className="h-3 w-3 rounded-full bg-sky-400 animate-ping" />
+              <span className="text-xs sm:text-sm font-bold tracking-wide">
+                {language === 'ar' ? 'جاري تجهيز مجسمات العيادة ثلاثية الأبعاد...' : 'Preparing 3D clinic models...'}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Minimal Corner Center-Camera Control (safely above Store button) */}
@@ -5311,7 +5385,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
       {/* Subtle Edit-Mode Guide when no item is grabbed */}
       {editMode && !placementDraft && !focusedPatientId && (
-        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-slate-900/88 backdrop-blur-md text-slate-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg whitespace-nowrap">
+        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-slate-900/94 text-slate-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg whitespace-nowrap">
           {language === 'ar'
             ? 'اسحب أي عنصر لنقله مباشرة أو اضغط عليه للتعديل'
             : 'Drag any item to move or tap to edit'}
@@ -5320,7 +5394,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
       {/* Smart Floating Placement & Rearranging Action Dock */}
       {placementDraft && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2 bg-slate-900/95 backdrop-blur-md text-white px-3 py-2 rounded-2xl border border-white/20 shadow-2xl max-w-[95vw]">
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2 bg-slate-900/96 text-white px-3 py-2 rounded-2xl border border-white/20 shadow-2xl max-w-[95vw]">
           <div className="flex flex-col leading-tight min-w-0 max-w-[125px] sm:max-w-[165px]">
             <span className="text-xs font-extrabold truncate">
               {language === 'ar' ? placementDraft.catalogItem.nameAr : placementDraft.catalogItem.nameEn}

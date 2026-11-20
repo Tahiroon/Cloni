@@ -1089,6 +1089,9 @@ export default function App() {
       Math.hypot(nx - 11.5, ny - 5) < 0.72 ||
       Math.hypot(nx - 21.5, ny - 14.5) < 1.05;
 
+    const hasReceptionDesk = clinic.placedItems.some((it) => it.catalogId === 'reception_desk');
+    const hasFileCabinet = clinic.placedItems.some((it) => it.catalogId === 'file_cabinet');
+
     const tick = setInterval(() => {
       const nowMs = performance.now();
       const dtSec = Math.min(0.12, Math.max(0.016, (nowMs - lastTickMs) / 1000));
@@ -1101,6 +1104,10 @@ export default function App() {
 
         for (let idx = 0; idx < prev.length; idx++) {
           const p = prev[idx];
+          if (p.path.length === 0 && p.state === 'ready_for_exam') {
+            nextList.push(p);
+            continue;
+          }
           const updated = { ...p };
           const seatItemId = updated.waitingSeatKey
             ? updated.waitingSeatKey.slice(0, updated.waitingSeatKey.lastIndexOf('_'))
@@ -1332,13 +1339,11 @@ export default function App() {
               changed = true;
             } else if (updated.state === 'checkin_at_desk') {
               updated.waitTimer += dtMs;
-              const hasDesk = clinic.placedItems.some((it) => it.catalogId === 'reception_desk');
-              const hasCabinet = clinic.placedItems.some((it) => it.catalogId === 'file_cabinet');
               const checkedByRec = receptionCheckedInIdsRef.current.has(updated.id);
               const maxCheckinMs =
-                receptionistHired && hasDesk && hasCabinet
+                receptionistHired && hasReceptionDesk && hasFileCabinet
                   ? 9000
-                  : receptionistHired && hasDesk
+                  : receptionistHired && hasReceptionDesk
                     ? 2600
                     : 1800;
               if ((checkedByRec && updated.waitTimer >= 1600) || updated.waitTimer >= maxCheckinMs) {
@@ -1574,7 +1579,7 @@ export default function App() {
 
         return changed ? nextList : prev;
       });
-    }, 40);
+    }, 50);
 
     return () => clearInterval(tick);
   }, [

@@ -113,12 +113,10 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
       width: c.width,
       depth: c.depth,
     }));
-    const timer = setTimeout(() => renderThumbBatch(specs), 20);
     const unsub = glbRegistry.onReady(() => {
       renderThumbBatch(specs);
     });
     return () => {
-      clearTimeout(timer);
       unsub();
     };
   }, [open, initialFilter]);
@@ -157,7 +155,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/70 backdrop-blur-[2px]"
+      className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/80"
       onClick={onClose}
     >
       <div

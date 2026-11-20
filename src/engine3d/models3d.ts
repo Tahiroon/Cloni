@@ -3024,17 +3024,6 @@ export function createCatalogMesh3D(
       if (glbBed) {
         inner.add(glbBed);
         box(1.06, 0.02, 0.72, blueUpholstery, 0.16, 0.355, 0);
-      } else {
-        for (const lx of [-0.72, 0.72]) {
-          for (const lz of [-0.32, 0.32]) {
-            cyl(0.035, 0.035, 0.44, silverMetal, lx, 0.22, lz);
-          }
-        }
-        box(1.62, 0.06, 0.72, whiteBody, 0, 0.44, 0);
-        box(1.56, 0.11, 0.68, blueUpholstery, 0, 0.52, 0);
-        const head = box(0.42, 0.1, 0.64, blueUpholstery, -0.56, 0.58, 0);
-        head.rotation.z = -0.18;
-        box(0.24, 0.08, 0.42, whiteBody, -0.62, 0.66, 0);
       }
       break;
     }
@@ -3106,49 +3095,6 @@ export function createCatalogMesh3D(
           chair.position.set(RECEPTION_CHAIR_LOCAL_X, 0, RECEPTION_CHAIR_LOCAL_Z);
           inner.add(chair);
         }
-      } else {
-        // Open knee-hole architectural desk frame (pedestal on +X, modesty apron at +Z, open legroom behind -Z)
-        box(0.46, 0.67, 0.52, whiteBody, 0.58, 0.335, 0.21);
-        box(0.06, 0.67, 0.52, whiteBody, -0.78, 0.335, 0.21);
-        box(1.66, 0.67, 0.08, whiteBody, 0, 0.335, 0.43);
-        box(1.62, 0.3, 0.06, blueUpholstery, 0, 0.18, 0.45);
-        const ledApron = box(
-          1.5,
-          0.038,
-          0.038,
-          makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.85 }),
-          0,
-          0.05,
-          0.48
-        );
-        ledApron.userData.noCastShadow = true;
-        box(1.72, 0.06, 0.56, woodMat, 0, 0.7, 0.2);
-        deskFile.position.y = 0.738;
-        inner.add(deskFile);
-        box(1.06, 0.19, 0.18, whiteBody, 0, 0.81, 0.38);
-        box(0.08, 0.16, 0.08, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.81, 0.16);
-        box(0.46, 0.28, 0.04, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.96, 0.16);
-        const recScr = box(
-          0.42,
-          0.23,
-          0.02,
-          makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.35 }),
-          RECEPTION_CHAIR_LOCAL_X,
-          0.96,
-          0.14
-        );
-        recScr.userData.noCastShadow = true;
-        cyl(0.04, 0.18, 0.24, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.12, RECEPTION_CHAIR_LOCAL_Z);
-        box(0.36, 0.075, 0.34, blueUpholstery, RECEPTION_CHAIR_LOCAL_X, 0.355, RECEPTION_CHAIR_LOCAL_Z);
-        box(
-          0.34,
-          0.38,
-          0.075,
-          blueUpholstery,
-          RECEPTION_CHAIR_LOCAL_X,
-          0.56,
-          RECEPTION_CHAIR_LOCAL_Z - 0.13
-        );
       }
       outer.userData.receptionDesk = { deskFile } satisfies ReceptionDeskRigMeta;
       break;
@@ -3429,16 +3375,6 @@ export function createCatalogMesh3D(
       });
       if (glbTable) {
         inner.add(glbTable);
-      } else {
-        for (const lx of [-0.28, 0.28]) {
-          for (const lz of [-0.24, 0.24]) {
-            cyl(0.025, 0.025, 0.32, darkSlate, lx, 0.16, lz);
-          }
-        }
-        box(0.72, 0.06, 0.62, woodMat, 0, 0.34, 0);
-        box(0.22, 0.02, 0.16, cyanAccent, -0.1, 0.38, 0.05);
-        box(0.18, 0.02, 0.14, whiteBody, 0.14, 0.38, -0.06);
-        inner.scale.setScalar(0.92);
       }
       break;
     }
@@ -3621,35 +3557,6 @@ export function createCatalogMesh3D(
       });
       if (glbMedCab) {
         inner.add(glbMedCab);
-      } else {
-        // Steel legs + lower locker + upper glass clinical instrument display cabinet
-        for (const lx of [-0.32, 0.32]) {
-          for (const lz of [-0.18, 0.18]) {
-            cyl(0.022, 0.02, 0.12, silverMetal, lx, 0.06, lz);
-          }
-        }
-        box(0.74, 0.58, 0.42, whiteBody, 0, 0.41, 0);
-        box(0.34, 0.5, 0.03, makeMat({ color: 0xe2e8f0, roughness: 0.45 }), -0.18, 0.41, 0.21);
-        box(0.34, 0.5, 0.03, makeMat({ color: 0xe2e8f0, roughness: 0.45 }), 0.18, 0.41, 0.21);
-        box(0.02, 0.12, 0.025, silverMetal, -0.05, 0.44, 0.235);
-        box(0.02, 0.12, 0.025, silverMetal, 0.05, 0.44, 0.235);
-        // Upper cabinet shell + shelves + colored medical bottles + glass doors
-        box(0.74, 0.84, 0.38, whiteBody, 0, 1.12, -0.02);
-        box(0.66, 0.72, 0.3, darkSlate, 0, 1.12, 0.01);
-        for (const sy of [0.96, 1.2]) {
-          box(0.66, 0.025, 0.3, silverMetal, 0, sy, 0.01);
-        }
-        const bottleCols = [0x0284c7, 0x10b981, 0xdc2626, 0xf59e0b, 0x38bdf8];
-        for (let i = 0; i < 4; i++) {
-          cyl(0.038, 0.038, 0.14, makeMat({ color: bottleCols[i], roughness: 0.3 }), -0.22 + i * 0.14, 1.04, 0.05);
-          box(0.11, 0.11, 0.12, makeMat({ color: bottleCols[(i + 1) % 5], roughness: 0.4 }), -0.21 + i * 0.14, 1.27, 0.05);
-        }
-        // Subtle green medical cross on header + frosted glass doors
-        box(0.08, 0.025, 0.02, emeraldAccent, 0, 1.5, 0.18);
-        box(0.025, 0.08, 0.02, emeraldAccent, 0, 1.5, 0.18);
-        const glassPane = box(0.68, 0.74, 0.02, frostGlassMat, 0, 1.12, 0.175);
-        glassPane.userData.noCastShadow = true;
-        inner.scale.setScalar(0.91);
       }
       break;
     }
@@ -3718,13 +3625,6 @@ export function createCatalogMesh3D(
         box(0.24, 0.04, 0.17, darkSlate, 0.14, 1.255, 0);
         box(0.2, 0.022, 0.14, binderMats[0], 0.14, 1.275, 0);
         box(0.19, 0.012, 0.13, labelMat, 0.14, 1.288, 0).userData.noCastShadow = true;
-      } else {
-        box(0.68, 1.18, 0.44, whiteBody, 0, 0.59, 0);
-        box(0.62, 1.06, 0.36, darkSlate, 0, 0.59, 0.02);
-        for (const sy of [0.16, 0.42, 0.68, 0.94]) {
-          box(0.64, 0.025, 0.4, silverMetal, 0, sy, 0.01);
-        }
-        [0.175, 0.435, 0.695, 0.955].forEach((sy, idx) => populateShelfRow(sy, idx, 0.54, 0.28));
       }
       break;
     }
@@ -3736,28 +3636,6 @@ export function createCatalogMesh3D(
       });
       if (glbChair) {
         inner.add(glbChair);
-      } else {
-        // Folding clinical transport wheelchair
-        box(0.46, 0.05, 0.44, blueUpholstery, 0, 0.46, 0.02);
-        box(0.46, 0.42, 0.05, blueUpholstery, 0, 0.7, -0.2);
-        for (const sx of [-0.27, 0.27]) {
-          // Big rear wheel + chrome push-rim
-          const rearWheel = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.032, 8, 20), blackRubber);
-          rearWheel.rotation.y = Math.PI / 2;
-          rearWheel.position.set(sx, 0.28, -0.06);
-          const hubRim = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.012, 6, 18), silverMetal);
-          hubRim.rotation.y = Math.PI / 2;
-          hubRim.position.set(sx + (sx > 0 ? 0.018 : -0.018), 0.28, -0.06);
-          inner.add(rearWheel, hubRim);
-          // Front caster wheel + side rail + armrest + push handle
-          const frontCaster = cyl(0.08, 0.08, 0.035, blackRubber, sx * 0.86, 0.08, 0.28);
-          frontCaster.rotation.z = Math.PI / 2;
-          cyl(0.018, 0.018, 0.48, silverMetal, sx * 0.88, 0.68, -0.22);
-          box(0.05, 0.04, 0.36, darkSlate, sx * 0.92, 0.64, 0);
-          cyl(0.02, 0.02, 0.14, blackRubber, sx * 0.88, 0.92, -0.29).rotation.x = Math.PI / 2;
-          box(0.14, 0.025, 0.14, darkSlate, sx * 0.5, 0.14, 0.34);
-        }
-        inner.scale.setScalar(0.8);
       }
       break;
     }
@@ -3794,35 +3672,6 @@ export function createCatalogMesh3D(
           mon.position.set(0.22, 0.625, -0.15);
           inner.add(mon);
         }
-      } else {
-        // L-shape oak & steel workstation + EHR display & chair
-        box(1.74, 0.06, 0.56, woodMat, 0, 0.72, -0.14);
-        box(0.62, 0.06, 0.36, woodMat, -0.56, 0.72, 0.26);
-        for (const [lx, lz] of [
-          [-0.82, -0.36],
-          [0.82, -0.36],
-          [0.82, 0.1],
-          [-0.82, 0.38],
-        ]) {
-          box(0.055, 0.7, 0.055, darkSlate, lx, 0.35, lz);
-        }
-        box(0.06, 0.12, 0.06, darkSlate, 0.22, 0.8, -0.22);
-        box(0.5, 0.31, 0.04, darkSlate, 0.22, 0.98, -0.22);
-        const monScr = box(
-          0.46,
-          0.26,
-          0.02,
-          makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.32 }),
-          0.22,
-          0.98,
-          -0.195
-        );
-        monScr.userData.noCastShadow = true;
-        box(0.32, 0.02, 0.14, darkSlate, 0.22, 0.76, -0.02);
-        cyl(0.035, 0.18, 0.24, darkSlate, 0.22, 0.12, 0.28);
-        box(0.38, 0.07, 0.36, blueUpholstery, 0.22, 0.38, 0.28);
-        box(0.36, 0.4, 0.07, blueUpholstery, 0.22, 0.6, 0.44);
-        inner.scale.setScalar(0.85);
       }
       break;
     }
@@ -4808,24 +4657,6 @@ export function createCatalogMesh3D(
       if (glbPlant) {
         glbPlant.position.y = 0.02;
         inner.add(glbPlant);
-      } else {
-        cyl(0.19, 0.135, 0.28, ceramicPot, 0, 0.16, 0);
-        const potRim = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.022, 6, 16), ceramicPot);
-        potRim.rotation.x = Math.PI / 2;
-        potRim.position.y = 0.3;
-        potRim.userData.sharedGlbMat = true;
-        inner.add(potRim);
-        cyl(0.17, 0.17, 0.03, soilMat, 0, 0.295, 0);
-        tube([[0, 0.28, 0], [-0.03, 0.48, 0.02], [0.02, 0.68, -0.02]], 0.024, barkMat, 6);
-        const leafCardG = new THREE.PlaneGeometry(0.42, 0.42);
-        for (let i = 0; i < 6; i++) {
-          const ang = (i / 6) * Math.PI * 2;
-          const card = new THREE.Mesh(leafCardG, i % 2 === 0 ? oliveCardMat : cypressCardMat);
-          card.position.set(Math.cos(ang) * 0.12, 0.62 + (i % 2) * 0.12, Math.sin(ang) * 0.12);
-          card.rotation.set(0.28, ang, (i % 2 === 0 ? 0.18 : -0.18));
-          card.userData.sharedGlbMat = true;
-          inner.add(card);
-        }
       }
       break;
     }
@@ -4965,11 +4796,6 @@ export function createCatalogMesh3D(
         inner.add(glbLamp);
         const bulb = cyl(0.08, 0.105, 0.14, bulbMat, 0, 1.26, 0);
         bulb.userData.noCastShadow = true;
-      } else {
-        cyl(0.16, 0.18, 0.036, darkSlate, 0, 0.018, 0);
-        cyl(0.022, 0.026, 1.22, silverMetal, 0, 0.62, 0);
-        const shade = cyl(0.14, 0.19, 0.24, bulbMat, 0, 1.3, 0);
-        shade.userData.noCastShadow = true;
       }
       addFloorHalo(2.35, 0xffe4b3, 0.45, 0, 0.026, 0);
       addBulbAura(0.25, 0xffe8bf, 0.32, 0, 1.28, 0);
@@ -4999,9 +4825,6 @@ export function createCatalogMesh3D(
       if (glbWallLamp) {
         glbWallLamp.position.set(-0.34, 1.38, 0);
         inner.add(glbWallLamp);
-      } else {
-        box(0.04, 0.24, 0.16, darkSlate, -0.38, 1.48, 0);
-        box(0.11, 0.04, 0.06, silverMetal, -0.33, 1.45, 0);
       }
       const glassShade = cyl(0.065, 0.085, 0.18, sconceMat, -0.28, 1.5, 0);
       glassShade.userData.noCastShadow = true;
@@ -5040,11 +4863,6 @@ export function createCatalogMesh3D(
         inner.add(glbDeskLamp);
         const core = cyl(0.07, 0.09, 0.12, tableGlowMat, 0, 0.78, 0);
         core.userData.noCastShadow = true;
-      } else {
-        cyl(0.08, 0.1, 0.04, silverMetal, 0, 0.51, 0);
-        cyl(0.018, 0.022, 0.22, silverMetal, 0, 0.62, 0);
-        const shade = cyl(0.11, 0.16, 0.19, tableGlowMat, 0, 0.78, 0);
-        shade.userData.noCastShadow = true;
       }
       addFloorHalo(2.15, 0xffe2ad, 0.4, 0, 0.026, 0);
       addBulbAura(0.21, 0xffe9be, 0.34, 0, 0.78, 0);
@@ -6154,12 +5972,6 @@ export function createCatalogMesh3D(
       });
       if (glbTrash) {
         inner.add(glbTrash);
-      } else {
-        cyl(0.15, 0.13, 0.48, silverMetal, 0, 0.24, 0);
-        cyl(0.155, 0.155, 0.05, darkSlate, 0, 0.5, 0);
-        box(0.09, 0.025, 0.06, blackRubber, 0, 0.02, 0.15);
-        box(0.1, 0.08, 0.02, emeraldAccent, 0, 0.3, 0.145);
-        inner.scale.setScalar(0.74);
       }
       break;
     }

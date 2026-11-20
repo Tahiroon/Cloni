@@ -3,7 +3,6 @@ import * as THREE from 'three';
 export interface TextureBundle {
   tileBlue: THREE.CanvasTexture;
   tileBlueRough: THREE.CanvasTexture;
-  tileBump: THREE.CanvasTexture;
   tileNormal: THREE.CanvasTexture;
   gymRoyal: THREE.CanvasTexture;
   tileMint: THREE.CanvasTexture;
@@ -129,13 +128,24 @@ function drawTherasonMark(
   ctx.restore();
 }
 
-export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
+export function createTextureBundle(
+  maxAnisotropy = 4,
+  opts?: { catalogOnly?: boolean }
+): TextureBundle {
   const aniso = Math.min(16, Math.max(1, maxAnisotropy));
+  const catalogOnly = Boolean(opts?.catalogOnly);
   const created: THREE.CanvasTexture[] = [];
   const track = (t: THREE.CanvasTexture) => {
     created.push(t);
     return t;
   };
+  const dummyTex: THREE.CanvasTexture = (() => {
+    if (!catalogOnly) return null as unknown as THREE.CanvasTexture;
+    const [c, ctx] = makeCanvas(2, 2);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, 2, 2);
+    return track(finalizeTexture(c, 1, 1, 1, false, true));
+  })();
 
   // Photorealistic Architectural Porcelain / Carrara-Stone Medical Tiles (3x3 66.7cm module in 1024x1024)
   // Uses fast periodic multi-octave FBM + domain-warped stone veining per pixel so each tile looks like real kiln-fired stone.
@@ -143,389 +153,371 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   const TILE_SIZE = 1024;
   const TILE_INSET = 4.2;
 
-  // Precompute tileable 256x256 4-octave FBM lookup buffer (< 4ms) for ultra-detailed stone & marble synthesis
-  const STONE_N = 256;
-  const stoneFbm = (() => {
-    const hash2 = (x: number, y: number, seed: number) => {
-      const h = Math.sin(((x & 255) * 127.1 + (y & 255) * 311.7 + seed * 74.7)) * 43758.5453;
-      return h - Math.floor(h);
-    };
-    const sampleGrid = (u: number, v: number, freq: number, seed: number) => {
-      const fx = u * freq;
-      const fy = v * freq;
-      const x0 = Math.floor(fx);
-      const y0 = Math.floor(fy);
-      const tx = fx - x0;
-      const ty = fy - y0;
-      const sx = tx * tx * (3 - 2 * tx);
-      const sy = ty * ty * (3 - 2 * ty);
-      const x1 = (x0 + 1) % freq;
-      const y1 = (y0 + 1) % freq;
-      const a = hash2(x0 % freq, y0 % freq, seed);
-      const b = hash2(x1, y0 % freq, seed);
-      const c = hash2(x0 % freq, y1, seed);
-      const d = hash2(x1, y1, seed);
-      return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
-    };
-    const buf = new Float32Array(STONE_N * STONE_N);
-    for (let y = 0; y < STONE_N; y++) {
-      const v = y / STONE_N;
-      for (let x = 0; x < STONE_N; x++) {
-        const u = x / STONE_N;
-        const val =
-          sampleGrid(u, v, 4, 1) * 0.50 +
-          sampleGrid(u, v, 8, 2) * 0.27 +
-          sampleGrid(u, v, 16, 3) * 0.14 +
-          sampleGrid(u, v, 32, 4) * 0.09;
-        buf[y * STONE_N + x] = val;
-      }
-    }
-    return buf;
-  })();
-
-  const sampleStone = (u: number, v: number) => {
-    const fu = ((u % 1) + 1) % 1 * STONE_N;
-    const fv = ((v % 1) + 1) % 1 * STONE_N;
-    const x0 = Math.floor(fu) & 255;
-    const y0 = Math.floor(fv) & 255;
-    const x1 = (x0 + 1) & 255;
-    const y1 = (y0 + 1) & 255;
-    const tx = fu - Math.floor(fu);
-    const ty = fv - Math.floor(fv);
-    const a = stoneFbm[y0 * STONE_N + x0];
-    const b = stoneFbm[y0 * STONE_N + x1];
-    const c = stoneFbm[y1 * STONE_N + x0];
-    const d = stoneFbm[y1 * STONE_N + x1];
-    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
-  };
-
-  // Precompute per-pixel vein intensity [0..1] & stone clouding [0..1] for the 1024x1024 3x3 layout once
-  const { tileCloudField, tileVeinField, tileMicroField, tileTileIdx } = (() => {
-    const size = TILE_SIZE;
-    const step = size / TILE_COLS;
-    const total = size * size;
-    const tileCloudField = new Float32Array(total);
-    const tileVeinField = new Float32Array(total);
-    const tileMicroField = new Float32Array(total);
-    const tileTileIdx = new Uint8Array(total);
-
-    const tileSeeds = [
-      { ox: 0.12, oy: 0.34, rot: 0, ang: 0.65 },
-      { ox: 0.58, oy: 0.19, rot: 1, ang: 1.15 },
-      { ox: 0.31, oy: 0.72, rot: 2, ang: 0.42 },
-      { ox: 0.77, oy: 0.48, rot: 3, ang: 1.38 },
-      { ox: 0.24, oy: 0.61, rot: 1, ang: 0.85 },
-      { ox: 0.69, oy: 0.83, rot: 0, ang: 0.52 },
-      { ox: 0.45, oy: 0.11, rot: 2, ang: 1.24 },
-      { ox: 0.88, oy: 0.29, rot: 3, ang: 0.74 },
-      { ox: 0.17, oy: 0.86, rot: 1, ang: 0.96 },
-    ];
-
-    for (let y = 0; y < size; y++) {
-      const gy = Math.min(TILE_COLS - 1, Math.floor(y / step));
-      const ly = (y - gy * step) / step;
-      for (let x = 0; x < size; x++) {
-        const gx = Math.min(TILE_COLS - 1, Math.floor(x / step));
-        const lx = (x - gx * step) / step;
-        const ti = gy * TILE_COLS + gx;
-        const idx = y * size + x;
-        tileTileIdx[idx] = ti;
-
-        const ts = tileSeeds[ti % tileSeeds.length];
-        let u = lx;
-        let v = ly;
-        if (ts.rot === 1) {
-          u = ly;
-          v = 1 - lx;
-        } else if (ts.rot === 2) {
-          u = 1 - lx;
-          v = 1 - ly;
-        } else if (ts.rot === 3) {
-          u = 1 - ly;
-          v = lx;
-        }
-
-        const su = u * 0.72 + ts.ox;
-        const sv = v * 0.72 + ts.oy;
-        const n1 = sampleStone(su, sv);
-        const n2 = sampleStone(su * 2.15 + n1 * 0.38, sv * 2.15 - n1 * 0.34);
-        const n3 = sampleStone(su * 5.2 + n2 * 0.22, sv * 5.2 + n1 * 0.19);
-
-        // Domain-warped organic Carrara / mineral porcelain veining
-        const warp = n1 * 2.4 + n2 * 1.15;
-        const ridgeA = Math.abs(Math.sin((u * Math.cos(ts.ang) + v * Math.sin(ts.ang)) * 3.1 + warp));
-        const primaryVein = Math.pow(Math.max(0, 1 - ridgeA * 2.35), 5.2);
-        const ridgeB = Math.abs(Math.cos((u * 1.8 - v * 1.45) + n2 * 3.2 + n3 * 0.9));
-        const fineVein = Math.pow(Math.max(0, 1 - ridgeB * 3.0), 11.0);
-
-        // Fine ceramic mineral grain
-        const gHash = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-        const micro = gHash - Math.floor(gHash);
-
-        tileCloudField[idx] = n1 * 0.58 + n2 * 0.42;
-        tileVeinField[idx] = Math.min(1, primaryVein * 0.75 + fineVein * 0.85);
-        tileMicroField[idx] = n3 * 0.65 + micro * 0.35;
-      }
-    }
-    return { tileCloudField, tileVeinField, tileMicroField, tileTileIdx };
-  })();
-
-  const buildMedicalPorcelainSheet = (opts: {
-    baseRgb: [number, number, number];
-    cloudRgb: [number, number, number];
-    veinRgb: [number, number, number];
-    groutRgb: [number, number, number];
-    groutCoreRgb: [number, number, number];
-  }) => {
-    const size = TILE_SIZE;
-    const step = size / TILE_COLS;
-    const [c, ctx] = makeCanvas(size, size);
-    const img = ctx.createImageData(size, size);
-    const d = img.data;
-    const batchDelta = [2, -3, 4, -2, 1, 3, -1, 2, -4];
-
-    for (let y = 0; y < size; y++) {
-      const localY = y % step;
-      const distY = Math.min(localY, step - localY);
-      for (let x = 0; x < size; x++) {
-        const localX = x % step;
-        const distX = Math.min(localX, step - localX);
-        const edgeDist = Math.min(distX, distY);
-        const idx = y * size + x;
-        const p = idx * 4;
-        const micro = tileMicroField[idx];
-
-        if (edgeDist < TILE_INSET) {
-          // Recessed textured antimicrobial epoxy grout joint
-          const t = edgeDist / TILE_INSET;
-          const coreMix = 1 - Math.min(1, t * 1.45);
-          const grit = (micro - 0.5) * 14;
-          const r = opts.groutRgb[0] * (1 - coreMix * 0.25) + opts.groutCoreRgb[0] * (coreMix * 0.25) + grit;
-          const g = opts.groutRgb[1] * (1 - coreMix * 0.25) + opts.groutCoreRgb[1] * (coreMix * 0.25) + grit;
-          const b = opts.groutRgb[2] * (1 - coreMix * 0.25) + opts.groutCoreRgb[2] * (coreMix * 0.25) + grit;
-          d[p] = Math.max(0, Math.min(255, Math.round(r)));
-          d[p + 1] = Math.max(0, Math.min(255, Math.round(g)));
-          d[p + 2] = Math.max(0, Math.min(255, Math.round(b)));
-          d[p + 3] = 255;
-          continue;
-        }
-
-        const ti = tileTileIdx[idx];
-        const batch = batchDelta[ti % batchDelta.length];
-        const cloud = tileCloudField[idx];
-        const vein = tileVeinField[idx];
-        const grain = (micro - 0.5) * 6.5;
-
-        // Soft cloud blend between base porcelain and stone undertone
-        const cMix = Math.max(0, Math.min(1, (cloud - 0.3) * 1.35));
-        let r = opts.baseRgb[0] * (1 - cMix) + opts.cloudRgb[0] * cMix;
-        let g = opts.baseRgb[1] * (1 - cMix) + opts.cloudRgb[1] * cMix;
-        let b = opts.baseRgb[2] * (1 - cMix) + opts.cloudRgb[2] * cMix;
-
-        // Branching Carrara / mineral vein overlay
-        const vMix = Math.min(0.72, vein * 0.68);
-        r = r * (1 - vMix) + opts.veinRgb[0] * vMix;
-        g = g * (1 - vMix) + opts.veinRgb[1] * vMix;
-        b = b * (1 - vMix) + opts.veinRgb[2] * vMix;
-
-        // Directional rectified chamfer edge catchlight (top/left lip) and bevel shadow (bottom/right lip)
-        let bevelBoost = 0;
-        if (edgeDist < TILE_INSET + 3.4) {
-          const isTop = localY < TILE_INSET + 3.4;
-          const isLeft = localX < TILE_INSET + 3.4;
-          const isBottom = step - localY < TILE_INSET + 3.4;
-          const isRight = step - localX < TILE_INSET + 3.4;
-          const bFactor = 1 - (edgeDist - TILE_INSET) / 3.4;
-          if (edgeDist < TILE_INSET + 1.2) {
-            bevelBoost = -20; // crisp recessed bevel lip next to grout
-          } else if (isTop || isLeft) {
-            bevelBoost = 11 * bFactor;
-          } else if (isBottom || isRight) {
-            bevelBoost = -13 * bFactor;
+  const worldStoneTextures = catalogOnly
+    ? null
+    : (() => {
+        // Precompute tileable 256x256 4-octave FBM lookup buffer (< 4ms) for ultra-detailed stone & marble synthesis
+        const STONE_N = 256;
+        const stoneFbm = (() => {
+          const hash2 = (x: number, y: number, seed: number) => {
+            const h = Math.sin(((x & 255) * 127.1 + (y & 255) * 311.7 + seed * 74.7)) * 43758.5453;
+            return h - Math.floor(h);
+          };
+          const sampleGrid = (u: number, v: number, freq: number, seed: number) => {
+            const fx = u * freq;
+            const fy = v * freq;
+            const x0 = Math.floor(fx);
+            const y0 = Math.floor(fy);
+            const tx = fx - x0;
+            const ty = fy - y0;
+            const sx = tx * tx * (3 - 2 * tx);
+            const sy = ty * ty * (3 - 2 * ty);
+            const x1 = (x0 + 1) % freq;
+            const y1 = (y0 + 1) % freq;
+            const a = hash2(x0 % freq, y0 % freq, seed);
+            const b = hash2(x1, y0 % freq, seed);
+            const c = hash2(x0 % freq, y1, seed);
+            const d = hash2(x1, y1, seed);
+            return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
+          };
+          const buf = new Float32Array(STONE_N * STONE_N);
+          for (let y = 0; y < STONE_N; y++) {
+            const v = y / STONE_N;
+            for (let x = 0; x < STONE_N; x++) {
+              const u = x / STONE_N;
+              const val =
+                sampleGrid(u, v, 4, 1) * 0.50 +
+                sampleGrid(u, v, 8, 2) * 0.27 +
+                sampleGrid(u, v, 16, 3) * 0.14 +
+                sampleGrid(u, v, 32, 4) * 0.09;
+              buf[y * STONE_N + x] = val;
+            }
           }
-        }
+          return buf;
+        })();
 
-        d[p] = Math.max(0, Math.min(255, Math.round(r + batch + grain + bevelBoost)));
-        d[p + 1] = Math.max(0, Math.min(255, Math.round(g + batch + grain + bevelBoost)));
-        d[p + 2] = Math.max(0, Math.min(255, Math.round(b + batch + grain + bevelBoost)));
-        d[p + 3] = 255;
-      }
-    }
+        const sampleStone = (u: number, v: number) => {
+          const fu = ((u % 1) + 1) % 1 * STONE_N;
+          const fv = ((v % 1) + 1) % 1 * STONE_N;
+          const x0 = Math.floor(fu) & 255;
+          const y0 = Math.floor(fv) & 255;
+          const x1 = (x0 + 1) & 255;
+          const y1 = (y0 + 1) & 255;
+          const tx = fu - Math.floor(fu);
+          const ty = fv - Math.floor(fv);
+          const a = stoneFbm[y0 * STONE_N + x0];
+          const b = stoneFbm[y0 * STONE_N + x1];
+          const c = stoneFbm[y1 * STONE_N + x0];
+          const d = stoneFbm[y1 * STONE_N + x1];
+          return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+        };
 
-    ctx.putImageData(img, 0, 0);
-    return track(finalizeTexture(c, aniso, 1, 1, true));
-  };
+        const { tileCloudField, tileVeinField, tileMicroField, tileTileIdx } = (() => {
+          const size = TILE_SIZE;
+          const step = size / TILE_COLS;
+          const total = size * size;
+          const tileCloudField = new Float32Array(total);
+          const tileVeinField = new Float32Array(total);
+          const tileMicroField = new Float32Array(total);
+          const tileTileIdx = new Uint8Array(total);
 
-  // 1. Warm Clinical Ivory-Carrara Medical Porcelain Tiles (Reception & Electrotherapy)
-  const tileBlue = buildMedicalPorcelainSheet({
-    baseRgb: [219, 216, 210],
-    cloudRgb: [197, 201, 206],
-    veinRgb: [122, 132, 144],
-    groutRgb: [126, 134, 142],
-    groutCoreRgb: [78, 86, 96],
-  });
+          const tileSeeds = [
+            { ox: 0.12, oy: 0.34, rot: 0, ang: 0.65 },
+            { ox: 0.58, oy: 0.19, rot: 1, ang: 1.15 },
+            { ox: 0.31, oy: 0.72, rot: 2, ang: 0.42 },
+            { ox: 0.77, oy: 0.48, rot: 3, ang: 1.38 },
+            { ox: 0.24, oy: 0.61, rot: 1, ang: 0.85 },
+            { ox: 0.69, oy: 0.83, rot: 0, ang: 0.52 },
+            { ox: 0.45, oy: 0.11, rot: 2, ang: 1.24 },
+            { ox: 0.88, oy: 0.29, rot: 3, ang: 0.74 },
+            { ox: 0.17, oy: 0.86, rot: 1, ang: 0.96 },
+          ];
 
-  // Calibrated honed-satin medical porcelain roughness map matching per-pixel stone clouds, veins & matte epoxy grout
-  const tileBlueRough = (() => {
-    const size = TILE_SIZE;
-    const step = size / TILE_COLS;
-    const [c, ctx] = makeCanvas(size, size);
-    const img = ctx.createImageData(size, size);
-    const d = img.data;
-    for (let y = 0; y < size; y++) {
-      const localY = y % step;
-      const distY = Math.min(localY, step - localY);
-      for (let x = 0; x < size; x++) {
-        const localX = x % step;
-        const distX = Math.min(localX, step - localX);
-        const edgeDist = Math.min(distX, distY);
-        const idx = y * size + x;
-        const p = idx * 4;
-        let val: number;
-        if (edgeDist < TILE_INSET) {
-          val = 216 + Math.round(tileMicroField[idx] * 18); // matte epoxy grout ~0.86
-        } else if (edgeDist < TILE_INSET + 3.0) {
-          val = 144; // satin chamfer lip ~0.56
-        } else {
-          // Honed-satin porcelain body (0.26..0.36) with slightly glossier mineral veins
-          const cloud = tileCloudField[idx];
-          const vein = tileVeinField[idx];
-          val = Math.round(74 + cloud * 22 - vein * 14 + tileMicroField[idx] * 8);
-        }
-        val = Math.max(0, Math.min(255, val));
-        d[p] = val;
-        d[p + 1] = val;
-        d[p + 2] = val;
-        d[p + 3] = 255;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    return track(finalizeTexture(c, aniso, 1, 1, false));
-  })();
+          for (let y = 0; y < size; y++) {
+            const gy = Math.min(TILE_COLS - 1, Math.floor(y / step));
+            const ly = (y - gy * step) / step;
+            for (let x = 0; x < size; x++) {
+              const gx = Math.min(TILE_COLS - 1, Math.floor(x / step));
+              const lx = (x - gx * step) / step;
+              const ti = gy * TILE_COLS + gx;
+              const idx = y * size + x;
+              tileTileIdx[idx] = ti;
 
-  // Multi-step rectified porcelain tile heightfield -> builds both tileBump AND true tangent-space tileNormal
-  const { tileBump, tileNormal } = (() => {
-    const size = TILE_SIZE;
-    const step = size / TILE_COLS;
-    const heights = new Float32Array(size * size);
+              const ts = tileSeeds[ti % tileSeeds.length];
+              let u = lx;
+              let v = ly;
+              if (ts.rot === 1) {
+                u = ly;
+                v = 1 - lx;
+              } else if (ts.rot === 2) {
+                u = 1 - lx;
+                v = 1 - ly;
+              } else if (ts.rot === 3) {
+                u = 1 - ly;
+                v = lx;
+              }
 
-    for (let y = 0; y < size; y++) {
-      const localY = y % step;
-      const distY = Math.min(localY, step - localY);
-      for (let x = 0; x < size; x++) {
-        const localX = x % step;
-        const distX = Math.min(localX, step - localX);
-        const edgeDist = Math.min(distX, distY);
-        const idx = y * size + x;
+              const su = u * 0.72 + ts.ox;
+              const sv = v * 0.72 + ts.oy;
+              const n1 = sampleStone(su, sv);
+              const n2 = sampleStone(su * 2.15 + n1 * 0.38, sv * 2.15 - n1 * 0.34);
+              const n3 = sampleStone(su * 5.2 + n2 * 0.22, sv * 5.2 + n1 * 0.19);
 
-        let h: number;
-        if (edgeDist < TILE_INSET) {
-          const t = edgeDist / TILE_INSET;
-          h = 0.08 + 0.14 * t * t + tileMicroField[idx] * 0.03;
-        } else if (edgeDist < TILE_INSET + 3.8) {
-          const t = (edgeDist - TILE_INSET) / 3.8;
-          const smooth = t * t * (3 - 2 * t);
-          h = 0.24 + 0.74 * smooth;
-        } else {
-          // Subtle natural stone micro-relief + slight vein depression
-          h = 0.986 + (tileCloudField[idx] - 0.5) * 0.016 - tileVeinField[idx] * 0.01;
-        }
-        heights[idx] = h;
-      }
-    }
+              const warp = n1 * 2.4 + n2 * 1.15;
+              const ridgeA = Math.abs(Math.sin((u * Math.cos(ts.ang) + v * Math.sin(ts.ang)) * 3.1 + warp));
+              const primaryVein = Math.pow(Math.max(0, 1 - ridgeA * 2.35), 5.2);
+              const ridgeB = Math.abs(Math.cos((u * 1.8 - v * 1.45) + n2 * 3.2 + n3 * 0.9));
+              const fineVein = Math.pow(Math.max(0, 1 - ridgeB * 3.0), 11.0);
 
-    const [cb, ctxB] = makeCanvas(size, size);
-    const imgB = ctxB.createImageData(size, size);
-    const [cn, ctxN] = makeCanvas(size, size);
-    const imgN = ctxN.createImageData(size, size);
+              const gHash = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+              const micro = gHash - Math.floor(gHash);
 
-    const strength = 3.2;
-    for (let y = 0; y < size; y++) {
-      const ym = (y - 1 + size) % size;
-      const yp = (y + 1) % size;
-      for (let x = 0; x < size; x++) {
-        const xm = (x - 1 + size) % size;
-        const xp = (x + 1) % size;
-        const idx = y * size + x;
-        const p = idx * 4;
+              tileCloudField[idx] = n1 * 0.58 + n2 * 0.42;
+              tileVeinField[idx] = Math.min(1, primaryVein * 0.75 + fineVein * 0.85);
+              tileMicroField[idx] = n3 * 0.65 + micro * 0.35;
+            }
+          }
+          return { tileCloudField, tileVeinField, tileMicroField, tileTileIdx };
+        })();
 
-        const bVal = Math.max(0, Math.min(255, Math.round(heights[idx] * 255)));
-        imgB.data[p] = bVal;
-        imgB.data[p + 1] = bVal;
-        imgB.data[p + 2] = bVal;
-        imgB.data[p + 3] = 255;
+        const buildMedicalPorcelainSheet = (sheetOpts: {
+          baseRgb: [number, number, number];
+          cloudRgb: [number, number, number];
+          veinRgb: [number, number, number];
+          groutRgb: [number, number, number];
+          groutCoreRgb: [number, number, number];
+        }) => {
+          const size = TILE_SIZE;
+          const step = size / TILE_COLS;
+          const [c, ctx] = makeCanvas(size, size);
+          const img = ctx.createImageData(size, size);
+          const d = img.data;
+          const batchDelta = [2, -3, 4, -2, 1, 3, -1, 2, -4];
 
-        const dhdx = (heights[y * size + xp] - heights[y * size + xm]) * strength;
-        const dhdy = (heights[yp * size + x] - heights[ym * size + x]) * strength;
-        const nx = -dhdx;
-        const ny = -dhdy;
-        const nz = 1.0;
-        const inv = 1.0 / Math.hypot(nx, ny, nz);
-        imgN.data[p] = Math.round((nx * inv * 0.5 + 0.5) * 255);
-        imgN.data[p + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
-        imgN.data[p + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
-        imgN.data[p + 3] = 255;
-      }
-    }
-    ctxB.putImageData(imgB, 0, 0);
-    ctxN.putImageData(imgN, 0, 0);
+          for (let y = 0; y < size; y++) {
+            const localY = y % step;
+            const distY = Math.min(localY, step - localY);
+            for (let x = 0; x < size; x++) {
+              const localX = x % step;
+              const distX = Math.min(localX, step - localX);
+              const edgeDist = Math.min(distX, distY);
+              const idx = y * size + x;
+              const p = idx * 4;
+              const micro = tileMicroField[idx];
 
-    return {
-      tileBump: track(finalizeTexture(cb, aniso, 1, 1, false)),
-      tileNormal: track(finalizeTexture(cn, aniso, 1, 1, false)),
-    };
-  })();
+              if (edgeDist < TILE_INSET) {
+                const t = edgeDist / TILE_INSET;
+                const coreMix = 1 - Math.min(1, t * 1.45);
+                const grit = (micro - 0.5) * 14;
+                const r = sheetOpts.groutRgb[0] * (1 - coreMix * 0.25) + sheetOpts.groutCoreRgb[0] * (coreMix * 0.25) + grit;
+                const g = sheetOpts.groutRgb[1] * (1 - coreMix * 0.25) + sheetOpts.groutCoreRgb[1] * (coreMix * 0.25) + grit;
+                const b = sheetOpts.groutRgb[2] * (1 - coreMix * 0.25) + sheetOpts.groutCoreRgb[2] * (coreMix * 0.25) + grit;
+                d[p] = Math.max(0, Math.min(255, Math.round(r)));
+                d[p + 1] = Math.max(0, Math.min(255, Math.round(g)));
+                d[p + 2] = Math.max(0, Math.min(255, Math.round(b)));
+                d[p + 3] = 255;
+                continue;
+              }
 
-  // 2. Calm Clinical Ice-Slate / Sky-Mineral Medical Porcelain Tiles (Kinesiotherapy & Neurorehab Wings)
-  const gymRoyal = buildMedicalPorcelainSheet({
-    baseRgb: [194, 208, 221],
-    cloudRgb: [171, 188, 205],
-    veinRgb: [104, 126, 150],
-    groutRgb: [110, 126, 144],
-    groutCoreRgb: [70, 86, 104],
-  });
+              const ti = tileTileIdx[idx];
+              const batch = batchDelta[ti % batchDelta.length];
+              const cloud = tileCloudField[idx];
+              const vein = tileVeinField[idx];
+              const grain = (micro - 0.5) * 6.5;
 
-  // 3. Calm Clinical Eucalyptus-Stone Medical Porcelain Tiles (Orthopedics & Hydrotherapy Wings)
-  const tileMint = buildMedicalPorcelainSheet({
-    baseRgb: [196, 213, 206],
-    cloudRgb: [174, 195, 186],
-    veinRgb: [104, 136, 125],
-    groutRgb: [112, 132, 124],
-    groutCoreRgb: [74, 92, 85],
-  });
+              const cMix = Math.max(0, Math.min(1, (cloud - 0.3) * 1.35));
+              let r = sheetOpts.baseRgb[0] * (1 - cMix) + sheetOpts.cloudRgb[0] * cMix;
+              let g = sheetOpts.baseRgb[1] * (1 - cMix) + sheetOpts.cloudRgb[1] * cMix;
+              let b = sheetOpts.baseRgb[2] * (1 - cMix) + sheetOpts.cloudRgb[2] * cMix;
 
-  // 4. Weathered courtyard travertine stone pavers with pitting & realistic mortar + bump (1024x1024)
-  const courtyardPaver = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
-    ctx.fillStyle = '#9b8f80';
-    ctx.fillRect(0, 0, 512, 512);
-    const cols = 4;
-    const rows = 4;
-    const cw = 512 / cols;
-    const ch = 512 / rows;
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const offset = y % 2 === 0 ? 0 : cw * 0.5;
-        const shade = ((x * 7 + y * 13) % 7) * 4 - 12;
-        const px = ((x * cw + offset) % 512) + 3;
-        const py = y * ch + 3;
-        ctx.fillStyle = `rgb(${194 + shade}, ${182 + shade}, ${166 + shade})`;
-        ctx.fillRect(px, py, cw - 6, ch - 6);
-        // Subtle natural travertine edge highlight & mineral pitting
-        ctx.strokeStyle = 'rgba(255, 248, 238, 0.25)';
-        ctx.lineWidth = 1.6;
-        ctx.strokeRect(px + 1, py + 1, cw - 8, ch - 8);
-      }
-    }
-    for (let i = 0; i < 3200; i++) {
-      const px = (Math.sin(i * 41.3) * 0.5 + 0.5) * 512;
-      const py = (Math.cos(i * 19.7) * 0.5 + 0.5) * 512;
-      ctx.fillStyle = i % 3 === 0 ? 'rgba(92, 80, 68, 0.14)' : 'rgba(248, 240, 226, 0.12)';
-      ctx.fillRect(px, py, 1.4, 1.0);
-    }
-    return track(finalizeTexture(c, aniso, 1, 1, true));
-  })();
+              const vMix = Math.min(0.72, vein * 0.68);
+              r = r * (1 - vMix) + sheetOpts.veinRgb[0] * vMix;
+              g = g * (1 - vMix) + sheetOpts.veinRgb[1] * vMix;
+              b = b * (1 - vMix) + sheetOpts.veinRgb[2] * vMix;
+
+              let bevelBoost = 0;
+              if (edgeDist < TILE_INSET + 3.4) {
+                const isTop = localY < TILE_INSET + 3.4;
+                const isLeft = localX < TILE_INSET + 3.4;
+                const isBottom = step - localY < TILE_INSET + 3.4;
+                const isRight = step - localX < TILE_INSET + 3.4;
+                const bFactor = 1 - (edgeDist - TILE_INSET) / 3.4;
+                if (edgeDist < TILE_INSET + 1.2) {
+                  bevelBoost = -20;
+                } else if (isTop || isLeft) {
+                  bevelBoost = 11 * bFactor;
+                } else if (isBottom || isRight) {
+                  bevelBoost = -13 * bFactor;
+                }
+              }
+
+              d[p] = Math.max(0, Math.min(255, Math.round(r + batch + grain + bevelBoost)));
+              d[p + 1] = Math.max(0, Math.min(255, Math.round(g + batch + grain + bevelBoost)));
+              d[p + 2] = Math.max(0, Math.min(255, Math.round(b + batch + grain + bevelBoost)));
+              d[p + 3] = 255;
+            }
+          }
+
+          ctx.putImageData(img, 0, 0);
+          return track(finalizeTexture(c, aniso, 1, 1, true));
+        };
+
+        const tileBlue = buildMedicalPorcelainSheet({
+          baseRgb: [219, 216, 210],
+          cloudRgb: [197, 201, 206],
+          veinRgb: [122, 132, 144],
+          groutRgb: [126, 134, 142],
+          groutCoreRgb: [78, 86, 96],
+        });
+
+        const tileBlueRough = (() => {
+          const size = TILE_SIZE;
+          const step = size / TILE_COLS;
+          const [c, ctx] = makeCanvas(size, size);
+          const img = ctx.createImageData(size, size);
+          const d = img.data;
+          for (let y = 0; y < size; y++) {
+            const localY = y % step;
+            const distY = Math.min(localY, step - localY);
+            for (let x = 0; x < size; x++) {
+              const localX = x % step;
+              const distX = Math.min(localX, step - localX);
+              const edgeDist = Math.min(distX, distY);
+              const idx = y * size + x;
+              const p = idx * 4;
+              let val: number;
+              if (edgeDist < TILE_INSET) {
+                val = 216 + Math.round(tileMicroField[idx] * 18);
+              } else if (edgeDist < TILE_INSET + 3.0) {
+                val = 144;
+              } else {
+                const cloud = tileCloudField[idx];
+                const vein = tileVeinField[idx];
+                val = Math.round(74 + cloud * 22 - vein * 14 + tileMicroField[idx] * 8);
+              }
+              val = Math.max(0, Math.min(255, val));
+              d[p] = val;
+              d[p + 1] = val;
+              d[p + 2] = val;
+              d[p + 3] = 255;
+            }
+          }
+          ctx.putImageData(img, 0, 0);
+          return track(finalizeTexture(c, aniso, 1, 1, false));
+        })();
+
+        const tileNormal = (() => {
+          const size = TILE_SIZE;
+          const step = size / TILE_COLS;
+          const heights = new Float32Array(size * size);
+
+          for (let y = 0; y < size; y++) {
+            const localY = y % step;
+            const distY = Math.min(localY, step - localY);
+            for (let x = 0; x < size; x++) {
+              const localX = x % step;
+              const distX = Math.min(localX, step - localX);
+              const edgeDist = Math.min(distX, distY);
+              const idx = y * size + x;
+
+              let h: number;
+              if (edgeDist < TILE_INSET) {
+                const t = edgeDist / TILE_INSET;
+                h = 0.08 + 0.14 * t * t + tileMicroField[idx] * 0.03;
+              } else if (edgeDist < TILE_INSET + 3.8) {
+                const t = (edgeDist - TILE_INSET) / 3.8;
+                const smooth = t * t * (3 - 2 * t);
+                h = 0.24 + 0.74 * smooth;
+              } else {
+                h = 0.986 + (tileCloudField[idx] - 0.5) * 0.016 - tileVeinField[idx] * 0.01;
+              }
+              heights[idx] = h;
+            }
+          }
+
+          const [cn, ctxN] = makeCanvas(size, size);
+          const imgN = ctxN.createImageData(size, size);
+          const strength = 3.2;
+          for (let y = 0; y < size; y++) {
+            const ym = (y - 1 + size) % size;
+            const yp = (y + 1) % size;
+            for (let x = 0; x < size; x++) {
+              const xm = (x - 1 + size) % size;
+              const xp = (x + 1) % size;
+              const idx = y * size + x;
+              const p = idx * 4;
+              const dhdx = (heights[y * size + xp] - heights[y * size + xm]) * strength;
+              const dhdy = (heights[yp * size + x] - heights[ym * size + x]) * strength;
+              const nx = -dhdx;
+              const ny = -dhdy;
+              const nz = 1.0;
+              const inv = 1.0 / Math.hypot(nx, ny, nz);
+              imgN.data[p] = Math.round((nx * inv * 0.5 + 0.5) * 255);
+              imgN.data[p + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+              imgN.data[p + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+              imgN.data[p + 3] = 255;
+            }
+          }
+          ctxN.putImageData(imgN, 0, 0);
+          return track(finalizeTexture(cn, aniso, 1, 1, false));
+        })();
+
+        const gymRoyal = buildMedicalPorcelainSheet({
+          baseRgb: [194, 208, 221],
+          cloudRgb: [171, 188, 205],
+          veinRgb: [104, 126, 150],
+          groutRgb: [110, 126, 144],
+          groutCoreRgb: [70, 86, 104],
+        });
+
+        const tileMint = buildMedicalPorcelainSheet({
+          baseRgb: [196, 213, 206],
+          cloudRgb: [176, 196, 188],
+          veinRgb: [108, 134, 124],
+          groutRgb: [112, 132, 124],
+          groutCoreRgb: [72, 90, 84],
+        });
+
+        const courtyardPaver = (() => {
+          const [c, ctx] = makeCanvas(1024, 1024);
+          ctx.scale(2, 2);
+          ctx.fillStyle = '#9b8f80';
+          ctx.fillRect(0, 0, 512, 512);
+          const cols = 4;
+          const rows = 4;
+          const cw = 512 / cols;
+          const ch = 512 / rows;
+          for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+              const offset = y % 2 === 0 ? 0 : cw * 0.5;
+              const shade = ((x * 7 + y * 13) % 7) * 4 - 12;
+              const px = ((x * cw + offset) % 512) + 3;
+              const py = y * ch + 3;
+              ctx.fillStyle = `rgb(${194 + shade}, ${182 + shade}, ${166 + shade})`;
+              ctx.fillRect(px, py, cw - 6, ch - 6);
+              ctx.strokeStyle = 'rgba(255, 248, 238, 0.25)';
+              ctx.lineWidth = 1.6;
+              ctx.strokeRect(px + 1, py + 1, cw - 8, ch - 8);
+            }
+          }
+          for (let i = 0; i < 3200; i++) {
+            const px = (Math.sin(i * 41.3) * 0.5 + 0.5) * 512;
+            const py = (Math.cos(i * 19.7) * 0.5 + 0.5) * 512;
+            ctx.fillStyle = i % 3 === 0 ? 'rgba(92, 80, 68, 0.14)' : 'rgba(248, 240, 226, 0.12)';
+            ctx.fillRect(px, py, 1.4, 1.0);
+          }
+          return track(finalizeTexture(c, aniso, 1, 1, true));
+        })();
+
+        return { tileBlue, tileBlueRough, tileNormal, gymRoyal, tileMint, courtyardPaver };
+      })();
+
+  const tileBlue = worldStoneTextures ? worldStoneTextures.tileBlue : dummyTex;
+  const tileBlueRough = worldStoneTextures ? worldStoneTextures.tileBlueRough : dummyTex;
+  const tileNormal = worldStoneTextures ? worldStoneTextures.tileNormal : dummyTex;
+  const gymRoyal = worldStoneTextures ? worldStoneTextures.gymRoyal : dummyTex;
+  const tileMint = worldStoneTextures ? worldStoneTextures.tileMint : dummyTex;
+  const courtyardPaver = worldStoneTextures ? worldStoneTextures.courtyardPaver : dummyTex;
 
   const paverBump = (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
@@ -551,7 +543,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 5. Realistic organic uneven botanical meadow grass (1024x1024 high-res blades, varied growth heights, clover patches)
-  const grass = (() => {
+  const grass = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.fillStyle = '#3f632e';
@@ -622,7 +616,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 6. Natural Imperfect Garden Street / Sandy Earth & Fine Gravel Park Lane (1024x1024, zero asphalt!)
-  const asphalt = (() => {
+  const asphalt = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.fillStyle = '#9b876a';
@@ -711,7 +707,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 7, true));
   })();
 
-  const asphaltBump = (() => {
+  const asphaltBump = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.fillStyle = '#808080';
@@ -726,7 +724,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 7. Natural Weathered Garden Flagstone Walkway (1024x1024 warm irregular garden stones + earthy soil/moss joints)
-  const sidewalk = (() => {
+  const sidewalk = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.fillStyle = '#7c7564'; // Warm soil & moss joint base
@@ -885,7 +885,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 8a-bis. Paper birch silver-white bark with dark horizontal lenticel markings (512x512)
-  const birchBark = (() => {
+  const birchBark = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#ddd7ce';
@@ -938,7 +940,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   };
 
   // 8ab. High-resolution alpha-cutout botanical oak/broadleaf spray texture (1024x1024 crisp pointed veined leaves)
-  const leafFoliage = (() => {
+  const leafFoliage = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.clearRect(0, 0, 512, 512);
@@ -1030,7 +1034,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 8b. Architectural terracotta clay roof shingle courses (512x512)
-  const roofShingle = (() => {
+  const roofShingle = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#8b4534';
@@ -1053,7 +1059,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 9. Multi-layered architectural plaster & stucco PBR set (1024x1024 albedo + bump + roughness)
-  const plasterAlbedo = (() => {
+  const plasterAlbedo = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.fillStyle = '#dcd6cb';
@@ -1079,7 +1087,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 3, 2, true));
   })();
 
-  const stuccoBump = (() => {
+  const stuccoBump = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1024, 1024);
     ctx.scale(2, 2);
     ctx.fillStyle = '#808080';
@@ -1105,7 +1115,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 3, 2, false));
   })();
 
-  const plasterRough = (() => {
+  const plasterRough = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#dadada';
@@ -1122,7 +1134,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 9b. Architectural clinic acoustic wainscot wall paneling (512x512 albedo + vertical seam bump)
-  const wainscotAlbedo = (() => {
+  const wainscotAlbedo = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#205b86';
@@ -1148,7 +1162,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 3, 1, true));
   })();
 
-  const wainscotBump = (() => {
+  const wainscotBump = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#dcdcdc';
@@ -1213,7 +1229,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 9f. Natural human skin micro-pore & tonal variation map (512x512, neutral so rich dark-brown & black tones stay true)
-  const skinMicroMap = (() => {
+  const skinMicroMap = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#f8f6f4';
@@ -1233,7 +1251,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 2, 2, true));
   })();
 
-  const skinRoughMap = (() => {
+  const skinRoughMap = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
     ctx.fillStyle = '#929292'; // ~0.57 natural semi-matte skin
@@ -1253,7 +1273,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 9g. Seamless multi-octave water ripple normal map (512x512)
-  const waterNormal = (() => {
+  const waterNormal = catalogOnly
+    ? dummyTex
+    : (() => {
     const size = 512;
     const [c, ctx] = makeCanvas(size, size);
     const img = ctx.createImageData(size, size);
@@ -1330,7 +1352,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 11. Reception back wall THERASON architectural panel (2048x560 ultra-crisp print)
-  const therasonWall = (() => {
+  const therasonWall = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(2048, 560);
     ctx.scale(2048 / 1536, 560 / 420);
     ctx.fillStyle = '#f8fafc';
@@ -1392,7 +1416,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 12b. Illuminated Main Entrance Facade Sign ("Therason Clinic", 1280x360)
-  const therasonFacadeSign = (() => {
+  const therasonFacadeSign = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(1280, 360);
     ctx.scale(2, 2);
     const grad = ctx.createLinearGradient(0, 0, 640, 180);
@@ -1531,7 +1557,9 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   })();
 
   // 15. Framed Physiotherapy License Certificate on clinic wall (576x432)
-  const certificateFrame = (() => {
+  const certificateFrame = catalogOnly
+    ? dummyTex
+    : (() => {
     const [c, ctx] = makeCanvas(576, 432);
     ctx.scale(3, 3);
     ctx.fillStyle = '#fffbeb';
@@ -2376,7 +2404,6 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   return {
     tileBlue,
     tileBlueRough,
-    tileBump,
     tileNormal,
     gymRoyal,
     tileMint,
