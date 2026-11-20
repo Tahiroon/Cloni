@@ -80,7 +80,9 @@ const listeners = new Set<() => void>();
 let loadingStarted = false;
 let allLoaded = false;
 
-function enableShadows(obj: THREE.Object3D) {
+let maxGlbAnisotropy = 8;
+
+function refineGlbAssets(obj: THREE.Object3D) {
   obj.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const m = child as THREE.Mesh;
@@ -88,9 +90,28 @@ function enableShadows(obj: THREE.Object3D) {
       m.receiveShadow = true;
       const mats = Array.isArray(m.material) ? m.material : [m.material];
       for (const mat of mats) {
-        if (mat && 'roughness' in mat) {
-          const std = mat as THREE.MeshStandardMaterial;
-          std.envMapIntensity = 0.54;
+        if (!mat) continue;
+        const std = mat as THREE.MeshStandardMaterial;
+        const texSlots: Array<THREE.Texture | null | undefined> = [
+          std.map,
+          std.emissiveMap,
+          std.roughnessMap,
+          std.metalnessMap,
+          std.normalMap,
+          std.bumpMap,
+          std.aoMap,
+          std.alphaMap,
+        ];
+        for (const tex of texSlots) {
+          if (!tex) continue;
+          tex.magFilter = THREE.LinearFilter;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.generateMipmaps = true;
+          tex.anisotropy = Math.min(16, Math.max(1, maxGlbAnisotropy));
+          tex.needsUpdate = true;
+        }
+        if ('roughness' in std) {
+          std.envMapIntensity = 0.56;
           if (std.roughness > 0.94) {
             std.roughness = 0.85;
           } else if (std.metalness < 0.1 && std.roughness < 0.24) {
@@ -106,7 +127,8 @@ function enableShadows(obj: THREE.Object3D) {
   });
 }
 
-export function startPreloadGlbs() {
+export function startPreloadGlbs(maxAnisotropy = 8) {
+  maxGlbAnisotropy = Math.min(16, Math.max(1, maxAnisotropy));
   if (loadingStarted) return;
   loadingStarted = true;
   const loader = new GLTFLoader();
@@ -125,7 +147,7 @@ export function startPreloadGlbs() {
     loader.load(
       url,
       (gltf) => {
-        enableShadows(gltf.scene);
+        refineGlbAssets(gltf.scene);
         loadedTemplates.set(key, gltf.scene);
         doneOne();
       },

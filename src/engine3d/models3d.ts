@@ -1,6 +1,11 @@
 import * as THREE from 'three';
-import { GRID_SIZE } from '../data/catalog';
-import { SOLAR_ZONE, WORLD_TREES, WorldTreeDef, WorldTreeSpecies } from '../engine/isometricMath';
+import {
+  CLINIC_FLOOR_ELEV,
+  SOLAR_ZONE,
+  WORLD_TREES,
+  WorldTreeDef,
+  WorldTreeSpecies,
+} from '../engine/isometricMath';
 import { ClinicRoom, SpriteKind } from '../types/clinic';
 import { glbRegistry } from './glbRegistry';
 import { TextureBundle } from './textures3d';
@@ -442,17 +447,6 @@ export function buildClinicWorld3D(
       metalness: 0.02,
     })
   );
-  const curtainMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x5c96b8,
-      bumpMap: textures.fabricWeaveBump,
-      bumpScale: 0.008,
-      roughness: 0.86,
-      sheen: 0.55,
-      sheenRoughness: 0.7,
-      side: THREE.DoubleSide,
-    })
-  );
   const glassMat = trackMat(
     new THREE.MeshPhysicalMaterial({
       color: 0x9ec5e0,
@@ -836,22 +830,192 @@ export function buildClinicWorld3D(
     microDetailsGroup.add(bollard);
   }
 
-  // Courtyard travertine stone walkway + wide entrance steps from open gate (x=27) to glass doors (x=22)
-  const walkway = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(5.2, 0.08, 2.75)), paverMat);
-  walkway.position.set(24.55, 0.025, 15.0);
+  // Courtyard travertine stone walkway + wide architectural entrance staircase from open gate (x=27) up to glass doors (x=22)
+  // Walkway spans x: 23.52 .. 27.15 (width 3.63m, top = 0.065)
+  const walkway = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(3.63, 0.08, 2.75)), paverMat);
+  walkway.position.set(25.335, 0.025, 15.0);
   walkway.receiveShadow = true;
   root.add(walkway);
 
-  // 3 wide architectural stone steps leading up to the sliding glass clinic entrance
-  for (let si = 0; si < 3; si++) {
-    const stepMesh = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(0.34, 0.045 + (2 - si) * 0.022, 2.75 - si * 0.06)),
+  // Architectural staircase materials: bullnose travertine, recessed riser reveal, brushed bronze anti-slip nosing, recessed step LED
+  const stairBodyMat = trackMat(makeMat({ color: 0xcdc4b6, roughness: 0.78, metalness: 0.02 }));
+  const riserRevealMat = trackMat(makeMat({ color: 0x47515e, roughness: 0.85, metalness: 0.06 }));
+  const nosingMat = trackMat(
+    makeMat({
+      color: 0x2d3748,
+      bumpMap: textures.brushedMetalBump,
+      bumpScale: 0.004,
+      roughness: 0.36,
+      metalness: 0.65,
+    })
+  );
+
+  const stairsGroup = new THREE.Group();
+  const clearTreadW = 2.08; // z: 13.96 .. 16.04 between cheek walls
+
+  // Top entrance landing (x: 21.96 .. 22.56, top flush with indoor threshold = 0.345)
+  const landingBase = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.62, 0.35, clearTreadW + 0.24)),
+    stairBodyMat
+  );
+  landingBase.position.set(22.26, 0.16, 15.0);
+  landingBase.castShadow = true;
+  landingBase.receiveShadow = true;
+  const landingTop = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.62, 0.036, clearTreadW + 0.02)),
+    paverMat
+  );
+  landingTop.position.set(22.26, 0.327, 15.0); // top = 0.345
+  landingTop.receiveShadow = true;
+  const landingNosing = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.038, 0.012, clearTreadW)),
+    nosingMat
+  );
+  landingNosing.position.set(22.55, 0.342, 15.0);
+  const landingLed = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.018, 0.012, clearTreadW - 0.14)),
+    entranceSconceMat
+  );
+  landingLed.position.set(22.552, 0.322, 15.0);
+  stairsGroup.add(landingBase, landingTop, landingNosing, landingLed);
+
+  // 3 descending architectural steps (top = 0.275, 0.205, 0.135 -> courtyard walkway = 0.065)
+  const stepSpecs: Array<{ xMin: number; xMax: number; topY: number }> = [
+    { xMin: 22.56, xMax: 22.88, topY: 0.275 },
+    { xMin: 22.88, xMax: 23.20, topY: 0.205 },
+    { xMin: 23.20, xMax: 23.52, topY: 0.135 },
+  ];
+  for (const st of stepSpecs) {
+    const tLen = st.xMax - st.xMin;
+    const cx = (st.xMin + st.xMax) / 2;
+    const riserH = Math.max(0.05, st.topY - 0.036 + 0.01);
+    // Solid recessed stone riser block (inset slightly along +X so bullnose tread overhangs cleanly)
+    const riser = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(tLen - 0.018, riserH, clearTreadW)),
+      riserRevealMat
+    );
+    riser.position.set(cx - 0.009, (st.topY - 0.036) - riserH / 2, 15.0);
+    riser.castShadow = true;
+    riser.receiveShadow = true;
+
+    // Overhanging honed travertine tread slab
+    const tread = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(tLen + 0.028, 0.036, clearTreadW + 0.02)),
       paverMat
     );
-    stepMesh.position.set(22.22 + si * 0.28, 0.05 + (2 - si) * 0.022, 15.0);
-    stepMesh.receiveShadow = true;
-    root.add(stepMesh);
+    tread.position.set(cx + 0.008, st.topY - 0.018, 15.0);
+    tread.castShadow = true;
+    tread.receiveShadow = true;
+
+    // Anti-slip brushed bronze safety nosing strip
+    const nosing = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.036, 0.011, clearTreadW)),
+      nosingMat
+    );
+    nosing.position.set(st.xMax + 0.002, st.topY - 0.002, 15.0);
+
+    // Subtle warm recessed under-nosing LED accent strip
+    const stepLed = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.016, 0.012, clearTreadW - 0.14)),
+      entranceSconceMat
+    );
+    stepLed.position.set(st.xMax - 0.005, st.topY - 0.022, 15.0);
+
+    stairsGroup.add(riser, tread, nosing, stepLed);
   }
+
+  // Flanking stepped architectural limestone cheek walls + brushed stainless handrails (z = 13.89 & z = 16.11)
+  for (const zSide of [13.89, 16.11]) {
+    // Lower base stringer wall supporting handrail posts
+    const cheekUpper = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.68, 0.44, 0.12)),
+      stuccoWhiteMat
+    );
+    cheekUpper.position.set(22.34, 0.21, zSide);
+    cheekUpper.castShadow = true;
+    cheekUpper.receiveShadow = true;
+
+    const cheekMid = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.66, 0.30, 0.12)),
+      stuccoWhiteMat
+    );
+    cheekMid.position.set(22.92, 0.14, zSide);
+    cheekMid.castShadow = true;
+    cheekMid.receiveShadow = true;
+
+    const cheekLow = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.38, 0.19, 0.12)),
+      stuccoWhiteMat
+    );
+    cheekLow.position.set(23.38, 0.085, zSide);
+    cheekLow.castShadow = true;
+    cheekLow.receiveShadow = true;
+
+    // Coping caps on cheek walls
+    const capUpper = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.70, 0.04, 0.145)), paverMat);
+    capUpper.position.set(22.34, 0.445, zSide);
+    const capMid = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.66, 0.04, 0.145)), paverMat);
+    capMid.position.set(22.92, 0.305, zSide);
+    const capLow = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.40, 0.04, 0.145)), paverMat);
+    capLow.position.set(23.38, 0.195, zSide);
+
+    // Brushed stainless-steel handrail stanchion posts + sloped continuous top bar
+    const postTop = new THREE.Mesh(
+      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.56, 10)),
+      aluminumTrimMat
+    );
+    postTop.position.set(22.24, 0.72, zSide);
+    postTop.castShadow = true;
+
+    const postMid = new THREE.Mesh(
+      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.54, 10)),
+      aluminumTrimMat
+    );
+    postMid.position.set(22.88, 0.57, zSide);
+    postMid.castShadow = true;
+
+    const postBot = new THREE.Mesh(
+      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.53, 10)),
+      aluminumTrimMat
+    );
+    postBot.position.set(23.48, 0.46, zSide);
+    postBot.castShadow = true;
+
+    // Flat landing rail + angled stair slope rail connecting cleanly
+    const flatRail = new THREE.Mesh(
+      trackGeom(new THREE.CylinderGeometry(0.024, 0.024, 0.36, 10)),
+      aluminumTrimMat
+    );
+    flatRail.rotation.z = Math.PI / 2;
+    flatRail.position.set(22.39, 1.00, zSide);
+    flatRail.castShadow = true;
+
+    const dxR = 23.50 - 22.54;
+    const dyR = 0.72 - 1.00;
+    const slopeLenR = Math.hypot(dxR, dyR);
+    const slopeRail = new THREE.Mesh(
+      trackGeom(new THREE.CylinderGeometry(0.024, 0.024, slopeLenR, 10)),
+      aluminumTrimMat
+    );
+    slopeRail.rotation.z = Math.PI / 2 + Math.atan2(dyR, dxR);
+    slopeRail.position.set((22.54 + 23.50) / 2, (1.00 + 0.72) / 2, zSide);
+    slopeRail.castShadow = true;
+
+    stairsGroup.add(
+      cheekUpper,
+      cheekMid,
+      cheekLow,
+      capUpper,
+      capMid,
+      capLow,
+      postTop,
+      postMid,
+      postBot,
+      flatRail,
+      slopeRail
+    );
+  }
+  root.add(stairsGroup);
 
   // Courtyard Garden Terrace Plaza & Pergola Lounge (x: 22..26.8, z: 2..21)
   const courtyardTerrace = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(4.2, 0.04, 5.2)), paverMat);
@@ -1015,22 +1179,87 @@ export function buildClinicWorld3D(
     }
   }
 
-  // 4. Expanded Indoor Clinic Foundation Slab & Honed Room Floors (x: 2..22, z: 2..22 -> 20m x 20m!)
+  // 4. Elevated Architectural Clinic Foundation Podium & Realistic Medical Floors (x: 2..22, z: 2..22)
   const plinth = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(20.65, 0.09, 20.65)),
-    trackMat(makeMat({ color: 0x9aa4b0, roughness: 0.85 }))
+    trackGeom(new THREE.BoxGeometry(20.66, 0.24, 20.66)),
+    trackMat(makeMat({ color: 0x8e99a6, roughness: 0.84 }))
   );
-  plinth.position.set(12.0, -0.02, 12.0);
+  plinth.position.set(12.0, 0.08, 12.0); // extends from y=-0.04 up to y=0.20
   plinth.receiveShadow = true;
   root.add(plinth);
 
-  const slab = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(20.28, 0.14, 20.28)),
-    trackMat(makeMat({ color: 0xc2cbd6, roughness: 0.72 }))
+  const plinthCoping = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(20.44, 0.14, 20.44)),
+    trackMat(makeMat({ color: 0xb6c0cc, roughness: 0.72 }))
   );
-  slab.position.set(12.0, 0.02, 12.0);
+  plinthCoping.position.set(12.0, 0.23, 12.0); // extends up to y=0.30 seamlessly under clinic slab
+  plinthCoping.receiveShadow = true;
+  root.add(plinthCoping);
+
+  const clinicBuildingGroup = new THREE.Group();
+  clinicBuildingGroup.position.y = CLINIC_FLOOR_ELEV;
+  root.add(clinicBuildingGroup);
+
+  const slab = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(20.28, 0.08, 20.28)),
+    trackMat(makeMat({ color: 0xc8d0da, roughness: 0.72 }))
+  );
+  slab.position.set(12.0, -0.005, 12.0); // top at y=0.035, cleanly beneath tiled floorMesh (0.035..0.085)
   slab.receiveShadow = true;
-  root.add(slab);
+  clinicBuildingGroup.add(slab);
+
+  const applyMedicalFloorShader = (
+    mat: THREE.MeshStandardMaterial,
+    minX: number,
+    maxX: number,
+    minZ: number,
+    maxZ: number
+  ) => {
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uRoomBounds = { value: new THREE.Vector4(minX, maxX, minZ, maxZ) };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vFloorWorldXZ;')
+        .replace(
+          '#include <worldpos_vertex>',
+          '#include <worldpos_vertex>\nvFloorWorldXZ = (modelMatrix * vec4(transformed, 1.0)).xz;'
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+          varying vec2 vFloorWorldXZ;
+          uniform vec4 uRoomBounds;
+          float mfHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float mfNoise(vec2 p) {
+            vec2 i = floor(p); vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mfHash(i), mfHash(i + vec2(1.0, 0.0)), f.x),
+                       mix(mfHash(i + vec2(0.0, 1.0)), mfHash(i + vec2(1.0, 1.0)), f.x), f.y);
+          }`
+        )
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+          float mBroad = mfNoise(vFloorWorldXZ * 0.24);
+          float mSubtle = mfNoise(vFloorWorldXZ * 0.72 + vec2(7.1, 3.4));
+          diffuseColor.rgb *= (0.975 + 0.042 * (mBroad * 0.65 + mSubtle * 0.35));
+          float dWall = min(
+            min(vFloorWorldXZ.x - uRoomBounds.x, uRoomBounds.y - vFloorWorldXZ.x),
+            min(vFloorWorldXZ.y - uRoomBounds.z, uRoomBounds.w - vFloorWorldXZ.y)
+          );
+          float wallAo = smoothstep(0.0, 0.36, dWall);
+          diffuseColor.rgb *= mix(0.89, 1.0, wallAo);`
+        );
+    };
+  };
+
+  const cloneTileTex = (src: THREE.CanvasTexture, rx: number, ry: number) => {
+    const t = src.clone();
+    t.needsUpdate = true;
+    t.repeat.set(rx, ry);
+    disposables.push(t);
+    return t;
+  };
 
   const lockedRoomCovers: THREE.Mesh[] = [];
   for (const room of rooms) {
@@ -1038,52 +1267,88 @@ export function buildClinicWorld3D(
     const d = room.maxY - room.minY + 1;
     const cx = room.minX + w / 2;
     const cz = room.minY + d / 2;
+    const repX = w * 0.5;
+    const repY = d * 0.5;
 
-    let mat: THREE.MeshStandardMaterial;
+    const roughTex = cloneTileTex(textures.tileBlueRough, repX, repY);
+    const normalTex = cloneTileTex(textures.tileNormal, repX, repY);
+
+    let mat: THREE.MeshPhysicalMaterial;
     if (!room.unlocked) {
-      mat = trackMat(makeMat({ color: 0x475569, roughness: 0.78, metalness: 0.08 }));
+      const lockedTex = cloneTileTex(textures.tileBlue, repX, repY);
+      mat = trackMat(
+        new THREE.MeshPhysicalMaterial({
+          color: 0x7f8e9e,
+          map: lockedTex,
+          roughnessMap: roughTex,
+          normalMap: normalTex,
+          normalScale: new THREE.Vector2(0.75, 0.75),
+          roughness: 0.92,
+          metalness: 0.02,
+          clearcoat: 0.12,
+          clearcoatRoughness: 0.36,
+          reflectivity: 0.5,
+          envMapIntensity: 0.38,
+        })
+      );
+      applyMedicalFloorShader(mat, room.minX, room.maxX + 1, room.minY, room.maxY + 1);
     } else if (room.floorTheme === 'gym_royal') {
-      const gymTex = textures.gymRoyal.clone();
-      gymTex.needsUpdate = true;
-      gymTex.repeat.set(w * 0.5, d * 0.5);
-      disposables.push(gymTex);
-      mat = trackMat(makeMat({ map: gymTex, roughness: 0.58, metalness: 0.05 }));
+      const gymTex = cloneTileTex(textures.gymRoyal, repX, repY);
+      mat = trackMat(
+        new THREE.MeshPhysicalMaterial({
+          map: gymTex,
+          roughnessMap: roughTex,
+          normalMap: normalTex,
+          normalScale: new THREE.Vector2(0.95, 0.95),
+          roughness: 0.88,
+          metalness: 0.02,
+          clearcoat: 0.22,
+          clearcoatRoughness: 0.25,
+          reflectivity: 0.65,
+          envMapIntensity: 0.54,
+        })
+      );
+      applyMedicalFloorShader(mat, room.minX, room.maxX + 1, room.minY, room.maxY + 1);
     } else if (room.floorTheme === 'tile_mint') {
-      const mintTex = textures.tileMint.clone();
-      mintTex.needsUpdate = true;
-      mintTex.repeat.set(w * 0.5, d * 0.5);
-      disposables.push(mintTex);
+      const mintTex = cloneTileTex(textures.tileMint, repX, repY);
       mat = trackMat(
-        makeMat({
+        new THREE.MeshPhysicalMaterial({
           map: mintTex,
-          roughnessMap: textures.tileBlueRough,
-          bumpMap: textures.tileBump,
-          bumpScale: 0.008,
-          roughness: 0.8,
-          metalness: 0.06,
+          roughnessMap: roughTex,
+          normalMap: normalTex,
+          normalScale: new THREE.Vector2(0.95, 0.95),
+          roughness: 0.88,
+          metalness: 0.02,
+          clearcoat: 0.22,
+          clearcoatRoughness: 0.24,
+          reflectivity: 0.65,
+          envMapIntensity: 0.54,
         })
       );
+      applyMedicalFloorShader(mat, room.minX, room.maxX + 1, room.minY, room.maxY + 1);
     } else {
-      const blueTex = textures.tileBlue.clone();
-      blueTex.needsUpdate = true;
-      blueTex.repeat.set(w * 0.5, d * 0.5);
-      disposables.push(blueTex);
+      const blueTex = cloneTileTex(textures.tileBlue, repX, repY);
       mat = trackMat(
-        makeMat({
+        new THREE.MeshPhysicalMaterial({
           map: blueTex,
-          roughnessMap: textures.tileBlueRough,
-          bumpMap: textures.tileBump,
-          bumpScale: 0.008,
-          roughness: 0.78,
-          metalness: 0.08,
+          roughnessMap: roughTex,
+          normalMap: normalTex,
+          normalScale: new THREE.Vector2(0.98, 0.98),
+          roughness: 0.86,
+          metalness: 0.02,
+          clearcoat: 0.24,
+          clearcoatRoughness: 0.23,
+          reflectivity: 0.68,
+          envMapIntensity: 0.54,
         })
       );
+      applyMedicalFloorShader(mat, room.minX, room.maxX + 1, room.minY, room.maxY + 1);
     }
 
-    const floorMesh = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(w - 0.02, 0.05, d - 0.02)), mat);
+    const floorMesh = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(w, 0.05, d)), mat);
     floorMesh.position.set(cx, 0.06, cz);
     floorMesh.receiveShadow = true;
-    root.add(floorMesh);
+    clinicBuildingGroup.add(floorMesh);
 
     if (!room.unlocked) {
       const cover = new THREE.Mesh(
@@ -1100,7 +1365,7 @@ export function buildClinicWorld3D(
       cover.position.set(cx, 1.74, cz);
       cover.userData.roomId = room.id;
       lockedRoomCovers.push(cover);
-      root.add(cover);
+      clinicBuildingGroup.add(cover);
     }
   }
 
@@ -1172,7 +1437,7 @@ export function buildClinicWorld3D(
       northFloorPool.position.set(cx, 0.092, room.minY + 1.15);
       northFloorPool.scale.set(4.1, 2.35, 1);
     }
-    root.add(barHousing, wallBar, northWash, northFloorPool);
+    clinicBuildingGroup.add(barHousing, wallBar, northWash, northFloorPool);
 
     // 2) West / Vertical Divider Wall Sconce
     const sideWash = new THREE.Mesh(sconceUnitPlane, wMat);
@@ -1189,7 +1454,7 @@ export function buildClinicWorld3D(
       sideWash.scale.set(3.8, 2.25, 1);
       sideFloorPool.position.set(3.25, 0.092, cz);
       sideFloorPool.scale.set(2.5, 4.4, 1);
-      root.add(sideHousing, sideBar, sideWash, sideFloorPool);
+      clinicBuildingGroup.add(sideHousing, sideBar, sideWash, sideFloorPool);
     } else {
       const divBar = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.11, 0.08, 2.4)), rMat);
       divBar.position.set(12.135, 1.74, cz);
@@ -1199,16 +1464,16 @@ export function buildClinicWorld3D(
       sideWash.scale.set(3.2, 1.54, 1);
       sideFloorPool.position.set(13.15, 0.092, cz);
       sideFloorPool.scale.set(2.35, 4.1, 1);
-      root.add(divHousing, divBar, sideWash, sideFloorPool);
+      clinicBuildingGroup.add(divHousing, divBar, sideWash, sideFloorPool);
     }
 
-    // 3) Smart primary wall-sconce anchor (places dynamic PointLight directly at the side wall sconce)
+    // 3) Smart primary wall-sconce anchor (places dynamic PointLight directly at the side wall sconce in world space)
     if (room.minX === 2) {
-      roomSconceAnchors.set(room.id, { x: 2.95, y: 2.25, z: cz });
+      roomSconceAnchors.set(room.id, { x: 2.95, y: 2.25 + CLINIC_FLOOR_ELEV, z: cz });
     } else if (room.minY === 2) {
-      roomSconceAnchors.set(room.id, { x: cx, y: 2.25, z: 2.95 });
+      roomSconceAnchors.set(room.id, { x: cx, y: 2.25 + CLINIC_FLOOR_ELEV, z: 2.95 });
     } else {
-      roomSconceAnchors.set(room.id, { x: 12.95, y: 1.82, z: cz });
+      roomSconceAnchors.set(room.id, { x: 12.95, y: 1.82 + CLINIC_FLOOR_ELEV, z: cz });
     }
   }
 
@@ -1240,7 +1505,7 @@ export function buildClinicWorld3D(
       knee.position.set(cx, 0.07 + kneeH / 2, cz);
       knee.castShadow = true;
       knee.receiveShadow = true;
-      root.add(knee);
+      clinicBuildingGroup.add(knee);
 
       // Floor baseboard skirting + protruding window sill reveal + EPDM gasket + transom
       const skirt = new THREE.Mesh(
@@ -1248,14 +1513,14 @@ export function buildClinicWorld3D(
         darkMullionMat
       );
       skirt.position.set(cx, 0.12, cz);
-      root.add(skirt);
+      clinicBuildingGroup.add(skirt);
 
       const sillReveal = new THREE.Mesh(
         trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.9, 0.025, sz + trimAddZ * 0.9)),
         epdmGasketMat
       );
       sillReveal.position.set(cx, 0.07 + kneeH - 0.005, cz);
-      root.add(sillReveal);
+      clinicBuildingGroup.add(sillReveal);
 
       const sill = new THREE.Mesh(
         trackGeom(new THREE.BoxGeometry(sx + trimAddX * 1.48, 0.068, sz + trimAddZ * 1.48)),
@@ -1263,14 +1528,14 @@ export function buildClinicWorld3D(
       );
       sill.position.set(cx, 0.07 + kneeH + 0.022, cz);
       sill.castShadow = true;
-      root.add(sill);
+      clinicBuildingGroup.add(sill);
 
       const glassH = height - kneeH - 0.12;
       const gsX = isAlongX ? len - 0.16 : 0.045;
       const gsZ = isAlongX ? 0.045 : len - 0.16;
       const pane = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(gsX, glassH, gsZ)), glassMat);
       pane.position.set(cx, 0.07 + kneeH + 0.04 + glassH / 2, cz);
-      root.add(pane);
+      clinicBuildingGroup.add(pane);
 
       // Horizontal architectural transom bar on tall curtain glass bays
       if (height >= 2.0) {
@@ -1280,7 +1545,7 @@ export function buildClinicWorld3D(
         );
         transom.position.set(cx, 0.07 + height - 0.62, cz);
         transom.castShadow = true;
-        root.add(transom);
+        clinicBuildingGroup.add(transom);
       }
 
       // Vertical architectural window mullions dividing curtain glass into realistic bays
@@ -1294,7 +1559,7 @@ export function buildClinicWorld3D(
           const m = new THREE.Mesh(mullGeom, darkMullionMat);
           m.position.set(x1 + dx * t, 0.07 + kneeH + 0.03 + glassH / 2, z1 + dz * t);
           m.castShadow = true;
-          root.add(m);
+          clinicBuildingGroup.add(m);
         }
       }
 
@@ -1304,7 +1569,7 @@ export function buildClinicWorld3D(
       );
       topFrame.position.set(cx, 0.07 + height - 0.05, cz);
       topFrame.castShadow = true;
-      root.add(topFrame);
+      clinicBuildingGroup.add(topFrame);
       return;
     }
 
@@ -1315,13 +1580,13 @@ export function buildClinicWorld3D(
       darkMullionMat
     );
     skirt.position.set(cx, 0.125, cz);
-    root.add(skirt);
+    clinicBuildingGroup.add(skirt);
 
     const wain = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, baseH, sz)), wainscotBlueMat);
     wain.position.set(cx, 0.07 + baseH / 2, cz);
     wain.castShadow = true;
     wain.receiveShadow = true;
-    root.add(wain);
+    clinicBuildingGroup.add(wain);
 
     // Shadow-gap trim + protruding architectural dado / chair-rail molding between wainscot & plaster
     const dadoShadow = new THREE.Mesh(
@@ -1335,14 +1600,14 @@ export function buildClinicWorld3D(
     );
     dado.position.set(cx, 0.07 + baseH + 0.008, cz);
     dado.castShadow = true;
-    root.add(dadoShadow, dado);
+    clinicBuildingGroup.add(dadoShadow, dado);
 
     const upperH = Math.max(0.06, height - baseH);
     const upper = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, upperH, sz)), stuccoWhiteMat);
     upper.position.set(cx, 0.07 + baseH + upperH / 2, cz);
     upper.castShadow = true;
     upper.receiveShadow = true;
-    root.add(upper);
+    clinicBuildingGroup.add(upper);
 
     const capReveal = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.65, 0.02, sz + trimAddZ * 0.65)),
@@ -1355,7 +1620,7 @@ export function buildClinicWorld3D(
     );
     cap.position.set(cx, 0.07 + height + 0.037, cz);
     cap.castShadow = true;
-    root.add(capReveal, cap);
+    clinicBuildingGroup.add(capReveal, cap);
   };
 
   // Back perimeter walls (deep 0.30m thickness, tall 3.50m, x: 2..22, z: 2..22)
@@ -1372,7 +1637,7 @@ export function buildClinicWorld3D(
     base.position.set(px, 0.29, pz);
     const cap = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(w + 0.07, 0.08, w + 0.07)), darkMullionMat);
     cap.position.set(px, 0.07 + h + 0.04, pz);
-    root.add(col, base, cap);
+    clinicBuildingGroup.add(col, base, cap);
   };
   addPilaster(2, 2, 0.38, 3.52);
   addPilaster(22, 2, 0.34, 2.98);
@@ -1384,7 +1649,7 @@ export function buildClinicWorld3D(
   ledStripBack.position.set(12.0, 3.38, 2.2);
   const ledStripLeft = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.08, 0.05, 19.2)), warmLedMat);
   ledStripLeft.position.set(2.2, 3.38, 12.0);
-  root.add(ledStripBack, ledStripLeft);
+  clinicBuildingGroup.add(ledStripBack, ledStripLeft);
 
   // Cutaway front-left wall (z=22, glazed knee wall H=1.12 so interior stays clearly visible)
   addWallSpan(2, 22, 7.2, 22, 1.12, 0.24, true);
@@ -1400,13 +1665,13 @@ export function buildClinicWorld3D(
     const slat = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.16, 3.12, 0.06)), woodSlatMat);
     slat.position.set(22.16, 1.63, lz);
     slat.castShadow = true;
-    root.add(slat);
+    clinicBuildingGroup.add(slat);
   }
   for (let lz = 16.35; lz <= 16.85; lz += 0.18) {
     const slat = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.16, 3.12, 0.06)), woodSlatMat);
     slat.position.set(22.16, 1.63, lz);
     slat.castShadow = true;
-    root.add(slat);
+    clinicBuildingGroup.add(slat);
   }
 
   // Interior Partition Walls (H = 1.88m, thickness = 0.20m — deeper architectural partitions!)
@@ -1432,7 +1697,7 @@ export function buildClinicWorld3D(
   );
   wallLogoFrame.position.set(12.126, 1.43, 18.6);
   wallLogoFrame.castShadow = true;
-  root.add(wallLogoFrame);
+  clinicBuildingGroup.add(wallLogoFrame);
 
   const wallLogo = new THREE.Mesh(
     trackGeom(new THREE.PlaneGeometry(2.44, 0.68)),
@@ -1446,21 +1711,21 @@ export function buildClinicWorld3D(
   );
   wallLogo.rotation.y = Math.PI / 2;
   wallLogo.position.set(12.148, 1.43, 18.6);
-  root.add(wallLogo);
+  clinicBuildingGroup.add(wallLogo);
 
   const wallCert = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(0.04, 0.48, 0.62)),
     trackMat(makeMat({ map: textures.certificateFrame, roughness: 0.38 }))
   );
   wallCert.position.set(12.125, 1.38, 12.0);
-  root.add(wallCert);
+  clinicBuildingGroup.add(wallCert);
 
   const wallChart = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(0.04, 0.96, 0.7)),
     trackMat(makeMat({ map: textures.anatomyPoster, roughness: 0.42 }))
   );
   wallChart.position.set(2.175, 1.95, 15.8);
-  root.add(wallChart);
+  clinicBuildingGroup.add(wallChart);
 
   // Normal Single-Leaf Interior Doors (standard ~0.92m single door opening, matching raised 1.88m partitions)
   const addAnimatedSingleDoor = (
@@ -1482,7 +1747,7 @@ export function buildClinicWorld3D(
         1.01,
         axis === 'z' ? cz + side * 0.48 : cz
       );
-      root.add(jamb);
+      clinicBuildingGroup.add(jamb);
     }
 
     const piv = new THREE.Group();
@@ -1534,7 +1799,18 @@ export function buildClinicWorld3D(
     closerBody.position.set(axis === 'z' ? 0 : len * 0.28, 1.71, axis === 'z' ? len * 0.28 : 0);
 
     piv.add(body, kickPlate, visionBezel, visionGlass, lockPlate, handle, closerBody);
-    root.add(piv);
+    clinicBuildingGroup.add(piv);
+
+    // Brushed stainless medical floor transition strip separating room tiles cleanly under the door leaf
+    const doorThreshold = new THREE.Mesh(
+      trackGeom(
+        new THREE.BoxGeometry(axis === 'z' ? 0.18 : 0.94, 0.006, axis === 'z' ? 0.94 : 0.18)
+      ),
+      aluminumTrimMat
+    );
+    doorThreshold.position.set(cx, 0.086, cz);
+    doorThreshold.receiveShadow = true;
+    clinicBuildingGroup.add(doorThreshold);
 
     doors.push({
       id,
@@ -1571,9 +1847,15 @@ export function buildClinicWorld3D(
     const col = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.36, 3.12, 0.32)), stuccoWhiteMat);
     col.position.set(0, 1.56, dz);
     col.castShadow = true;
+    const colBase = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.4, CLINIC_FLOOR_ELEV + 0.06, 0.36)),
+      stuccoWhiteMat
+    );
+    colBase.position.set(0, -(CLINIC_FLOOR_ELEV + 0.06) / 2 + 0.03, dz);
+    colBase.castShadow = true;
     const sconce = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.14, 0.32, 0.14)), entranceSconceMat);
     sconce.position.set(0.22, 1.88, dz);
-    entranceGroup.add(col, sconce);
+    entranceGroup.add(col, colBase, sconce);
   }
   const makeSlidingPanel = (zOffset: number) => {
     const panelGroup = new THREE.Group();
@@ -1652,7 +1934,7 @@ export function buildClinicWorld3D(
   facadeFace.position.set(0.41, 3.74, 0);
 
   entranceGroup.add(canopy, canopyGlow, canopyBlue, facadeBox, facadeFace);
-  root.add(entranceGroup);
+  clinicBuildingGroup.add(entranceGroup);
 
   // 7. Wild Untamed Perimeter Trees (oak, wild_fig, acacia, cypress, birch)
   // Visually & structurally distinct from Store ornamental planter trees: raw earth root mounds, wild boughs, zero planters/blossoms.

@@ -1,8 +1,73 @@
-import { GRID_SIZE } from '../data/catalog';
 import { ClinicRoom, PlacedItem } from '../types/clinic';
 
 export const TILE_W = 68;
 export const TILE_H = 34;
+
+export const CLINIC_FLOOR_ELEV = 0.26;
+export const COURTYARD_WALKWAY_TOP = 0.065;
+export const CLINIC_FLOOR_TOP = 0.085 + CLINIC_FLOOR_ELEV; // 0.345
+
+export interface SurfaceElevation {
+  floorY: number;
+  actorY: number;
+  onStairs: boolean;
+}
+
+/**
+ * Single source of truth for floor & stair surface heights across 3D world geometry and character kinematics.
+ * Exterior entrance stairs run along X from courtyard walkway (x > 23.52) up 4 risers to the
+ * clinic entrance landing (x <= 22.56) within z in [13.78..16.22].
+ */
+export function getSurfaceElevation(wx: number, wz: number): SurfaceElevation {
+  // Clinic building interior (x: 2..22, z: 2..22)
+  if (wx >= 1.85 && wx <= 22.0 && wz >= 1.85 && wz <= 22.15) {
+    return {
+      floorY: CLINIC_FLOOR_TOP,
+      actorY: 0.02 + CLINIC_FLOOR_ELEV,
+      onStairs: false,
+    };
+  }
+
+  // Exterior entrance stairs & landing portico (x: 22.0..23.52, z: 13.75..16.25)
+  if (wx > 22.0 && wx <= 23.52 && wz >= 13.75 && wz <= 16.25) {
+    if (wx <= 22.56) {
+      // Top landing flush with sliding glass door threshold
+      return {
+        floorY: CLINIC_FLOOR_TOP,
+        actorY: 0.02 + CLINIC_FLOOR_ELEV,
+        onStairs: false,
+      };
+    }
+    if (wx <= 22.88) {
+      // Step 3 (upper tread)
+      return {
+        floorY: 0.275,
+        actorY: 0.02 + CLINIC_FLOOR_ELEV * 0.75,
+        onStairs: true,
+      };
+    }
+    if (wx <= 23.20) {
+      // Step 2 (middle tread)
+      return {
+        floorY: 0.205,
+        actorY: 0.02 + CLINIC_FLOOR_ELEV * 0.5,
+        onStairs: true,
+      };
+    }
+    // Step 1 (bottom tread)
+    return {
+      floorY: 0.135,
+      actorY: 0.02 + CLINIC_FLOOR_ELEV * 0.25,
+      onStairs: true,
+    };
+  }
+
+  return {
+    floorY: COURTYARD_WALKWAY_TOP,
+    actorY: 0.02,
+    onStairs: false,
+  };
+}
 
 export interface Point2D {
   x: number;
@@ -347,6 +412,10 @@ export function buildObstacleBoxes(
   for (const pz of [13.75, 16.25]) {
     boxes.push({ minX: 26.76, maxX: 27.24, minZ: pz - 0.24, maxZ: pz + 0.24 });
   }
+
+  // Exterior Entrance Stair Cheek Walls & Handrails (funnel actors cleanly up/down the treads)
+  boxes.push({ minX: 22.02, maxX: 23.56, minZ: 13.80, maxZ: 13.97 });
+  boxes.push({ minX: 22.02, maxX: 23.56, minZ: 16.03, maxZ: 16.20 });
 
   // Courtyard Shrubs so actors walk around planted bushes cleanly
   for (const [bx, bz] of [
@@ -758,7 +827,7 @@ export function canStepBetween(
   toY: number,
   rooms: ClinicRoom[]
 ): boolean {
-  if (toX < -7 || toX > 37 || toY < -5 || toY >= GRID_SIZE) return false;
+  if (toX < -7 || toX > 37 || toY < -5 || toY > 26) return false;
 
   // Handle diagonal step cleanly by requiring both orthogonal legs clear
   if (fromX !== toX && fromY !== toY) {

@@ -7,25 +7,31 @@ import { createCatalogMesh3D, disposeObject3D } from './models3d';
 import { createTextureBundle } from './textures3d';
 
 const thumbCache = new Map<string, string>();
-let renderedWithGlb = false;
+const glbRenderedKeys = new Set<string>();
 const subscribers = new Set<() => void>();
+const pendingQueue = new Map<string, { sprite: SpriteKind; width: number; depth: number }>();
+let flushScheduled = false;
 
 function notifySubscribers() {
   subscribers.forEach((cb) => cb());
 }
 
 /**
- * Generates lightweight 112x112 3D product thumbnails on-demand using a transient
- * offscreen WebGLRenderer, then immediately disposes the temporary GPU context.
+ * Generates crisp 160x160 3D product thumbnails on-demand using a transient
+ * offscreen WebGLRenderer, then immediately releases the temporary GPU context.
  */
 export function renderThumbBatch(
   specs: Array<{ sprite: SpriteKind; width: number; depth: number }>
 ): void {
   const glbIsReady = glbRegistry.ready;
-  const missing = specs.filter((s) => {
+  const deduped = new Map<string, { sprite: SpriteKind; width: number; depth: number }>();
+  for (const s of specs) {
     const key = `${s.sprite}_${s.width}x${s.depth}`;
-    return !thumbCache.has(key) || (glbIsReady && !renderedWithGlb);
-  });
+    if (!thumbCache.has(key) || (glbIsReady && !glbRenderedKeys.has(key))) {
+      deduped.set(key, s);
+    }
+  }
+  const missing = Array.from(deduped.values());
   if (missing.length === 0) return;
 
   let renderer: THREE.WebGLRenderer | null = null;
@@ -40,7 +46,7 @@ export function renderThumbBatch(
     return;
   }
 
-  const size = 112;
+  const size = 160;
   renderer.setSize(size, size);
   renderer.setPixelRatio(1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -64,7 +70,7 @@ export function renderThumbBatch(
   scene.add(hemi, keyLight, rimLight);
 
   const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 40);
-  const textures = createTextureBundle(1);
+  const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy());
   const box = new THREE.Box3();
   const center = new THREE.Vector3();
   const dims = new THREE.Vector3();
@@ -99,8 +105,11 @@ export function renderThumbBatch(
       renderer.clear();
       renderer.render(scene, camera);
       try {
-        const url = renderer.domElement.toDataURL('image/webp', 0.86);
+        const url = renderer.domElement.toDataURL('image/webp', 0.92);
         thumbCache.set(key, url);
+        if (glbIsReady) {
+          glbRenderedKeys.add(key);
+        }
       } catch {
         // Ignore security/readback failures
       }
@@ -110,11 +119,26 @@ export function renderThumbBatch(
     disposeObject3D(mesh);
   }
 
-  if (glbIsReady) renderedWithGlb = true;
   envTarget.dispose();
   textures.dispose();
+  const gl = renderer.getContext();
   renderer.dispose();
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
   notifySubscribers();
+}
+
+function scheduleThumbRender(spec: { sprite: SpriteKind; width: number; depth: number }) {
+  const key = `${spec.sprite}_${spec.width}x${spec.depth}`;
+  pendingQueue.set(key, spec);
+  if (flushScheduled) return;
+  flushScheduled = true;
+  queueMicrotask(() => {
+    flushScheduled = false;
+    if (pendingQueue.size === 0) return;
+    const batch = Array.from(pendingQueue.values());
+    pendingQueue.clear();
+    renderThumbBatch(batch);
+  });
 }
 
 export function useCatalogThumb(
@@ -133,9 +157,8 @@ export function useCatalogThumb(
     };
     subscribers.add(update);
     const unsubGlb = glbRegistry.onReady(() => {
-      // Trigger a single batch re-render when GLB templates finish loading
-      if (!renderedWithGlb) {
-        renderThumbBatch([{ sprite, width, depth }]);
+      if (!glbRenderedKeys.has(key)) {
+        scheduleThumbRender({ sprite, width, depth });
       }
     });
     update();

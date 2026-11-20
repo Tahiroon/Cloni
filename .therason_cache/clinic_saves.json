@@ -303,5 +303,310 @@
     ],
     "updatedAt": "2026-11-19T11:06:18.169Z",
     "syncedAt": "2026-11-19T11:06:18.931Z"
+  },
+  "pt_student_bzymvq": {
+    "studentId": "pt_student_bzymvq",
+    "coins": 1000004,
+    "stars": 0,
+    "satisfaction": 100,
+    "patientsTreatedTotal": 0,
+    "rooms": [
+      {
+        "id": "room_reception",
+        "unlocked": true,
+        "specialty": "reception",
+        "floorTheme": "tile_blue"
+      },
+      {
+        "id": "room_bay_1",
+        "unlocked": true,
+        "specialty": "electrotherapy",
+        "floorTheme": "tile_blue"
+      },
+      {
+        "id": "room_gym",
+        "unlocked": true,
+        "specialty": "kinesiotherapy",
+        "floorTheme": "gym_royal"
+      },
+      {
+        "id": "room_specialty_2",
+        "unlocked": true,
+        "specialty": "hydrotherapy",
+        "floorTheme": "tile_mint"
+      }
+    ],
+    "placedItems": [
+      {
+        "id": "init_desk",
+        "c": "reception_desk",
+        "x": 14,
+        "y": 12,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_chairs",
+        "c": "waiting_chairs",
+        "x": 16,
+        "y": 19,
+        "r": 2,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_table",
+        "c": "coffee_table",
+        "x": 14,
+        "y": 18,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_cooler",
+        "c": "water_cooler",
+        "x": 12,
+        "y": 10,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_cabinet",
+        "c": "file_cabinet",
+        "x": 13,
+        "y": 10,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_plant_rec",
+        "c": "potted_plant",
+        "x": 20,
+        "y": 11,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "init_bed_1",
+        "c": "treatment_bed",
+        "x": 3,
+        "y": 18,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_bed_2",
+        "c": "treatment_bed",
+        "x": 7,
+        "y": 14,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_parallel_1",
+        "c": "parallel_bars",
+        "x": 3,
+        "y": 11,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_ball_1",
+        "c": "ball_rack",
+        "x": 2,
+        "y": 10,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_shelf_1",
+        "c": "supply_shelf",
+        "x": 9,
+        "y": 10,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_tens_1",
+        "c": "tens_unit",
+        "x": 7,
+        "y": 11,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_us_1",
+        "c": "ultrasound_unit",
+        "x": 9,
+        "y": 18,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_plant_bay",
+        "c": "potted_plant",
+        "x": 2,
+        "y": 20,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "init_bench_1",
+        "c": "park_bench",
+        "x": 23,
+        "y": 4,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_lamp_1",
+        "c": "garden_lamp",
+        "x": 26,
+        "y": 13,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_lamp_2",
+        "c": "garden_lamp",
+        "x": 26,
+        "y": 16,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_1",
+        "c": "flower_bed",
+        "x": 26,
+        "y": 18,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_2",
+        "c": "flower_bed",
+        "x": 22,
+        "y": 18,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_3",
+        "c": "flower_bed",
+        "x": 25,
+        "y": 3,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_4",
+        "c": "flower_bed",
+        "x": 22,
+        "y": 12,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "init_flower_5",
+        "c": "flower_bed",
+        "x": 22,
+        "y": 16,
+        "r": 0,
+        "rm": "outdoor"
+      },
+      {
+        "id": "item_1795162040861_7x1w",
+        "c": "solar_panel",
+        "x": -6,
+        "y": 9,
+        "r": 3,
+        "rm": "outdoor"
+      },
+      {
+        "id": "item_1795163980446_qz2y",
+        "c": "reception_display_stand",
+        "x": 16,
+        "y": 17,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "item_1795164114287_6utp",
+        "c": "luxury_chair",
+        "x": 5,
+        "y": 16,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1795164142390_t4s3",
+        "c": "ac_nesma",
+        "x": 12,
+        "y": 15,
+        "r": 0,
+        "rm": "room_reception"
+      },
+      {
+        "id": "item_1795164713567_36pf",
+        "c": "traction_table",
+        "x": 6,
+        "y": 17,
+        "r": 2,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1795164751659_abqx",
+        "c": "cpm_device",
+        "x": 7,
+        "y": 15,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1795164772112_vaog",
+        "c": "tilt_table",
+        "x": 8,
+        "y": 16,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1795165123794_n9wb",
+        "c": "ac_lg",
+        "x": 2,
+        "y": 8,
+        "r": 0,
+        "rm": "room_gym"
+      },
+      {
+        "id": "item_1795165367345_mq3n",
+        "c": "laser_hilt",
+        "x": 8,
+        "y": 19,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1795165406463_xpas",
+        "c": "paraffin_bath",
+        "x": 8,
+        "y": 20,
+        "r": 0,
+        "rm": "room_bay_1"
+      },
+      {
+        "id": "item_1795165499726_wv9b",
+        "c": "wood_slat_divider",
+        "x": 12,
+        "y": 19,
+        "r": 1,
+        "rm": "room_reception"
+      }
+    ],
+    "hiredStaffIds": [
+      "staff_therapist_1",
+      "staff_receptionist"
+    ],
+    "updatedAt": "2026-11-20T09:11:35.934Z",
+    "syncedAt": "2026-11-20T09:11:38.167Z"
   }
 }

@@ -369,6 +369,11 @@ app.post('/api/clinical/evaluate-plan', async (req, res) => {
     language = 'ar',
   } = req.body || {};
 
+  if (!clinicalCase) {
+    res.status(400).json({ error: 'Missing clinicalCase' });
+    return;
+  }
+
   try {
     const response = await callGeminiWithBackoff(() =>
       ai.models.generateContent({

@@ -58,19 +58,40 @@ export interface HumanoidRig {
 }
 
 const _euler = new THREE.Euler();
-const _sheenSubsurface = new THREE.Color(0xe8a088);
+const RICH_SKIN_PALETTE = [
+  '#be8862',
+  '#a66e49',
+  '#8f5938',
+  '#79472b',
+  '#653920',
+  '#522c18',
+  '#412111',
+];
+
+function resolveRichSkinColor(hexStr: string | undefined, seed = 0): THREE.Color {
+  const c = new THREE.Color(hexStr || '#79472b');
+  // Map both overly pale and overly pitch-black legacy saved skin tones into natural warm brown-to-tan diversity
+  const lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  if (lum > 0.36 || lum < 0.014) {
+    const idx = Math.abs(Math.round(lum * 100) + seed) % RICH_SKIN_PALETTE.length;
+    return new THREE.Color(RICH_SKIN_PALETTE[idx]);
+  }
+  return c;
+}
 
 function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.56) {
+  const baseCol = new THREE.Color(hex);
+  const sheenCol = baseCol.clone().lerp(new THREE.Color(0x9a4c30), 0.38);
   return new THREE.MeshPhysicalMaterial({
-    color: hex,
+    color: baseCol,
     map: appearance.skinMicroMap ?? null,
     roughnessMap: appearance.skinRoughMap ?? null,
     roughness,
     metalness: 0.0,
-    sheen: 0.22,
-    sheenRoughness: 0.7,
-    sheenColor: _sheenSubsurface,
-    envMapIntensity: 0.48,
+    sheen: 0.16,
+    sheenRoughness: 0.68,
+    sheenColor: sheenCol,
+    envMapIntensity: 0.34,
   });
 }
 
@@ -86,7 +107,7 @@ function makeClothMat(
   return new THREE.MeshPhysicalMaterial({
     color: hex,
     bumpMap: appearance.fabricWeaveBump ?? null,
-    bumpScale: 0.008,
+    bumpScale: 0.0026,
     roughness,
     metalness: 0.01,
     sheen,
@@ -102,7 +123,7 @@ function makeLeatherMat(hex: string | number, appearance: HumanoidAppearance, ro
   return new THREE.MeshPhysicalMaterial({
     color: hex,
     bumpMap: appearance.leatherBump ?? null,
-    bumpScale: 0.004,
+    bumpScale: 0.0022,
     roughness,
     metalness: 0.05,
     clearcoat: 0.26,
@@ -120,7 +141,7 @@ function makeMetalMat(
   return new THREE.MeshPhysicalMaterial({
     color: hex,
     bumpMap: appearance.brushedMetalBump ?? null,
-    bumpScale: 0.003,
+    bumpScale: 0.0018,
     roughness,
     metalness,
     envMapIntensity: 0.72,
@@ -211,8 +232,8 @@ function createSkinnedGarmentMesh(
   const idxUR = findBoneIdx(bones, ['UpperLegR', 'UpperLeg.R']);
   const idxLR = findBoneIdx(bones, ['LowerLegR', 'LowerLeg.R']);
 
-  const rings = 18;
-  const radialSegs = 32;
+  const rings = 24;
+  const radialSegs = 44;
   const gap = opts.openFrontGapRad || 0;
   const thetaStart = gap;
   const thetaSpan = Math.PI * 2 - gap * 2;
@@ -423,7 +444,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   root.add(hitMesh);
 
   const outfitStyle = resolveOutfitStyle(appearance);
-  const skinCol = new THREE.Color(appearance.skinTone || '#7f4d31');
+  const skinCol = resolveRichSkinColor(appearance.skinTone, appearance.variantSeed || 0);
   const darkerSkinCol = skinCol.clone().multiplyScalar(0.76);
   const hairCol = new THREE.Color(appearance.hairColor || '#17100c');
   const shirtCol = new THREE.Color(appearance.shirtColor || '#ece9e1');
@@ -485,10 +506,10 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             if (meshName.includes('Feet') && isFemaleLook) {
               mat = makeLeatherMat(0x1f1916, appearance, 0.62);
             } else {
-              mat = makeSkinMat(skinCol.getHex(), appearance, 0.56);
+              mat = makeSkinMat(skinCol.getHex(), appearance, 0.62);
             }
           } else if (mName === 'Skin_Darker') {
-            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.6);
+            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.66);
           } else if (
             mName === 'Hair' ||
             mName === 'Hair_Blond' ||
@@ -592,9 +613,29 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
               mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.34);
             } else if (mName === 'Red_Dark' || mName === 'Black') {
               mat = makeLeatherMat(0x27272a, appearance, 0.48);
+            } else if (mName === 'Eye') {
+              mat = new THREE.MeshPhysicalMaterial({
+                color: targetHex,
+                roughness: 0.14,
+                metalness: 0.0,
+                clearcoat: 0.85,
+                clearcoatRoughness: 0.08,
+                envMapIntensity: 0.65,
+              });
             } else {
               mat = orig.clone();
             }
+          }
+
+          if (mName === 'Eye' && !(mat instanceof THREE.MeshPhysicalMaterial)) {
+            mat = new THREE.MeshPhysicalMaterial({
+              color: targetHex,
+              roughness: 0.14,
+              metalness: 0.0,
+              clearcoat: 0.85,
+              clearcoatRoughness: 0.08,
+              envMapIntensity: 0.65,
+            });
           }
 
           mat.name = mName;
@@ -761,16 +802,16 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           new THREE.Vector3(0.068, 0.01, 0.125),
         ]);
         const stethTube = new THREE.Mesh(
-          new THREE.TubeGeometry(stethCurve, 20, 0.009, 7, false),
+          new THREE.TubeGeometry(stethCurve, 32, 0.009, 12, false),
           tubeMat
         );
         const chestDiaphragm = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.024, 0.026, 0.014, 14),
+          new THREE.CylinderGeometry(0.024, 0.026, 0.014, 22),
           chromeMat
         );
         chestDiaphragm.rotation.x = Math.PI / 2;
         chestDiaphragm.position.set(0.068, 0.008, 0.132);
-        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), chromeMat);
+        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.011, 12, 10), chromeMat);
         earTipL.position.set(-0.088, 0.025, 0.118);
 
         // Clinic ID Badge clipped on left coat lapel
@@ -788,7 +829,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           const jMat = makeClothMat(shirtCol.getHex(), appearance, 0.84, 0.5);
           const trimMat = makeClothMat(0xd6c7a8, appearance, 0.65, 0.35);
           const bandCollar = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.084, 0.09, 0.055, 16),
+            new THREE.CylinderGeometry(0.084, 0.09, 0.055, 24),
             jMat
           );
           bandCollar.position.set(0, 0.145, 0.004);
@@ -813,13 +854,13 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       const watchGrp = new THREE.Group();
       watchGrp.scale.setScalar(0.01);
       const strap = new THREE.Mesh(
-        new THREE.TorusGeometry(0.036, 0.007, 8, 16),
+        new THREE.TorusGeometry(0.036, 0.007, 12, 24),
         makeLeatherMat(isTherapist ? 0x1e293b : 0x3a2618, appearance, 0.44)
       );
       strap.rotation.x = Math.PI / 2;
       strap.position.set(0, 0.215, 0);
       const watchFace = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.016, 0.016, 0.008, 12),
+        new THREE.CylinderGeometry(0.016, 0.016, 0.008, 18),
         makeMetalMat(0xe2e8f0, appearance, 0.25, 0.85)
       );
       watchFace.rotation.x = Math.PI / 2;
@@ -833,7 +874,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       sashGrp.scale.setScalar(0.01);
       const sashCol = shirtCol.clone().offsetHSL(0, -0.1, -0.14);
       const sashMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.155, 0.158, 0.042, 20),
+        new THREE.CylinderGeometry(0.155, 0.158, 0.042, 28),
         makeClothMat(sashCol.getHex(), appearance, 0.72, 0.55)
       );
       sashMesh.scale.set(1.0, 1.0, 0.82);
@@ -857,7 +898,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             [0.260, 0.114, 0.026, -0.05, -0.05],
             [0.279, 0.102, 0.022, 0.03, 0.04],
           ] as Array<[number, number, number, number, number]>) {
-            const wrap = new THREE.Mesh(new THREE.TorusGeometry(rad, tubeR, 12, 24), whiteCloth);
+            const wrap = new THREE.Mesh(new THREE.TorusGeometry(rad, tubeR, 18, 36), whiteCloth);
             wrap.rotation.x = Math.PI / 2 + tiltX;
             wrap.rotation.y = tiltY;
             wrap.position.set(0, ty, -0.006);
@@ -865,12 +906,12 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             headAcc.add(wrap);
           }
           const crown = new THREE.Mesh(
-            new THREE.SphereGeometry(0.118, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+            new THREE.SphereGeometry(0.118, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
             whiteCloth
           );
           crown.position.set(0, 0.242, -0.006);
           const emmaTail = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.026, 0.038, 0.13, 10),
+            new THREE.CylinderGeometry(0.026, 0.038, 0.13, 16),
             whiteCloth
           );
           emmaTail.position.set(-0.075, 0.125, -0.092);
@@ -881,15 +922,15 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           const taqMat = makeClothMat(0xede9df, appearance, 0.82, 0.35);
           const brimStitchMat = makeClothMat(0xcabfa8, appearance, 0.78, 0.2);
           const capSide = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.118, 0.122, 0.062, 20),
+            new THREE.CylinderGeometry(0.118, 0.122, 0.062, 28),
             taqMat
           );
           capSide.position.set(0, 0.21, -0.006);
-          const capRim = new THREE.Mesh(new THREE.TorusGeometry(0.121, 0.007, 8, 24), brimStitchMat);
+          const capRim = new THREE.Mesh(new THREE.TorusGeometry(0.121, 0.007, 12, 32), brimStitchMat);
           capRim.rotation.x = Math.PI / 2;
           capRim.position.set(0, 0.182, -0.006);
           const capTop = new THREE.Mesh(
-            new THREE.SphereGeometry(0.118, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
+            new THREE.SphereGeometry(0.118, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.5),
             taqMat
           );
           capTop.position.set(0, 0.24, -0.006);
@@ -902,26 +943,26 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         scarfGrp.scale.setScalar(0.01);
 
         // Outer draped hood framing forehead and covering crown & back bun completely
-        const hood = new THREE.Mesh(new THREE.SphereGeometry(0.126, 20, 14), tarhaMat);
+        const hood = new THREE.Mesh(new THREE.SphereGeometry(0.126, 28, 20), tarhaMat);
         hood.scale.set(1.10, 1.22, 1.24);
         hood.position.set(0, 0.165, -0.022);
         hood.castShadow = true;
 
         // Draped brow/temple fold framing face cleanly
-        const browFold = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.016, 10, 20, Math.PI * 1.15), tarhaMat);
+        const browFold = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.016, 14, 28, Math.PI * 1.15), tarhaMat);
         browFold.rotation.set(0.28, 0, -Math.PI * 0.075);
         browFold.position.set(0, 0.165, 0.018);
 
         // Soft neck & chin wrap
         const neckWrap = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.098, 0.146, 0.17, 18),
+          new THREE.CylinderGeometry(0.098, 0.146, 0.17, 26),
           tarhaMat
         );
         neckWrap.position.set(0, 0.010, -0.008);
 
         // Flowing rear Tarha tail down the back of shoulders
         const backTail = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.105, 0.142, 0.23, 14, 1, false, Math.PI * 0.55, Math.PI * 0.9),
+          new THREE.CylinderGeometry(0.105, 0.142, 0.23, 20, 1, false, Math.PI * 0.55, Math.PI * 0.9),
           tarhaMat
         );
         backTail.position.set(0, -0.042, -0.032);
@@ -932,13 +973,13 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           const chestDrape = new THREE.Group();
           chestDrape.scale.setScalar(0.01);
           const shawl = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.136, 0.194, 0.22, 18),
+            new THREE.CylinderGeometry(0.136, 0.194, 0.22, 26),
             tarhaMat
           );
           shawl.scale.set(1.06, 1.0, 0.78);
           shawl.position.set(0, 0.056, 0.018);
           const shoulderThrow = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.045, 0.068, 0.24, 12),
+            new THREE.CylinderGeometry(0.045, 0.068, 0.24, 18),
             tarhaMat
           );
           shoulderThrow.position.set(-0.088, 0.04, 0.072);
@@ -959,11 +1000,11 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           sheen: 0.2,
           sheenRoughness: 0.7,
         });
-        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.058, 12, 10), beardMat);
+        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.058, 18, 14), beardMat);
         chinBeard.scale.set(1.02, 0.92, 0.85);
         chinBeard.position.set(0, 0.056, 0.058);
         const jawBeard = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.084, 0.068, 0.052, 14, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+          new THREE.CylinderGeometry(0.084, 0.068, 0.052, 20, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
           beardMat
         );
         jawBeard.position.set(0, 0.078, 0.025);
@@ -984,9 +1025,9 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           clearcoat: 1.0,
         });
         for (const side of [-1, 1]) {
-          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.0032, 6, 16), frameMat);
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.0032, 10, 24), frameMat);
           rim.position.set(side * 0.032, 0.132, 0.105);
-          const lens = new THREE.Mesh(new THREE.CircleGeometry(0.021, 14), lensMat);
+          const lens = new THREE.Mesh(new THREE.CircleGeometry(0.021, 20), lensMat);
           lens.position.set(side * 0.032, 0.132, 0.105);
           const arm = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.095), frameMat);
           arm.position.set(side * 0.056, 0.132, 0.058);
@@ -1005,17 +1046,17 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       handCup = new THREE.Group();
       handCup.scale.setScalar(0.01);
       const cupBody = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.036, 0.025, 0.085, 12),
+        new THREE.CylinderGeometry(0.036, 0.025, 0.085, 18),
         colorMat(0xf8fafc, 0.45, 0.02)
       );
       const cupRim = new THREE.Mesh(
-        new THREE.TorusGeometry(0.036, 0.004, 6, 14),
+        new THREE.TorusGeometry(0.036, 0.004, 10, 20),
         colorMat(0x0284c7, 0.35, 0.05)
       );
       cupRim.rotation.x = Math.PI / 2;
       cupRim.position.y = 0.042;
       const cupWater = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.032, 0.029, 0.016, 12),
+        new THREE.CylinderGeometry(0.032, 0.029, 0.016, 18),
         colorMat(0x38bdf8, 0.18, 0.05)
       );
       cupWater.position.y = 0.028;
@@ -1059,7 +1100,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   }
 
   // Fallback anatomical procedural rig during the initial <200ms GLB preload
-  const skinMat = makeSkinMat(appearance.skinTone || '#7f4d31', appearance, 0.58);
+  const skinMat = makeSkinMat(skinCol.getHex(), appearance, 0.62);
   const hairMat = colorMat(appearance.hairColor, 0.84, 0.02);
   const shirtMat = makeClothMat(appearance.shirtColor, appearance, 0.8, 0.45);
   const isFullRobeFallback =
@@ -1079,16 +1120,16 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   const makeLeg = (xOffset: number) => {
     const legPivot = new THREE.Group();
     legPivot.position.set(xOffset, 0.44, 0);
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.048, 0.22, 10), pantsMat);
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.048, 0.22, 16), pantsMat);
     thigh.position.y = -0.11;
     legPivot.add(thigh);
     const shinPivot = new THREE.Group();
     shinPivot.position.set(0, -0.22, 0);
     legPivot.add(shinPivot);
-    const calf = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.038, 0.21, 10), pantsMat);
+    const calf = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.038, 0.21, 16), pantsMat);
     calf.position.y = -0.1;
     shinPivot.add(calf);
-    const shoe = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.07, 4, 8), shoeMat);
+    const shoe = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.07, 6, 12), shoeMat);
     shoe.rotation.x = Math.PI / 2;
     shoe.position.set(0, -0.205, 0.03);
     shinPivot.add(shoe);
@@ -1109,14 +1150,14 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     new THREE.Vector2(0.122, 0.34),
     new THREE.Vector2(0.052, 0.365),
   ];
-  const torsoMesh = new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 12), shirtMat);
+  const torsoMesh = new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 20), shirtMat);
   torsoMesh.scale.set(1.08, 1.0, 0.72);
   torso.add(torsoMesh);
 
   let robePivot: THREE.Group | undefined;
   if (isFullRobeFallback) {
     robePivot = new THREE.Group();
-    const robeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.128, 0.175, 0.38, 12), shirtMat);
+    const robeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.128, 0.175, 0.38, 20), shirtMat);
     robeMesh.scale.set(1.06, 1, 0.8);
     robeMesh.position.y = -0.19;
     robePivot.add(robeMesh);
@@ -1127,9 +1168,9 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     const armPivot = new THREE.Group();
     armPivot.position.set(xOffset, 0.31, 0);
     const sleeveMat = appearance.isStaff && appearance.role === 'therapist' ? coatMat : shirtMat;
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.032, 0.26, 8), sleeveMat);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.032, 0.26, 14), sleeveMat);
     arm.position.y = -0.13;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.034, 8, 6), skinMat);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.034, 14, 10), skinMat);
     hand.position.y = -0.27;
     armPivot.add(arm, hand);
     return armPivot;
@@ -1138,11 +1179,11 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   const rightArm = makeArm(0.16);
   const fallbackCup = new THREE.Group();
   const fbCupBody = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.034, 0.024, 0.08, 10),
+    new THREE.CylinderGeometry(0.034, 0.024, 0.08, 14),
     colorMat(0xf8fafc, 0.45, 0.02)
   );
   const fbCupWater = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.03, 0.027, 0.014, 10),
+    new THREE.CylinderGeometry(0.03, 0.027, 0.014, 14),
     colorMat(0x38bdf8, 0.18, 0.05)
   );
   fbCupWater.position.y = 0.026;
@@ -1155,23 +1196,23 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 0.365, 0);
   torso.add(headGroup);
-  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.102, 12, 10), skinMat);
+  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.102, 20, 16), skinMat);
   cranium.position.y = 0.135;
   headGroup.add(cranium);
   if (appearance.hasHijab) {
     const hood = new THREE.Mesh(
-      new THREE.SphereGeometry(0.114, 12, 10),
+      new THREE.SphereGeometry(0.114, 20, 16),
       colorMat(tarhaCol.getHex())
     );
     hood.position.set(0, 0.14, -0.014);
     headGroup.add(hood);
   } else if (appearance.hasTurban) {
-    const emma = new THREE.Mesh(new THREE.CylinderGeometry(0.118, 0.112, 0.08, 12), colorMat(0xf4f2ec));
+    const emma = new THREE.Mesh(new THREE.CylinderGeometry(0.118, 0.112, 0.08, 20), colorMat(0xf4f2ec));
     emma.position.set(0, 0.215, 0);
     headGroup.add(emma);
   } else {
     const hair = new THREE.Mesh(
-      new THREE.SphereGeometry(0.106, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.6),
+      new THREE.SphereGeometry(0.106, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.6),
       hairMat
     );
     hair.position.set(0, 0.142, -0.01);
@@ -1265,6 +1306,7 @@ export function animateHumanoid3D(
     drinkStage?: 'none' | 'filling' | 'sipping' | 'returning';
     actorSeed?: number;
     seatedActivity?: 'idle' | 'typing' | 'writing' | 'glance' | 'rest';
+    stairClimb?: number;
   }
 ) {
   const {
@@ -1288,6 +1330,7 @@ export function animateHumanoid3D(
     drinkStage = isDrinking ? 'sipping' : 'none',
     actorSeed = 0,
     seatedActivity = 'idle',
+    stairClimb = 0,
   } = opts;
 
   // Individualized phase & cadence so people never breathe, fidget, or glance in lockstep
@@ -1388,12 +1431,20 @@ export function animateHumanoid3D(
     const hipH = rig.hipHeight ?? 0.63 * hScale;
     const sitHipY = THREE.MathUtils.clamp(0.06 + seatHeight + 0.068 * hScale - hipH, -0.52, 0.25);
 
-    const phase = gaitActive ? timeSec * 4.2 : walkPhase;
+    const phase = gaitActive ? timeSec * 3.1 : walkPhase;
     const stride = Math.sin(phase);
     const cosP = Math.cos(phase);
     const cos2 = Math.cos(phase * 2);
+    const climbAmt = THREE.MathUtils.clamp(stairClimb, 0, 1) * activeBlend;
+    const descAmt = THREE.MathUtils.clamp(-stairClimb, 0, 1) * activeBlend;
+    const stairEffort = Math.max(climbAmt, descAmt);
 
-    const standY = 0.042 + (cos2 - 1) * 0.012 * activeBlend - Math.abs(standWeight) * 0.008;
+    const standY =
+      0.042 +
+      (cos2 - 1) * 0.012 * activeBlend +
+      0.024 * Math.abs(stride) * climbAmt -
+      0.014 * descAmt -
+      Math.abs(standWeight) * 0.008;
     const standX = -cosP * 0.012 * activeBlend + standWeight * 0.036;
 
     const basePosX = standX;
@@ -1495,7 +1546,12 @@ export function animateHumanoid3D(
       sitElbowRFlex += smoothGest * 0.36;
     }
 
-    const torsoStandX = -0.035 * activeBlend - pushAmt * 0.065 + breath * 0.65;
+    const torsoStandX =
+      -0.035 * activeBlend +
+      0.13 * climbAmt -
+      0.055 * descAmt -
+      pushAmt * 0.065 +
+      breath * 0.65;
     const torsoStandY = stride * 0.04 * activeBlend - pushAmt * 0.09 - standWeight * 0.05;
     const torsoStandZ = -stride * 0.014 * activeBlend - standWeight * 0.042;
     const baseTorsoX = THREE.MathUtils.lerp(torsoStandX, sitTorsoX, sit);
@@ -1508,7 +1564,11 @@ export function animateHumanoid3D(
       THREE.MathUtils.lerp(baseTorsoZ, -hipShift * 0.5, lie)
     );
 
-    const baseChestX = THREE.MathUtils.lerp(0.015 * activeBlend - pushAmt * 0.04 + breath, sitChestX, sit);
+    const baseChestX = THREE.MathUtils.lerp(
+      0.015 * activeBlend + 0.05 * climbAmt - 0.02 * descAmt - pushAmt * 0.04 + breath,
+      sitChestX,
+      sit
+    );
     const baseChestY = THREE.MathUtils.lerp(stride * 0.048 * activeBlend - pushAmt * 0.08 - standWeight * 0.03, sitTorsoY * 0.45, sit);
     const baseChestZ = THREE.MathUtils.lerp(-stride * 0.018 * activeBlend - standWeight * 0.025, -sitTorsoZ * 0.3, sit);
     applyCharEuler(
@@ -1552,13 +1612,27 @@ export function animateHumanoid3D(
     const sitKneeAngle = THREE.MathUtils.lerp(1.34, 0.62, lowMatFactor);
     const sitFootAngle = THREE.MathUtils.lerp(0.06, 0.28, lowMatFactor);
 
-    const swing = stride * 0.33 * activeBlend;
+    const swing = stride * 0.33 * activeBlend * (1 - 0.22 * descAmt);
+    const stairThighLiftL = Math.max(0, stride) * 0.36 * climbAmt;
+    const stairThighLiftR = Math.max(0, -stride) * 0.36 * climbAmt;
+    const stairKneeL =
+      Math.max(0, stride) * 0.48 * climbAmt + (0.24 + Math.max(0, -stride) * 0.18) * descAmt;
+    const stairKneeR =
+      Math.max(0, -stride) * 0.48 * climbAmt + (0.24 + Math.max(0, stride) * 0.18) * descAmt;
+    const stairFootL = -Math.max(0, stride) * 0.16 * climbAmt + 0.14 * descAmt;
+    const stairFootR = -Math.max(0, -stride) * 0.16 * climbAmt + 0.14 * descAmt;
     const idleKneeL = Math.max(0, -standWeight) * 0.12;
     const idleKneeR = Math.max(0, standWeight) * 0.12;
     const standKneeL =
-      0.04 + idleKneeL + (Math.max(0, -cosP) * 0.56 + Math.max(0, stride) * 0.12) * activeBlend;
+      0.04 +
+      idleKneeL +
+      (Math.max(0, -cosP) * 0.56 + Math.max(0, stride) * 0.12) * activeBlend +
+      stairKneeL;
     const standKneeR =
-      0.04 + idleKneeR + (Math.max(0, cosP) * 0.56 + Math.max(0, -stride) * 0.12) * activeBlend;
+      0.04 +
+      idleKneeR +
+      (Math.max(0, cosP) * 0.56 + Math.max(0, -stride) * 0.12) * activeBlend +
+      stairKneeR;
 
     // During reclining (lie 0->1), swing knees slightly upward and extend shins ahead of full recline
     // so heels sweep smoothly onto the mattress without stabbing downward through it.
@@ -1567,7 +1641,11 @@ export function animateHumanoid3D(
     const legSwingLift = Math.sin(lie * Math.PI) * (isTilted ? 0.08 : 0.16);
     const ankleLift = Math.sin(lie * Math.PI) * 0.1;
 
-    const baseULX = THREE.MathUtils.lerp(-swing - idleKneeL * 0.45, sitThighAngle - pedal, sit);
+    const baseULX = THREE.MathUtils.lerp(
+      -swing - stairThighLiftL - idleKneeL * 0.45,
+      sitThighAngle - pedal,
+      sit
+    );
     const baseULY = THREE.MathUtils.lerp(0.025 * (1 - activeBlend), 0.05 + sitLegFidget * 0.35, sit);
     const baseULZ = THREE.MathUtils.lerp(0.018 + standWeight * 0.03, 0.038, sit);
     applyCharEuler(
@@ -1577,7 +1655,11 @@ export function animateHumanoid3D(
       THREE.MathUtils.lerp(baseULZ, 0.042, lie)
     );
 
-    const baseURX = THREE.MathUtils.lerp(swing - idleKneeR * 0.45, sitThighAngle + pedal, sit);
+    const baseURX = THREE.MathUtils.lerp(
+      swing - stairThighLiftR - idleKneeR * 0.45,
+      sitThighAngle + pedal,
+      sit
+    );
     const baseURY = THREE.MathUtils.lerp(-0.025 * (1 - activeBlend), -0.05 - sitLegFidget * 0.35, sit);
     const baseURZ = THREE.MathUtils.lerp(-0.018 + standWeight * 0.03, -0.038, sit);
     applyCharEuler(
@@ -1602,8 +1684,16 @@ export function animateHumanoid3D(
       0
     );
 
-    const baseFootLX = THREE.MathUtils.lerp(-stride * 0.17 * activeBlend - idleKneeL * 0.35, sitFootAngle + toeTap, sit);
-    const baseFootRX = THREE.MathUtils.lerp(stride * 0.17 * activeBlend - idleKneeR * 0.35, sitFootAngle, sit);
+    const baseFootLX = THREE.MathUtils.lerp(
+      -stride * 0.17 * activeBlend + stairFootL - idleKneeL * 0.35,
+      sitFootAngle + toeTap,
+      sit
+    );
+    const baseFootRX = THREE.MathUtils.lerp(
+      stride * 0.17 * activeBlend + stairFootR - idleKneeR * 0.35,
+      sitFootAngle,
+      sit
+    );
     applyCharEuler(
       b['FootL'],
       THREE.MathUtils.lerp(baseFootLX, (isTilted ? 0.05 : 0.14) + ankleL, shinBlend) - ankleLift,
@@ -1621,7 +1711,7 @@ export function animateHumanoid3D(
     const standArmGest = Math.max(0, (Math.sin(t * 0.31 + 0.9) - 0.62) / 0.38) * standIdleAmt;
     const smoothStandGest = standArmGest * standArmGest * (3 - 2 * standArmGest);
 
-    const armSwing = stride * 0.24 * activeBlend;
+    const armSwing = stride * 0.24 * activeBlend * (1 + 0.24 * stairEffort);
     const armStandL = armSwing - 0.025 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03;
     const armStandRBase =
       -armSwing - 0.025 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.18;
@@ -1751,9 +1841,14 @@ export function animateHumanoid3D(
     return;
   }
   rig.bodyPivot.position.set(0, 0.05, 0);
-  const swing = isMoving ? Math.sin(walkPhase) * 0.46 : 0;
-  rig.leftLeg.rotation.x = swing;
-  rig.rightLeg.rotation.x = -swing;
+  const fbClimb = THREE.MathUtils.clamp(stairClimb, 0, 1);
+  const fbDesc = THREE.MathUtils.clamp(-stairClimb, 0, 1);
+  const swing = isMoving ? Math.sin(walkPhase) * (0.46 + 0.14 * fbClimb - 0.1 * fbDesc) : 0;
+  rig.leftLeg.rotation.x = swing - (isMoving ? Math.max(0, -Math.sin(walkPhase)) * 0.28 * fbClimb : 0);
+  rig.rightLeg.rotation.x = -swing - (isMoving ? Math.max(0, Math.sin(walkPhase)) * 0.28 * fbClimb : 0);
+  rig.leftShin.rotation.x = isMoving ? Math.max(0, -Math.sin(walkPhase)) * 0.45 * fbClimb + 0.22 * fbDesc : 0;
+  rig.rightShin.rotation.x = isMoving ? Math.max(0, Math.sin(walkPhase)) * 0.45 * fbClimb + 0.22 * fbDesc : 0;
+  rig.torso.rotation.x = isMoving ? 0.1 * fbClimb - 0.04 * fbDesc : 0;
   rig.leftArm.rotation.x = -swing * 0.65;
   rig.rightArm.rotation.x = THREE.MathUtils.lerp(swing * 0.65, -0.95, THREE.MathUtils.clamp(doorPush, 0, 1));
   rig.headGroup.rotation.y = Math.sin(t * 0.5) * 0.14;

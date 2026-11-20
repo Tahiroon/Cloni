@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Coins, Trash2, Trees, X } from 'lucide-react';
 import { BottomNavBar } from './components/BottomNavBar';
 import { BonusQuizModal } from './components/BonusQuizModal';
@@ -60,12 +60,13 @@ import {
 } from './types/clinic';
 
 const SUDANESE_SKINS = [
-  '#59331f', // أسمر غامق
-  '#6c4028', // أسمر داكن دافئ
-  '#7f4d31', // أسمر سوداني أصيل
-  '#945e3d', // قمحي داكن
-  '#ab744f', // أسمر فاتح
-  '#bc865f', // فاتح دافئ
+  '#be8862', // قمحي فاتح دافئ
+  '#a66e49', // أسمر فاتح ذهبي
+  '#8f5938', // قمحي دافئ
+  '#79472b', // أسمر سوداني أصيل
+  '#653920', // أسمر متوسط غني
+  '#522c18', // بني داكن دافئ
+  '#412111', // أسمر غامق
 ];
 
 const MALE_CASUAL_LOOKS: Array<{ shirt: string; pants: string; shirtStyle: 'tshirt' | 'shirt' }> = [
@@ -135,8 +136,18 @@ export default function App() {
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [placementDraft, setPlacementDraft] = useState<PlacementDraft | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const treatmentTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   const lightingMode: LightingMode = clinic.lightingMode || 'day';
+
+  useEffect(() => {
+    const timers = treatmentTimersRef.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
 
   // On-demand patient case updater (used when the student explicitly requests a fresh Gemini AI case)
   const handleUpdatePatientCase = useCallback((patientId: string, nextCase: ClinicalCase) => {
@@ -309,6 +320,7 @@ export default function App() {
           coins: 999999,
         };
         setClinic(nextState);
+        setLastSyncedAt(nextState.lastSyncedAt || null);
         soundFx.enabled = nextState.soundEnabled;
         document.documentElement.lang = nextState.language;
         document.documentElement.dir = nextState.language === 'ar' ? 'rtl' : 'ltr';
@@ -325,7 +337,7 @@ export default function App() {
     if (!hydrated) return;
     saveClinicLocal(clinic);
     scheduleSilentCloudSync(clinic, (iso) => {
-      setClinic((prev) => ({ ...prev, lastSyncedAt: iso }));
+      setLastSyncedAt(iso);
     });
   }, [clinic, hydrated]);
 
@@ -1110,7 +1122,12 @@ export default function App() {
             const dx = nextNode.x - updated.gridX;
             const dy = nextNode.y - updated.gridY;
             const dist = Math.hypot(dx, dy);
-            const speedStep = 1.58 * dtSec;
+            const onEntranceStairs =
+              updated.gridX + 0.5 >= 22.45 &&
+              updated.gridX + 0.5 <= 23.6 &&
+              updated.gridY + 0.5 >= 13.7 &&
+              updated.gridY + 0.5 <= 16.3;
+            const speedStep = (onEntranceStairs ? 0.72 : 0.94) * dtSec;
             const advanceThresh = isDoorwayThreshold(nextNode.x, nextNode.y) ? 0.16 : 0.28;
 
             if (activePath.length > 1 && dist <= advanceThresh) {
@@ -1236,7 +1253,7 @@ export default function App() {
               }
             }
 
-            updated.walkPhase += speedStep * 3.4;
+            updated.walkPhase += speedStep * 4.4;
             changed = true;
           } else {
             // Reached current waypoint
@@ -1700,9 +1717,11 @@ export default function App() {
       )
     );
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      treatmentTimersRef.current.delete(timer);
       finishTreatmentAndReward({ ...result, gridX: p.gridX, gridY: p.gridY });
     }, durationMs);
+    treatmentTimersRef.current.add(timer);
   };
 
   // Bottom Nav selection
@@ -1956,30 +1975,85 @@ export default function App() {
     );
     const roomId = room ? room.id : 'outdoor';
 
+    const nextPlacedItems = placementDraft.movingInstanceId
+      ? clinic.placedItems.map((it) =>
+          it.instanceId === placementDraft.movingInstanceId
+            ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
+            : it
+        )
+      : [
+          ...clinic.placedItems,
+          {
+            instanceId: 'item_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            catalogId: placementDraft.catalogItem.id,
+            gridX: gx,
+            gridY: gy,
+            rotation: finalRotation,
+            roomId,
+          },
+        ];
+
     if (placementDraft.movingInstanceId) {
       // Moving existing item
+      const movedId = placementDraft.movingInstanceId;
+      const updatedBoxes = buildObstacleBoxes(
+        clinic.rooms,
+        nextPlacedItems,
+        itemFootprints,
+        clinic.removedTreeIds || []
+      );
+      const updatedSeats = buildWaitSeatSlots(nextPlacedItems, clinic.rooms);
       setClinic((prev) => ({
         ...prev,
         placedItems: prev.placedItems.map((it) =>
-          it.instanceId === placementDraft.movingInstanceId
+          it.instanceId === movedId
             ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
             : it
         ),
       }));
+      setPatients((prevPts) =>
+        prevPts.map((pt) => {
+          if (pt.waitingSeatKey && pt.waitingSeatKey.startsWith(movedId + '_')) {
+            const matchingSeat = updatedSeats.find((s) => s.seatKey === pt.waitingSeatKey);
+            if (matchingSeat && pt.state === 'waiting_checkin') {
+              return {
+                ...pt,
+                gridX: matchingSeat.seatTileX,
+                gridY: matchingSeat.seatTileY,
+                targetX: matchingSeat.seatTileX,
+                targetY: matchingSeat.seatTileY,
+                seatApproachX: matchingSeat.approachTileX,
+                seatApproachY: matchingSeat.approachTileY,
+                seatFacingRad: matchingSeat.facingRad,
+                seatHeight: matchingSeat.seatHeight,
+              };
+            }
+          }
+          if (
+            pt.state !== 'in_treatment' &&
+            pt.state !== 'ready_for_exam' &&
+            !(pt.state === 'waiting_checkin' && pt.isSeatedWait) &&
+            !isTileWalkable(pt.gridX, pt.gridY, 0.21, updatedBoxes)
+          ) {
+            const safe = findNearestWalkableTile(pt.gridX, pt.gridY, 0.22, updatedBoxes);
+            return { ...pt, gridX: safe.x, gridY: safe.y };
+          }
+          return pt;
+        })
+      );
       addFloatingFeedback(gx, gy, clinic.language === 'ar' ? 'تم النقل ✓' : 'Moved ✓', '#38bdf8');
     } else {
       // Purchasing new item
       const item = placementDraft.catalogItem;
       if (clinic.coins < item.priceCoins) return;
 
-      const newPlaced: PlacedItem = {
-        instanceId: 'item_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        catalogId: item.id,
-        gridX: gx,
-        gridY: gy,
-        rotation: finalRotation,
-        roomId,
-      };
+      const newPlaced = nextPlacedItems[nextPlacedItems.length - 1];
+      const updatedBoxes = buildObstacleBoxes(
+        clinic.rooms,
+        nextPlacedItems,
+        itemFootprints,
+        clinic.removedTreeIds || []
+      );
 
       setClinic((prev) => ({
         ...prev,
@@ -1987,6 +2061,20 @@ export default function App() {
         satisfaction: Math.min(100, prev.satisfaction + Math.min(2, item.satisfactionBonus)),
         placedItems: [...prev.placedItems, newPlaced],
       }));
+      setPatients((prevPts) =>
+        prevPts.map((pt) => {
+          if (
+            pt.state !== 'in_treatment' &&
+            pt.state !== 'ready_for_exam' &&
+            !(pt.state === 'waiting_checkin' && pt.isSeatedWait) &&
+            !isTileWalkable(pt.gridX, pt.gridY, 0.21, updatedBoxes)
+          ) {
+            const safe = findNearestWalkableTile(pt.gridX, pt.gridY, 0.22, updatedBoxes);
+            return { ...pt, gridX: safe.x, gridY: safe.y };
+          }
+          return pt;
+        })
+      );
 
       if (item.category === 'equipment') {
         bumpMission('buy_equipment', 1);
@@ -2137,9 +2225,12 @@ export default function App() {
   };
 
   const handleResetClinic = () => {
+    treatmentTimersRef.current.forEach((t) => clearTimeout(t));
+    treatmentTimersRef.current.clear();
     const fresh = createInitialSaveState();
     fresh.language = clinic.language;
     setClinic(fresh);
+    setLastSyncedAt(null);
     setPatients([]);
     setFocusedPatientId(null);
     setPlacementDraft(null);
@@ -2488,7 +2579,7 @@ export default function App() {
         soundEnabled={clinic.soundEnabled}
         lightingMode={lightingMode}
         studentId={clinic.studentId}
-        lastSyncedAt={clinic.lastSyncedAt}
+        lastSyncedAt={lastSyncedAt ?? clinic.lastSyncedAt}
         onClose={() => setSettingsOpen(false)}
         onToggleLanguage={handleToggleLanguage}
         onToggleSound={handleToggleSound}
@@ -2499,7 +2590,7 @@ export default function App() {
         onManualSync={() => {
           soundFx.tap();
           scheduleSilentCloudSync(clinic, (iso) => {
-            setClinic((prev) => ({ ...prev, lastSyncedAt: iso }));
+            setLastSyncedAt(iso);
           });
         }}
         onResetClinic={handleResetClinic}
