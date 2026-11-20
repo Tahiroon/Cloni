@@ -90,8 +90,12 @@ function enableShadows(obj: THREE.Object3D) {
       for (const mat of mats) {
         if (mat && 'roughness' in mat) {
           const std = mat as THREE.MeshStandardMaterial;
-          std.envMapIntensity = 0.45;
-          if (std.roughness > 0.94) std.roughness = 0.86;
+          std.envMapIntensity = 0.54;
+          if (std.roughness > 0.94) {
+            std.roughness = 0.85;
+          } else if (std.metalness < 0.1 && std.roughness < 0.24) {
+            std.roughness = 0.38;
+          }
           // Slightly soften overly bright pure-white albedo on imported models
           if (std.color && std.color.r > 0.92 && std.color.g > 0.92 && std.color.b > 0.92) {
             std.color.multiplyScalar(0.86);

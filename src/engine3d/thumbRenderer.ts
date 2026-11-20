@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { SpriteKind } from '../types/clinic';
 import { glbRegistry, startPreloadGlbs } from './glbRegistry';
 import { createCatalogMesh3D, disposeObject3D } from './models3d';
@@ -47,10 +48,18 @@ export function renderThumbBatch(
   renderer.toneMappingExposure = 1.05;
 
   const scene = new THREE.Scene();
-  const hemi = new THREE.HemisphereLight(0xf1f5f9, 0x64748b, 1.15);
-  const keyLight = new THREE.DirectionalLight(0xfff4e0, 1.65);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const roomEnv = new RoomEnvironment();
+  const envTarget = pmrem.fromScene(roomEnv, 0.04);
+  scene.environment = envTarget.texture;
+  scene.environmentIntensity = 0.62;
+  roomEnv.dispose();
+  pmrem.dispose();
+
+  const hemi = new THREE.HemisphereLight(0xf1f5f9, 0x64748b, 1.05);
+  const keyLight = new THREE.DirectionalLight(0xfff4e0, 1.6);
   keyLight.position.set(4, 7, 5);
-  const rimLight = new THREE.DirectionalLight(0xbae6fd, 0.55);
+  const rimLight = new THREE.DirectionalLight(0xbae6fd, 0.58);
   rimLight.position.set(-4, 3, -4);
   scene.add(hemi, keyLight, rimLight);
 
@@ -102,6 +111,7 @@ export function renderThumbBatch(
   }
 
   if (glbIsReady) renderedWithGlb = true;
+  envTarget.dispose();
   textures.dispose();
   renderer.dispose();
   notifySubscribers();

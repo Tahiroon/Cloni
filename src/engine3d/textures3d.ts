@@ -13,6 +13,7 @@ export interface TextureBundle {
   asphaltBump: THREE.CanvasTexture;
   sidewalk: THREE.CanvasTexture;
   wood: THREE.CanvasTexture;
+  woodBump: THREE.CanvasTexture;
   bark: THREE.CanvasTexture;
   barkBump: THREE.CanvasTexture;
   birchBark: THREE.CanvasTexture;
@@ -20,7 +21,18 @@ export interface TextureBundle {
   cypressFoliage: THREE.CanvasTexture;
   oliveFoliage: THREE.CanvasTexture;
   roofShingle: THREE.CanvasTexture;
+  plasterAlbedo: THREE.CanvasTexture;
   stuccoBump: THREE.CanvasTexture;
+  plasterRough: THREE.CanvasTexture;
+  wainscotAlbedo: THREE.CanvasTexture;
+  wainscotBump: THREE.CanvasTexture;
+  brushedMetalBump: THREE.CanvasTexture;
+  fabricWeaveBump: THREE.CanvasTexture;
+  leatherBump: THREE.CanvasTexture;
+  skinMicroMap: THREE.CanvasTexture;
+  skinRoughMap: THREE.CanvasTexture;
+  waterNormal: THREE.CanvasTexture;
+  rugPattern: THREE.CanvasTexture;
   contactShadow: THREE.CanvasTexture;
   therasonWall: THREE.CanvasTexture;
   therasonMonument: THREE.CanvasTexture;
@@ -124,42 +136,76 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return t;
   };
 
-  // 1. Glossy marble-veined porcelain clinic tile (balanced natural stone, zero white glare!)
+  // 1. Honed natural porcelain marble clinic tile with realistic veining, micro-flecks & beveled grout joints
   const tileBlue = (() => {
     const [c, ctx] = makeCanvas(512, 512);
-    ctx.fillStyle = '#dde5ee';
+    ctx.fillStyle = '#dde4ec';
     ctx.fillRect(0, 0, 512, 512);
-    ctx.fillStyle = '#cfdbe7';
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillRect(256, 256, 256, 256);
+    const tileTones = ['#d8e1eb', '#e2e8f0', '#d2dce7', '#dce4ee'];
+    const rects: Array<[number, number]> = [
+      [0, 0],
+      [256, 0],
+      [0, 256],
+      [256, 256],
+    ];
+    rects.forEach(([rx, ry], ti) => {
+      ctx.fillStyle = tileTones[ti];
+      ctx.fillRect(rx, ry, 256, 256);
 
-    // Subtle porcelain stone veining
-    ctx.strokeStyle = 'rgba(116, 148, 178, 0.24)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 14; i++) {
-      ctx.beginPath();
-      const sy = (i * 41) % 512;
-      ctx.moveTo(0, sy);
-      ctx.bezierCurveTo(160, sy + 28, 320, sy - 24, 512, sy + 14);
-      ctx.stroke();
-    }
+      // Subtle mineral gradient per slab
+      const g = ctx.createLinearGradient(rx, ry, rx + 256, ry + 256);
+      g.addColorStop(0, 'rgba(255,255,255,0.14)');
+      g.addColorStop(0.5, 'rgba(180,198,216,0.04)');
+      g.addColorStop(1, 'rgba(120,145,170,0.12)');
+      ctx.fillStyle = g;
+      ctx.fillRect(rx, ry, 256, 256);
 
-    // Precision grout lines
-    ctx.strokeStyle = '#aebfcc';
+      // Multi-layered delicate marble veining unique per tile
+      for (let v = 0; v < 6; v++) {
+        ctx.strokeStyle = v % 2 === 0 ? 'rgba(110, 140, 168, 0.22)' : 'rgba(255, 255, 255, 0.28)';
+        ctx.lineWidth = v % 3 === 0 ? 2.4 : 1.1;
+        ctx.beginPath();
+        const sy = ry + ((v * 43 + ti * 37) % 230) + 12;
+        ctx.moveTo(rx + 4, sy);
+        ctx.bezierCurveTo(
+          rx + 85,
+          sy + ((v + ti) % 2 === 0 ? 26 : -22),
+          rx + 170,
+          sy + ((v + ti) % 2 === 0 ? -18 : 24),
+          rx + 252,
+          sy + 8
+        );
+        ctx.stroke();
+      }
+      // Micro bevel highlight inside grout
+      ctx.strokeStyle = 'rgba(255,255,255,0.34)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rx + 4, ry + 4, 248, 248);
+    });
+
+    // Recessed cement grout lines
+    ctx.strokeStyle = '#9db0bf';
     ctx.lineWidth = 4;
-    ctx.strokeRect(2, 2, 252, 252);
-    ctx.strokeRect(258, 2, 252, 252);
-    ctx.strokeRect(2, 258, 252, 252);
-    ctx.strokeRect(258, 258, 252, 252);
+    for (const [rx, ry] of rects) {
+      ctx.strokeRect(rx + 2, ry + 2, 252, 252);
+    }
     return track(finalizeTexture(c, aniso, 1, 1, true));
   })();
 
-  // Roughness map for tile (glossy tile face = dark 0.14, matte grout = light 0.72)
+  // Roughness map for tile (honed glossy stone face = 0.16–0.24 with subtle mineral variation, matte grout = 0.78)
   const tileBlueRough = (() => {
     const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#262626';
+    ctx.fillStyle = '#323232';
     ctx.fillRect(0, 0, 256, 256);
-    ctx.strokeStyle = '#c8c8c8';
+    for (let i = 0; i < 420; i++) {
+      const x = (Math.sin(i * 31.7) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 47.3) * 0.5 + 0.5) * 256;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(65,65,65,0.28)' : 'rgba(28,28,28,0.28)';
+      ctx.beginPath();
+      ctx.ellipse(x, y, 10 + (i % 8), 5 + (i % 5), i * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = '#d0d0d0';
     ctx.lineWidth = 5;
     ctx.strokeRect(2.5, 2.5, 123, 123);
     ctx.strokeRect(130.5, 2.5, 123, 123);
@@ -170,9 +216,15 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
 
   const tileBump = (() => {
     const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#e8e8e8';
+    ctx.fillStyle = '#ececec';
     ctx.fillRect(0, 0, 256, 256);
-    ctx.strokeStyle = '#555555';
+    ctx.strokeStyle = '#c8c8c8';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(5, 5, 118, 118);
+    ctx.strokeRect(133, 5, 118, 118);
+    ctx.strokeRect(5, 133, 118, 118);
+    ctx.strokeRect(133, 133, 118, 118);
+    ctx.strokeStyle = '#484848';
     ctx.lineWidth = 5;
     ctx.strokeRect(2.5, 2.5, 123, 123);
     ctx.strokeRect(130.5, 2.5, 123, 123);
@@ -181,70 +233,121 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 1, false));
   })();
 
-  // 2. Muted athletic EPDM gym flooring
+  // 2. Authentic speckled EPDM athletic gym flooring with interlocking tile seams
   const gymRoyal = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#244778';
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillStyle = '#285188';
-    ctx.fillRect(2, 2, 124, 124);
-    ctx.fillRect(130, 130, 124, 124);
-    for (let i = 0; i < 650; i++) {
-      const rx = (Math.sin(i * 19.3) * 0.5 + 0.5) * 256;
-      const ry = (Math.cos(i * 41.7) * 0.5 + 0.5) * 256;
-      ctx.fillStyle = i % 3 === 0 ? 'rgba(186,230,253,0.2)' : 'rgba(15,23,42,0.22)';
-      ctx.fillRect(rx, ry, 2.2, 2.2);
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#1f3f6c';
+    ctx.fillRect(0, 0, 512, 512);
+    ctx.fillStyle = '#254b80';
+    ctx.fillRect(2, 2, 252, 252);
+    ctx.fillRect(258, 258, 252, 252);
+    for (let i = 0; i < 2400; i++) {
+      const rx = (Math.sin(i * 19.3) * 0.5 + 0.5) * 512;
+      const ry = (Math.cos(i * 41.7) * 0.5 + 0.5) * 512;
+      ctx.fillStyle =
+        i % 5 === 0
+          ? 'rgba(186,230,253,0.28)'
+          : i % 3 === 0
+            ? 'rgba(56,189,248,0.18)'
+            : 'rgba(10,18,34,0.28)';
+      ctx.fillRect(rx, ry, 2.4, 2.4);
     }
-    return track(finalizeTexture(c, aniso, 1, 1, true));
-  })();
-
-  // 3. Soft sage-mint clinical stone tile
-  const tileMint = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#d1e1dc';
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillStyle = '#c4d8d2';
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.fillRect(128, 128, 128, 128);
-    ctx.strokeStyle = '#9dbab2';
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)';
     ctx.lineWidth = 3;
-    ctx.strokeRect(1.5, 1.5, 125, 125);
-    ctx.strokeRect(129.5, 129.5, 125, 125);
+    ctx.strokeRect(1.5, 1.5, 253, 253);
+    ctx.strokeRect(257.5, 257.5, 253, 253);
     return track(finalizeTexture(c, aniso, 1, 1, true));
   })();
 
-  // 4. Courtyard travertine stone pavers + bump
+  // 3. Natural sage-mint honed clinical terrazzo/porcelain stone tile
+  const tileMint = (() => {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#cde0da';
+    ctx.fillRect(0, 0, 512, 512);
+    const mintTones = ['#c4d9d2', '#d2e4de', '#bfd4cd', '#cde0da'];
+    [
+      [0, 0],
+      [256, 0],
+      [0, 256],
+      [256, 256],
+    ].forEach(([rx, ry], ti) => {
+      ctx.fillStyle = mintTones[ti];
+      ctx.fillRect(rx, ry, 256, 256);
+      for (let v = 0; v < 5; v++) {
+        ctx.strokeStyle = v % 2 === 0 ? 'rgba(92, 138, 126, 0.2)' : 'rgba(255, 255, 255, 0.25)';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        const sy = ry + ((v * 47 + ti * 29) % 220) + 16;
+        ctx.moveTo(rx + 4, sy);
+        ctx.bezierCurveTo(rx + 90, sy + 18, rx + 170, sy - 16, rx + 252, sy + 6);
+        ctx.stroke();
+      }
+    });
+    for (let i = 0; i < 420; i++) {
+      const fx = (Math.sin(i * 37.9) * 0.5 + 0.5) * 512;
+      const fy = (Math.cos(i * 23.1) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(72,108,98,0.16)';
+      ctx.fillRect(fx, fy, 2.2, 2.2);
+    }
+    ctx.strokeStyle = '#92b2a9';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, 252, 252);
+    ctx.strokeRect(258, 2, 252, 252);
+    ctx.strokeRect(2, 258, 252, 252);
+    ctx.strokeRect(258, 258, 252, 252);
+    return track(finalizeTexture(c, aniso, 1, 1, true));
+  })();
+
+  // 4. Weathered courtyard travertine stone pavers with pitting & realistic mortar + bump
   const courtyardPaver = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#b4a799';
-    ctx.fillRect(0, 0, 256, 256);
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#9b8f80';
+    ctx.fillRect(0, 0, 512, 512);
     const cols = 4;
     const rows = 4;
-    const cw = 256 / cols;
-    const ch = 256 / rows;
+    const cw = 512 / cols;
+    const ch = 512 / rows;
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const offset = y % 2 === 0 ? 0 : cw * 0.5;
-        const shade = ((x * 7 + y * 13) % 5) * 5 - 10;
-        ctx.fillStyle = `rgb(${194 + shade}, ${183 + shade}, ${169 + shade})`;
-        ctx.fillRect(((x * cw + offset) % 256) + 2, y * ch + 2, cw - 4, ch - 4);
+        const shade = ((x * 7 + y * 13) % 7) * 4 - 12;
+        const px = ((x * cw + offset) % 512) + 3;
+        const py = y * ch + 3;
+        ctx.fillStyle = `rgb(${194 + shade}, ${182 + shade}, ${166 + shade})`;
+        ctx.fillRect(px, py, cw - 6, ch - 6);
+        // Subtle natural travertine edge highlight & mineral pitting
+        ctx.strokeStyle = 'rgba(255, 248, 238, 0.25)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(px + 1, py + 1, cw - 8, ch - 8);
       }
+    }
+    for (let i = 0; i < 1800; i++) {
+      const px = (Math.sin(i * 41.3) * 0.5 + 0.5) * 512;
+      const py = (Math.cos(i * 19.7) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 3 === 0 ? 'rgba(92, 80, 68, 0.16)' : 'rgba(248, 240, 226, 0.14)';
+      ctx.fillRect(px, py, 2.5, 1.8);
     }
     return track(finalizeTexture(c, aniso, 1, 1, true));
   })();
 
   const paverBump = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillStyle = '#dcdcdc';
-    const cw = 64;
-    const ch = 64;
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#484848';
+    ctx.fillRect(0, 0, 512, 512);
+    ctx.fillStyle = '#dedede';
+    const cw = 128;
+    const ch = 128;
     for (let y = 0; y < 4; y++) {
       for (let x = 0; x < 4; x++) {
         const offset = y % 2 === 0 ? 0 : cw * 0.5;
-        ctx.fillRect(((x * cw + offset) % 256) + 2, y * ch + 2, cw - 4, ch - 4);
+        ctx.fillRect(((x * cw + offset) % 512) + 3, y * ch + 3, cw - 6, ch - 6);
       }
+    }
+    for (let i = 0; i < 1400; i++) {
+      const px = (Math.sin(i * 41.3) * 0.5 + 0.5) * 512;
+      const py = (Math.cos(i * 19.7) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 2 === 0 ? '#bcbcbc' : '#f2f2f2';
+      ctx.fillRect(px, py, 2.5, 2);
     }
     return track(finalizeTexture(c, aniso, 1, 1, false));
   })();
@@ -467,29 +570,65 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 12, true));
   })();
 
-  // 8. Rich architectural oak/teak wood grain with plank seams & knots
+  // 8. Rich architectural oak/teak wood grain with plank seams, cathedral rings, and bump map
   const wood = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#97633b';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let y = 0; y < 256; y += 3) {
-      const wave = Math.sin(y * 0.14) * 6;
-      ctx.fillStyle = y % 6 === 0 ? 'rgba(64, 32, 12, 0.24)' : 'rgba(198, 150, 102, 0.14)';
-      ctx.fillRect(0, y, 256, 2);
-      if (y % 48 === 0) {
-        ctx.fillStyle = 'rgba(42, 20, 8, 0.34)';
-        ctx.fillRect(0, y, 256, 2.2);
+    ctx.fillRect(0, 0, 512, 512);
+    for (let y = 0; y < 512; y += 2) {
+      const plankBand = Math.floor(y / 64);
+      const toneShift = ((plankBand * 17) % 5) * 4 - 8;
+      ctx.fillStyle = `rgb(${150 + toneShift}, ${99 + Math.round(toneShift * 0.7)}, ${59 + Math.round(toneShift * 0.5)})`;
+      ctx.fillRect(0, y, 512, 2);
+      const wave = Math.sin(y * 0.08 + plankBand * 1.3) * 8;
+      if (y % 6 === 0) {
+        ctx.fillStyle = 'rgba(58, 28, 10, 0.18)';
+        ctx.fillRect(0, y, 512, 1.5);
       }
-      if (y % 29 === 0) {
-        ctx.strokeStyle = 'rgba(58, 28, 10, 0.2)';
-        ctx.lineWidth = 1.2;
+      if (y % 64 === 0) {
+        ctx.fillStyle = 'rgba(38, 18, 6, 0.42)';
+        ctx.fillRect(0, y, 512, 2.5);
+      }
+      if (y % 22 === 0) {
+        ctx.strokeStyle = 'rgba(64, 30, 10, 0.22)';
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.quadraticCurveTo(128, y + wave, 256, y);
+        ctx.bezierCurveTo(160, y + wave, 340, y - wave * 0.8, 512, y);
         ctx.stroke();
       }
     }
+    // Subtle wood knots
+    for (const [kx, ky, kr] of [
+      [142, 96, 12],
+      [374, 288, 10],
+      [218, 416, 14],
+    ]) {
+      const kGrad = ctx.createRadialGradient(kx, ky, 1, kx, ky, kr);
+      kGrad.addColorStop(0, 'rgba(42, 20, 8, 0.55)');
+      kGrad.addColorStop(0.6, 'rgba(72, 38, 16, 0.28)');
+      kGrad.addColorStop(1, 'rgba(151, 99, 59, 0)');
+      ctx.fillStyle = kGrad;
+      ctx.beginPath();
+      ctx.ellipse(kx, ky, kr * 1.5, kr * 0.7, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
     return track(finalizeTexture(c, aniso, 1, 1, true));
+  })();
+
+  const woodBump = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#888888';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let y = 0; y < 256; y += 2) {
+      ctx.fillStyle = y % 6 === 0 ? '#747474' : '#969696';
+      ctx.fillRect(0, y, 256, 1.5);
+      if (y % 32 === 0) {
+        ctx.fillStyle = '#404040';
+        ctx.fillRect(0, y, 256, 2);
+      }
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, false));
   })();
 
   // 8a. Deeply furrowed organic tree bark texture + companion normal-feel bump map
@@ -703,18 +842,262 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 3, 2, true));
   })();
 
-  // 9. Fine architectural plaster stucco bump (eliminates smooth plastic/clay sheen!)
+  // 9. Multi-layered architectural plaster & stucco PBR set (albedo + bump + roughness)
+  const plasterAlbedo = (() => {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#dcd6cb';
+    ctx.fillRect(0, 0, 512, 512);
+    // Soft multi-scale trowel mottling
+    for (let i = 0; i < 160; i++) {
+      const px = (Math.sin(i * 29.7 + 0.3) * 0.5 + 0.5) * 512;
+      const py = (Math.cos(i * 41.3 + 0.9) * 0.5 + 0.5) * 512;
+      const r = 24 + (i % 6) * 16;
+      const g = ctx.createRadialGradient(px, py, 2, px, py, r);
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(248, 245, 240, 0.16)' : 'rgba(186, 178, 165, 0.16)');
+      g.addColorStop(1, 'rgba(220, 214, 203, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < 3200; i++) {
+      const x = (Math.sin(i * 17.1) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 53.7) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,252,245,0.09)' : 'rgba(130,122,110,0.09)';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    return track(finalizeTexture(c, aniso, 3, 2, true));
+  })();
+
   const stuccoBump = (() => {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, 512, 512);
+    for (let i = 0; i < 90; i++) {
+      const px = (Math.sin(i * 23.1) * 0.5 + 0.5) * 512;
+      const py = (Math.cos(i * 37.9) * 0.5 + 0.5) * 512;
+      const r = 20 + (i % 5) * 14;
+      const g = ctx.createRadialGradient(px, py, 2, px, py, r);
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(155,155,155,0.22)' : 'rgba(105,105,105,0.22)');
+      g.addColorStop(1, 'rgba(128,128,128,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < 6200; i++) {
+      const x = (Math.sin(i * 17.1) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 53.7) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 2 === 0 ? '#9c9c9c' : '#646464';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    return track(finalizeTexture(c, aniso, 3, 2, false));
+  })();
+
+  const plasterRough = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#dadada';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 180; i++) {
+      const x = (Math.sin(i * 27.4) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 19.8) * 0.5 + 0.5) * 256;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(242,242,242,0.3)' : 'rgba(195,195,195,0.3)';
+      ctx.beginPath();
+      ctx.arc(x, y, 10 + (i % 6) * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return track(finalizeTexture(c, aniso, 3, 2, false));
+  })();
+
+  // 9b. Architectural clinic acoustic wainscot wall paneling (albedo + vertical seam bump)
+  const wainscotAlbedo = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#205b86';
+    ctx.fillRect(0, 0, 256, 256);
+    const panels = 4;
+    const pw = 256 / panels;
+    for (let p = 0; p < panels; p++) {
+      const px = p * pw;
+      const g = ctx.createLinearGradient(px, 0, px + pw, 0);
+      g.addColorStop(0, '#19496d');
+      g.addColorStop(0.08, '#266898');
+      g.addColorStop(0.92, '#215d89');
+      g.addColorStop(1, '#143b58');
+      ctx.fillStyle = g;
+      ctx.fillRect(px, 0, pw, 256);
+    }
+    // Subtle matte finish micro-grain
+    for (let i = 0; i < 1400; i++) {
+      const x = (Math.sin(i * 17.7) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 43.3) * 0.5 + 0.5) * 256;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    return track(finalizeTexture(c, aniso, 3, 1, true));
+  })();
+
+  const wainscotBump = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#dcdcdc';
+    ctx.fillRect(0, 0, 256, 256);
+    const pw = 64;
+    for (let p = 0; p < 4; p++) {
+      ctx.fillStyle = '#404040';
+      ctx.fillRect(p * pw, 0, 3, 256);
+      ctx.fillStyle = '#f2f2f2';
+      ctx.fillRect(p * pw + 3, 0, 2, 256);
+    }
+    return track(finalizeTexture(c, aniso, 3, 1, false));
+  })();
+
+  // 9c. Brushed stainless / anodized aluminum directional streaks bump
+  const brushedMetalBump = (() => {
     const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 2400; i++) {
-      const x = (Math.sin(i * 17.1) * 0.5 + 0.5) * 256;
-      const y = (Math.cos(i * 53.7) * 0.5 + 0.5) * 256;
-      ctx.fillStyle = i % 2 === 0 ? '#989898' : '#686868';
-      ctx.fillRect(x, y, 2, 2);
+    for (let y = 0; y < 256; y += 1) {
+      const v = 112 + ((Math.sin(y * 13.7) * 0.5 + 0.5) * 32) | 0;
+      ctx.fillStyle = `rgb(${v},${v},${v})`;
+      ctx.fillRect(0, y, 256, 1);
     }
-    return track(finalizeTexture(c, aniso, 3, 3, false));
+    return track(finalizeTexture(c, aniso, 2, 2, false));
+  })();
+
+  // 9d. Fine woven cotton/linen/crepe textile weave bump (for people's garments, curtains, cushions)
+  const fabricWeaveBump = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#7e7e7e';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let y = 0; y < 256; y += 4) {
+      ctx.fillStyle = 'rgba(220,220,220,0.32)';
+      ctx.fillRect(0, y, 256, 2);
+    }
+    for (let x = 0; x < 256; x += 4) {
+      ctx.fillStyle = 'rgba(60,60,60,0.28)';
+      ctx.fillRect(x, 0, 2, 256);
+    }
+    return track(finalizeTexture(c, aniso, 5, 5, false));
+  })();
+
+  // 9e. Pebbled medical vinyl / upholstery leather bump
+  const leatherBump = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#787878';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 1800; i++) {
+      const x = (Math.sin(i * 31.3 + 0.2) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 47.7 + 0.8) * 0.5 + 0.5) * 256;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(210,210,210,0.34)' : 'rgba(52,52,52,0.34)';
+      ctx.beginPath();
+      ctx.arc(x, y, 2 + (i % 2), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return track(finalizeTexture(c, aniso, 4, 4, false));
+  })();
+
+  // 9f. Natural human skin micro-pore / warmth variation + roughness map
+  const skinMicroMap = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 90; i++) {
+      const x = (Math.sin(i * 19.1) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 37.3) * 0.5 + 0.5) * 256;
+      const g = ctx.createRadialGradient(x, y, 2, x, y, 28);
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(255, 224, 214, 0.26)' : 'rgba(238, 214, 200, 0.22)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, 28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < 1200; i++) {
+      const x = (Math.sin(i * 63.7) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 29.1) * 0.5 + 0.5) * 256;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(235, 195, 180, 0.14)' : 'rgba(255, 245, 240, 0.12)';
+      ctx.fillRect(x, y, 1.5, 1.5);
+    }
+    return track(finalizeTexture(c, aniso, 2, 2, true));
+  })();
+
+  const skinRoughMap = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#929292'; // ~0.57 natural semi-matte skin
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 120; i++) {
+      const x = (Math.sin(i * 23.3) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 41.9) * 0.5 + 0.5) * 256;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(122,122,122,0.35)' : 'rgba(164,164,164,0.35)';
+      ctx.beginPath();
+      ctx.arc(x, y, 12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return track(finalizeTexture(c, aniso, 2, 2, false));
+  })();
+
+  // 9g. Seamless multi-octave water ripple normal map
+  const waterNormal = (() => {
+    const size = 256;
+    const [c, ctx] = makeCanvas(size, size);
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+    const hAt = (x: number, y: number) => {
+      const u = (x / size) * Math.PI * 2;
+      const v = (y / size) * Math.PI * 2;
+      return (
+        Math.sin(u * 3 + v * 2) * 0.35 +
+        Math.cos(u * 5 - v * 4) * 0.25 +
+        Math.sin(u * 9 + v * 7) * 0.16 +
+        Math.cos(u * 13 - v * 11) * 0.08
+      );
+    };
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = hAt(x + 1, y) - hAt(x - 1, y);
+        const dy = hAt(x, y + 1) - hAt(x, y - 1);
+        const nx = -dx * 1.4;
+        const ny = -dy * 1.4;
+        const nz = 1.0;
+        const inv = 1 / Math.hypot(nx, ny, nz);
+        const idx = (y * size + x) * 4;
+        data[idx] = Math.round((nx * inv * 0.5 + 0.5) * 255);
+        data[idx + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+        data[idx + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+        data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return track(finalizeTexture(c, aniso, 2, 2, false));
+  })();
+
+  // 9h. Woven clinical reception rug pattern
+  const rugPattern = (() => {
+    const [c, ctx] = makeCanvas(512, 256);
+    ctx.fillStyle = '#1b3b5c';
+    ctx.fillRect(0, 0, 512, 256);
+    ctx.fillStyle = '#dbe4ee';
+    ctx.fillRect(18, 16, 476, 224);
+    ctx.fillStyle = '#0f6a82';
+    ctx.fillRect(36, 30, 440, 196);
+    ctx.strokeStyle = 'rgba(226, 232, 240, 0.35)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(52, 42, 408, 172);
+    // Subtle diamond geometric weave
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(256, 62);
+    ctx.lineTo(340, 128);
+    ctx.lineTo(256, 194);
+    ctx.lineTo(172, 128);
+    ctx.closePath();
+    ctx.stroke();
+    // Woven yarn texture overlay
+    for (let y = 0; y < 256; y += 3) {
+      ctx.fillStyle = y % 6 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.05)';
+      ctx.fillRect(0, y, 512, 1.5);
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
   // 10. Soft radial contact AO shadow decal (grounds every character, furniture, tree, car!)
@@ -729,26 +1112,46 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 11. Reception back wall THERASON architectural panel
+  // 11. Reception back wall THERASON architectural panel (clean matte high-contrast print, zero glare)
   const therasonWall = (() => {
-    const [c, ctx] = makeCanvas(512, 192);
-    ctx.fillStyle = '#dce4ed';
-    ctx.fillRect(0, 0, 512, 192);
-    ctx.fillStyle = '#0ea5e9';
-    ctx.fillRect(0, 150, 512, 6);
-    ctx.fillStyle = '#0f4c75';
-    ctx.fillRect(0, 156, 512, 36);
+    const [c, ctx] = makeCanvas(1536, 420);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, 1536, 420);
 
-    drawTherasonMark(ctx, 110, 76, 1.5, '#0284c7');
-    ctx.fillStyle = '#0f294a';
-    ctx.font = '900 44px "Plus Jakarta Sans", sans-serif';
+    // Simple clean architectural border & cyan accent rule
+    ctx.strokeStyle = '#0f294a';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(10, 10, 1516, 400);
+
+    ctx.fillStyle = '#0284c7';
+    ctx.fillRect(36, 354, 1464, 14);
+
+    // Clean emblem without glowing halo
+    drawTherasonMark(ctx, 195, 195, 3.6, '#0284c7', '#16a34a');
+
+    // Bold high-contrast THERASON lettering (no shadowBlur/glow)
+    ctx.fillStyle = '#0b223e';
+    ctx.font = '900 132px "Plus Jakarta Sans", Arial, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText('THERASON', 152, 74);
-    ctx.fillStyle = '#0369a1';
-    ctx.font = '700 15px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('CLINICAL REHAB & SPORTS CARE', 154, 114);
-    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+    const word = 'THERASON';
+    let cursorX = 330;
+    for (let i = 0; i < word.length; i++) {
+      const ch = word[i];
+      ctx.fillText(ch, cursorX, 162);
+      cursorX += ctx.measureText(ch).width + 12;
+    }
+
+    // Simple crisp subtitle
+    ctx.fillStyle = '#334155';
+    ctx.font = '700 36px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CLINICAL REHAB & SPORTS CARE', 336, 278);
+
+    const tex = track(finalizeTexture(c, aniso, 1, 1, true, true));
+    tex.generateMipmaps = true;
+    return tex;
   })();
 
   // 12. Illuminated blue-glow outdoor monument sign (matching lawn glowing sign in reference)
@@ -1252,183 +1655,438 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 24. Ultra-lightweight scenic display screen texture (256x128, cycling 3 relaxing landscapes at <=10Hz only when visible)
-  const [screenCanvas, screenCtx] = makeCanvas(256, 128);
+  // 24. Continuous 16:9 Live TV News Broadcast display texture (512x288, animated studio anchor, broadcast graphics, lower-third & seamless scrolling ticker)
+  const [screenCanvas, screenCtx] = makeCanvas(512, 288);
+  screenCtx.direction = 'ltr';
+  const newsSegments = [
+    {
+      tag: 'عاجل • صحة',
+      headline: 'توسع مراكز التأهيل والعلاج الطبيعي باستخدام التقنيات الحديثة',
+      sub: 'THERASON NEWS • GLOBAL REHAB & SPORTS MEDICINE REPORT',
+      kind: 'map' as const,
+    },
+    {
+      tag: 'نشرة الطب',
+      headline: 'بروتوكولات العلاج الحركي ترفع نسب التعافي بنسبة 34% هذا العام',
+      sub: 'CLINICAL OUTCOMES • PHYSIOTHERAPY & NEURO-REHAB',
+      kind: 'chart' as const,
+    },
+    {
+      tag: 'طب الرياضة',
+      headline: 'برنامج متكامل لإعادة تأهيل إصابات الملاعب والعمود الفقري',
+      sub: 'SPORTS RECOVERY • BIOMECHANICS & GAIT LAB LIVE',
+      kind: 'gait' as const,
+    },
+    {
+      tag: 'النشرة الجوية',
+      headline: 'أجواء معتدلة اليوم — نصائح طبية بالحركة المستمرة وشرب الماء',
+      sub: 'DAILY BRIEFING • HEALTH & WELLNESS FORECAST 29°C',
+      kind: 'weather' as const,
+    },
+  ];
+  const newsTickerText =
+    '◆ عاجل: افتتاح أجنحة علاجية متطورة للعلاج الطبيعي وإصابات الملاعب   ◆ دراسة طبية: التمارين الموجهة تقلل آلام الظهر المزمنة بشكل ملحوظ   ◆ متابعة حية: أحدث أجهزة الشد الفقري والعلاج المغناطيسي تدخل الخدمة   ◆ نصيحة اليوم: الحفاظ على الجلوس السليم وشرب الماء يحسن صحة المفاصل   ';
+  screenCtx.font = 'bold 14px "Cairo", sans-serif';
+  const newsTickerSpan = Math.max(600, screenCtx.measureText(newsTickerText).width);
+
   const drawReceptionScreenFrame = (tSec: number) => {
-    const w = 256;
-    const h = 128;
-    const sceneLen = 7.0;
-    const totalCycle = sceneLen * 3;
+    const w = 512;
+    const h = 288;
+    const segLen = 6.5;
+    const totalCycle = segLen * newsSegments.length;
     const cyc = ((tSec % totalCycle) + totalCycle) % totalCycle;
-    const sceneIdx = Math.floor(cyc / sceneLen);
-    const localT = cyc - sceneIdx * sceneLen;
-    const phase = localT / sceneLen;
+    const segIdx = Math.floor(cyc / segLen);
+    const localT = cyc - segIdx * segLen;
+    const seg = newsSegments[segIdx];
 
-    if (sceneIdx === 0) {
-      // Scene 0: Serene Coastal Cove & Gentle Waves
-      const sky = screenCtx.createLinearGradient(0, 0, 0, 74);
-      sky.addColorStop(0, '#0ea5e9');
-      sky.addColorStop(0.55, '#7dd3fc');
-      sky.addColorStop(1, '#fef3c7');
-      screenCtx.fillStyle = sky;
-      screenCtx.fillRect(0, 0, w, 74);
+    // 1. Deep broadcast studio gradient background + subtle glowing studio vertical ribs
+    const studioBg = screenCtx.createLinearGradient(0, 0, w, h);
+    studioBg.addColorStop(0, '#06152b');
+    studioBg.addColorStop(0.55, '#0d2952');
+    studioBg.addColorStop(1, '#071a36');
+    screenCtx.fillStyle = studioBg;
+    screenCtx.fillRect(0, 0, w, h);
 
-      // Soft sun glow
-      const sunX = 192 + Math.sin(tSec * 0.25) * 14;
-      const sunGlow = screenCtx.createRadialGradient(sunX, 34, 4, sunX, 34, 28);
-      sunGlow.addColorStop(0, '#fffbeb');
-      sunGlow.addColorStop(0.45, 'rgba(253,224,71,0.55)');
-      sunGlow.addColorStop(1, 'rgba(253,224,71,0)');
-      screenCtx.fillStyle = sunGlow;
+    // Subtle moving studio light columns & diagonal broadcast sweep
+    for (let i = 0; i < 6; i++) {
+      const lx = ((i * 92 + tSec * 14) % (w + 60)) - 30;
+      screenCtx.fillStyle = i % 2 === 0 ? 'rgba(56, 189, 248, 0.06)' : 'rgba(255, 255, 255, 0.035)';
+      screenCtx.fillRect(lx, 28, 22, 186);
+    }
+    screenCtx.strokeStyle = 'rgba(56, 189, 248, 0.14)';
+    screenCtx.lineWidth = 1.5;
+    screenCtx.beginPath();
+    screenCtx.arc(256, 128, 96, tSec * 0.25, tSec * 0.25 + Math.PI * 1.1);
+    screenCtx.stroke();
+
+    // 2. Right-side Broadcast Report Panel (Over-the-shoulder / live feed screen with smooth wipe)
+    const boxX = 212;
+    const boxY = 38;
+    const boxW = 286;
+    const boxH = 162;
+    const wipe = Math.min(1, localT / 0.45);
+    const easeWipe = wipe * wipe * (3 - 2 * wipe);
+
+    screenCtx.save();
+    screenCtx.beginPath();
+    screenCtx.rect(boxX, boxY, boxW, boxH);
+    screenCtx.clip();
+
+    const panelGrad = screenCtx.createLinearGradient(boxX, boxY, boxX + boxW, boxY + boxH);
+    panelGrad.addColorStop(0, '#091e3e');
+    panelGrad.addColorStop(1, '#102f5c');
+    screenCtx.fillStyle = panelGrad;
+    screenCtx.fillRect(boxX, boxY, boxW, boxH);
+
+    // Subtle broadcast grid inside report panel
+    screenCtx.strokeStyle = 'rgba(125, 211, 252, 0.1)';
+    screenCtx.lineWidth = 1;
+    for (let gx = boxX + 24; gx < boxX + boxW; gx += 32) {
       screenCtx.beginPath();
-      screenCtx.arc(sunX, 34, 28, 0, Math.PI * 2);
-      screenCtx.fill();
-
-      // Drifting wispy clouds
-      screenCtx.fillStyle = 'rgba(255,255,255,0.72)';
-      const c1 = ((tSec * 9) % 290) - 30;
-      const c2 = ((tSec * 6 + 130) % 290) - 30;
-      screenCtx.beginPath();
-      screenCtx.ellipse(c1, 24, 24, 8, 0, 0, Math.PI * 2);
-      screenCtx.ellipse(c2, 42, 18, 6, 0, 0, Math.PI * 2);
-      screenCtx.fill();
-
-      // Ocean
-      const sea = screenCtx.createLinearGradient(0, 72, 0, h);
-      sea.addColorStop(0, '#0284c7');
-      sea.addColorStop(1, '#0f766e');
-      screenCtx.fillStyle = sea;
-      screenCtx.fillRect(0, 72, w, h - 72);
-
-      // Animated wave shimmer lines
-      screenCtx.strokeStyle = 'rgba(186,230,253,0.45)';
-      screenCtx.lineWidth = 2;
-      for (let r = 0; r < 4; r++) {
-        const y = 82 + r * 11;
-        const shift = Math.sin(tSec * 1.8 + r * 1.4) * 12;
-        screenCtx.beginPath();
-        screenCtx.moveTo(0, y);
-        screenCtx.quadraticCurveTo(64 + shift, y - 3, 128, y);
-        screenCtx.quadraticCurveTo(192 - shift, y + 3, 256, y);
-        screenCtx.stroke();
-      }
-    } else if (sceneIdx === 1) {
-      // Scene 1: Emerald Alpine Valley & Misty Peaks
-      const sky = screenCtx.createLinearGradient(0, 0, 0, h);
-      sky.addColorStop(0, '#1e3a8a');
-      sky.addColorStop(0.55, '#38bdf8');
-      sky.addColorStop(1, '#bae6fd');
-      screenCtx.fillStyle = sky;
-      screenCtx.fillRect(0, 0, w, h);
-
-      // Distant mountains
-      screenCtx.fillStyle = '#3b6d8c';
-      screenCtx.beginPath();
-      screenCtx.moveTo(0, 82);
-      screenCtx.lineTo(48, 38);
-      screenCtx.lineTo(96, 70);
-      screenCtx.lineTo(156, 28);
-      screenCtx.lineTo(212, 66);
-      screenCtx.lineTo(256, 44);
-      screenCtx.lineTo(256, 128);
-      screenCtx.lineTo(0, 128);
-      screenCtx.closePath();
-      screenCtx.fill();
-
-      // Mid green hills
-      screenCtx.fillStyle = '#15803d';
-      screenCtx.beginPath();
-      screenCtx.moveTo(0, 92);
-      screenCtx.quadraticCurveTo(72, 66, 138, 86);
-      screenCtx.quadraticCurveTo(198, 70, 256, 88);
-      screenCtx.lineTo(256, 128);
-      screenCtx.lineTo(0, 128);
-      screenCtx.closePath();
-      screenCtx.fill();
-
-      // Shimmering river
-      screenCtx.fillStyle = '#38bdf8';
-      screenCtx.beginPath();
-      screenCtx.moveTo(118, 86);
-      screenCtx.quadraticCurveTo(148 + Math.sin(tSec * 1.4) * 6, 102, 86, 128);
-      screenCtx.lineTo(136, 128);
-      screenCtx.quadraticCurveTo(168, 102, 130, 86);
-      screenCtx.closePath();
-      screenCtx.fill();
-
-      // Drifting mist ribbon
-      const mistX = ((tSec * 11) % 280) - 40;
-      screenCtx.fillStyle = 'rgba(255,255,255,0.34)';
-      screenCtx.beginPath();
-      screenCtx.ellipse(mistX, 68, 42, 7, 0, 0, Math.PI * 2);
-      screenCtx.fill();
-    } else {
-      // Scene 2: Calm Sunset Oasis & Palms
-      const sky = screenCtx.createLinearGradient(0, 0, 0, 84);
-      sky.addColorStop(0, '#312e81');
-      sky.addColorStop(0.5, '#db2777');
-      sky.addColorStop(1, '#fbbf24');
-      screenCtx.fillStyle = sky;
-      screenCtx.fillRect(0, 0, w, 84);
-
-      screenCtx.fillStyle = '#fde68a';
-      screenCtx.beginPath();
-      screenCtx.arc(128, 68, 18, 0, Math.PI * 2);
-      screenCtx.fill();
-
-      // Water reflection
-      const water = screenCtx.createLinearGradient(0, 84, 0, h);
-      water.addColorStop(0, '#9d174d');
-      water.addColorStop(1, '#1e1b4b');
-      screenCtx.fillStyle = water;
-      screenCtx.fillRect(0, 84, w, h - 84);
-
-      screenCtx.fillStyle = 'rgba(253,224,71,0.5)';
-      for (let i = 0; i < 4; i++) {
-        const wLen = 28 - i * 5 + Math.sin(tSec * 2.5 + i) * 4;
-        screenCtx.fillRect(128 - wLen / 2, 89 + i * 8, wLen, 2.5);
-      }
-
-      // Silhouette hill + swaying palm fronds
-      screenCtx.fillStyle = '#0f172a';
-      screenCtx.beginPath();
-      screenCtx.moveTo(0, 96);
-      screenCtx.quadraticCurveTo(44, 78, 86, 94);
-      screenCtx.lineTo(86, 128);
-      screenCtx.lineTo(0, 128);
-      screenCtx.closePath();
-      screenCtx.fill();
-
-      const sway = Math.sin(tSec * 1.4) * 3;
-      screenCtx.strokeStyle = '#0f172a';
-      screenCtx.lineWidth = 3.5;
-      screenCtx.beginPath();
-      screenCtx.moveTo(42, 88);
-      screenCtx.quadraticCurveTo(46, 62, 52 + sway, 46);
+      screenCtx.moveTo(gx, boxY);
+      screenCtx.lineTo(gx, boxY + boxH);
       screenCtx.stroke();
-      for (let f = -2; f <= 2; f++) {
-        screenCtx.lineWidth = 2;
+    }
+    for (let gy = boxY + 24; gy < boxY + boxH; gy += 32) {
+      screenCtx.beginPath();
+      screenCtx.moveTo(boxX, gy);
+      screenCtx.lineTo(boxX + boxW, gy);
+      screenCtx.stroke();
+    }
+
+    if (seg.kind === 'map') {
+      // Stylized Live World/Regional Radar Map + pulsing health network arcs
+      screenCtx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+      // Abstract continents silhouettes
+      const blobs: Array<[number, number, number, number]> = [
+        [268, 86, 34, 20],
+        [345, 92, 42, 28],
+        [356, 134, 24, 30],
+        [426, 98, 44, 26],
+        [446, 152, 20, 14],
+      ];
+      for (const [bx, by, rx, ry] of blobs) {
         screenCtx.beginPath();
-        screenCtx.moveTo(52 + sway, 46);
-        screenCtx.quadraticCurveTo(52 + sway + f * 9, 40, 52 + sway + f * 13, 52 + Math.abs(f) * 2);
+        screenCtx.ellipse(bx, by, rx, ry, 0.15, 0, Math.PI * 2);
+        screenCtx.fill();
+      }
+      // Network link arcs & pulsing nodes
+      const nodes: Array<[number, number]> = [
+        [355, 118],
+        [346, 86],
+        [395, 108],
+        [274, 88],
+        [436, 96],
+      ];
+      screenCtx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
+      screenCtx.lineWidth = 1.4;
+      for (let i = 1; i < nodes.length; i++) {
+        screenCtx.beginPath();
+        screenCtx.moveTo(nodes[0][0], nodes[0][1]);
+        screenCtx.quadraticCurveTo(
+          (nodes[0][0] + nodes[i][0]) * 0.5,
+          Math.min(nodes[0][1], nodes[i][1]) - 18,
+          nodes[i][0],
+          nodes[i][1]
+        );
         screenCtx.stroke();
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        const pulse = ((tSec * 1.6 + i * 0.35) % 1);
+        screenCtx.strokeStyle = `rgba(56, 189, 248, ${(1 - pulse) * 0.8})`;
+        screenCtx.beginPath();
+        screenCtx.arc(nodes[i][0], nodes[i][1], 4 + pulse * 14, 0, Math.PI * 2);
+        screenCtx.stroke();
+        screenCtx.fillStyle = i === 0 ? '#ef4444' : '#38bdf8';
+        screenCtx.beginPath();
+        screenCtx.arc(nodes[i][0], nodes[i][1], 3.5, 0, Math.PI * 2);
+        screenCtx.fill();
+      }
+      // Live radar sweep line
+      const sweepX = boxX + ((tSec * 90) % boxW);
+      screenCtx.fillStyle = 'rgba(56, 189, 248, 0.22)';
+      screenCtx.fillRect(sweepX - 8, boxY, 10, boxH);
+    } else if (seg.kind === 'chart') {
+      // Animated Live Medical Data Bars + Continuous ECG/Recovery Wave
+      for (let b = 0; b < 7; b++) {
+        const barH = 34 + Math.sin(tSec * 1.4 + b * 0.85) * 20 + b * 7;
+        const bx = boxX + 26 + b * 36;
+        const by = boxY + boxH - 18 - barH;
+        const barG = screenCtx.createLinearGradient(0, by, 0, boxY + boxH - 18);
+        barG.addColorStop(0, '#38bdf8');
+        barG.addColorStop(1, '#0369a1');
+        screenCtx.fillStyle = barG;
+        screenCtx.fillRect(bx, by, 20, barH);
+      }
+      screenCtx.strokeStyle = '#fbbf24';
+      screenCtx.lineWidth = 2.4;
+      screenCtx.beginPath();
+      for (let px = 0; px <= boxW; px += 6) {
+        const py =
+          boxY +
+          68 +
+          Math.sin(px * 0.045 - tSec * 3.8) * 16 +
+          Math.cos(px * 0.09 + tSec * 2.1) * 7;
+        if (px === 0) screenCtx.moveTo(boxX + px, py);
+        else screenCtx.lineTo(boxX + px, py);
+      }
+      screenCtx.stroke();
+    } else if (seg.kind === 'gait') {
+      // Biomechanical gait double waveform + circular recovery gauge
+      screenCtx.strokeStyle = '#38bdf8';
+      screenCtx.lineWidth = 2.5;
+      screenCtx.beginPath();
+      for (let px = 0; px <= boxW - 90; px += 5) {
+        const py = boxY + 96 + Math.sin(px * 0.06 - tSec * 4.4) * 24;
+        if (px === 0) screenCtx.moveTo(boxX + 14 + px, py);
+        else screenCtx.lineTo(boxX + 14 + px, py);
+      }
+      screenCtx.stroke();
+
+      screenCtx.strokeStyle = '#34d399';
+      screenCtx.lineWidth = 2;
+      screenCtx.beginPath();
+      for (let px = 0; px <= boxW - 90; px += 5) {
+        const py = boxY + 96 + Math.cos(px * 0.06 - tSec * 4.4) * 18;
+        if (px === 0) screenCtx.moveTo(boxX + 14 + px, py);
+        else screenCtx.lineTo(boxX + 14 + px, py);
+      }
+      screenCtx.stroke();
+
+      const gaugeX = boxX + boxW - 50;
+      const gaugeY = boxY + 92;
+      screenCtx.strokeStyle = 'rgba(255,255,255,0.16)';
+      screenCtx.lineWidth = 7;
+      screenCtx.beginPath();
+      screenCtx.arc(gaugeX, gaugeY, 26, 0, Math.PI * 2);
+      screenCtx.stroke();
+      screenCtx.strokeStyle = '#22d3ee';
+      screenCtx.beginPath();
+      screenCtx.arc(
+        gaugeX,
+        gaugeY,
+        26,
+        -Math.PI / 2,
+        -Math.PI / 2 + Math.PI * (1.45 + Math.sin(tSec * 1.1) * 0.25)
+      );
+      screenCtx.stroke();
+      screenCtx.fillStyle = '#f8fafc';
+      screenCtx.font = 'bold 12px sans-serif';
+      screenCtx.fillText('94%', gaugeX - 13, gaugeY + 4);
+    } else {
+      // Live Health Weather & Advisory Cards
+      const cities = [
+        ['KHARTOUM', '31°C'],
+        ['CAIRO', '26°C'],
+        ['RIYADH', '29°C'],
+      ];
+      for (let i = 0; i < cities.length; i++) {
+        const cy = boxY + 44 + i * 38;
+        screenCtx.fillStyle = 'rgba(15, 23, 42, 0.56)';
+        screenCtx.fillRect(boxX + 18, cy, boxW - 36, 30);
+        screenCtx.fillStyle = '#fbbf24';
+        screenCtx.beginPath();
+        screenCtx.arc(boxX + 38, cy + 15, 7, 0, Math.PI * 2);
+        screenCtx.fill();
+        screenCtx.fillStyle = '#f8fafc';
+        screenCtx.font = 'bold 12px sans-serif';
+        screenCtx.fillText(cities[i][0], boxX + 56, cy + 19);
+        screenCtx.fillStyle = '#38bdf8';
+        screenCtx.fillText(cities[i][1], boxX + boxW - 68, cy + 19);
       }
     }
 
-    // Subtle clinic top-right wellness badge & soft fade vignette
-    screenCtx.fillStyle = 'rgba(15, 23, 42, 0.54)';
-    screenCtx.fillRect(8, 8, 86, 16);
+    // Panel top sub-header strip + wipe shimmer bar
+    screenCtx.fillStyle = 'rgba(6, 21, 43, 0.82)';
+    screenCtx.fillRect(boxX, boxY, boxW, 24);
     screenCtx.fillStyle = '#38bdf8';
-    screenCtx.fillRect(8, 8, 3, 16);
-    screenCtx.fillStyle = '#f8fafc';
-    screenCtx.font = 'bold 9px sans-serif';
-    screenCtx.fillText('THERASON WELLNESS', 14, 19);
+    screenCtx.fillRect(boxX, boxY + 23, boxW, 2);
+    screenCtx.fillStyle = '#e2e8f0';
+    screenCtx.font = 'bold 10px sans-serif';
+    screenCtx.fillText(seg.sub, boxX + 10, boxY + 15);
 
-    // Subtle bottom playback progress bar
-    screenCtx.fillStyle = 'rgba(15, 23, 42, 0.45)';
-    screenCtx.fillRect(0, h - 4, w, 4);
+    if (easeWipe < 1) {
+      screenCtx.fillStyle = `rgba(56, 189, 248, ${(1 - easeWipe) * 0.55})`;
+      screenCtx.fillRect(boxX + boxW * easeWipe - 12, boxY, 16, boxH);
+    }
+    screenCtx.restore();
+
+    screenCtx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+    screenCtx.lineWidth = 1.5;
+    screenCtx.strokeRect(boxX, boxY, boxW, boxH);
+
+    // 3. Left-side Live Studio News Anchor seated behind broadcast desk
+    const nod = Math.sin(tSec * 2.1) * 1.8 + Math.sin(tSec * 0.9) * 1.2;
+    const speakOpen = Math.abs(Math.sin(tSec * 7.5)) * 2.5;
+    const blink = (tSec % 4.2) > 4.06 ? 0.15 : 1;
+    const handLift = Math.sin(tSec * 2.4) * 4;
+    const anchorX = 112;
+    const anchorY = 122 + Math.sin(tSec * 1.5) * 1.2;
+
+    // Blazer / shoulders
+    screenCtx.fillStyle = '#0f172a';
+    screenCtx.beginPath();
+    screenCtx.moveTo(anchorX - 54, 200);
+    screenCtx.quadraticCurveTo(anchorX - 46, anchorY + 12, anchorX - 18, anchorY + 6);
+    screenCtx.lineTo(anchorX + 18, anchorY + 6);
+    screenCtx.quadraticCurveTo(anchorX + 46, anchorY + 12, anchorX + 54, 200);
+    screenCtx.closePath();
+    screenCtx.fill();
+
+    // Crisp white collar & crimson/blue news tie
+    screenCtx.fillStyle = '#f8fafc';
+    screenCtx.beginPath();
+    screenCtx.moveTo(anchorX - 14, anchorY + 6);
+    screenCtx.lineTo(anchorX, anchorY + 34);
+    screenCtx.lineTo(anchorX + 14, anchorY + 6);
+    screenCtx.closePath();
+    screenCtx.fill();
+    screenCtx.fillStyle = '#dc2626';
+    screenCtx.beginPath();
+    screenCtx.moveTo(anchorX - 4, anchorY + 12);
+    screenCtx.lineTo(anchorX + 4, anchorY + 12);
+    screenCtx.lineTo(anchorX + 6, anchorY + 46);
+    screenCtx.lineTo(anchorX - 6, anchorY + 46);
+    screenCtx.closePath();
+    screenCtx.fill();
+
+    // Neck + Head
+    screenCtx.fillStyle = '#9a6544';
+    screenCtx.fillRect(anchorX - 8, anchorY - 8, 16, 18);
+    screenCtx.save();
+    screenCtx.translate(anchorX, anchorY - 24 + nod * 0.5);
+    screenCtx.rotate(Math.sin(tSec * 1.1) * 0.04);
+    // Hair
+    screenCtx.fillStyle = '#17100c';
+    screenCtx.beginPath();
+    screenCtx.arc(0, -4, 23, Math.PI * 0.92, Math.PI * 2.08);
+    screenCtx.fill();
+    // Face
+    screenCtx.fillStyle = '#a8704c';
+    screenCtx.beginPath();
+    screenCtx.ellipse(0, 0, 20, 24, 0, 0, Math.PI * 2);
+    screenCtx.fill();
+    // Eyes
+    screenCtx.fillStyle = '#111827';
+    screenCtx.beginPath();
+    screenCtx.ellipse(-7, -3, 2.3, 2.3 * blink, 0, 0, Math.PI * 2);
+    screenCtx.ellipse(7, -3, 2.3, 2.3 * blink, 0, 0, Math.PI * 2);
+    screenCtx.fill();
+    // Speaking mouth
+    screenCtx.fillStyle = '#4a1d1f';
+    screenCtx.beginPath();
+    screenCtx.ellipse(0, 11, 5, 1.4 + speakOpen, 0, 0, Math.PI * 2);
+    screenCtx.fill();
+    screenCtx.restore();
+
+    // Subtle animated anchor hand holding cue notes
+    screenCtx.fillStyle = '#a8704c';
+    screenCtx.beginPath();
+    screenCtx.ellipse(anchorX + 26, 174 - handLift, 8, 5.5, -0.2, 0, Math.PI * 2);
+    screenCtx.fill();
+    screenCtx.fillStyle = '#f1f5f9';
+    screenCtx.fillRect(anchorX - 18, 174, 34, 10);
+
+    // Curved illuminated news studio desk foreground
+    const deskG = screenCtx.createLinearGradient(0, 176, 0, 202);
+    deskG.addColorStop(0, '#1e3a8a');
+    deskG.addColorStop(1, '#0b1d3a');
+    screenCtx.fillStyle = deskG;
+    screenCtx.beginPath();
+    screenCtx.moveTo(14, 200);
+    screenCtx.quadraticCurveTo(112, 172, 202, 200);
+    screenCtx.closePath();
+    screenCtx.fill();
     screenCtx.fillStyle = '#38bdf8';
-    screenCtx.fillRect(0, h - 4, Math.max(4, w * phase), 4);
+    screenCtx.fillRect(42, 187, 136, 2.5);
+
+    // 4. Top Broadcast Bar: Pulsing LIVE Bug + THERASON NEWS + Digital Clock
+    screenCtx.fillStyle = 'rgba(6, 16, 34, 0.9)';
+    screenCtx.fillRect(0, 0, w, 28);
+    screenCtx.fillStyle = '#dc2626';
+    screenCtx.fillRect(10, 5, 62, 18);
+    const liveAlpha = 0.55 + 0.45 * Math.sin(tSec * 5.2);
+    screenCtx.fillStyle = `rgba(255, 255, 255, ${liveAlpha})`;
+    screenCtx.beginPath();
+    screenCtx.arc(21, 14, 3.5, 0, Math.PI * 2);
+    screenCtx.fill();
+    screenCtx.fillStyle = '#ffffff';
+    screenCtx.font = 'bold 11px sans-serif';
+    screenCtx.fillText('LIVE', 29, 18);
+
+    screenCtx.fillStyle = '#0f2d56';
+    screenCtx.fillRect(76, 5, 136, 18);
+    screenCtx.fillStyle = '#38bdf8';
+    screenCtx.fillRect(76, 5, 3, 18);
+    screenCtx.fillStyle = '#f8fafc';
+    screenCtx.font = 'bold 11px sans-serif';
+    screenCtx.fillText('THERASON NEWS', 84, 18);
+
+    // Broadcast clock + channel label
+    const totalMins = Math.floor(tSec * 0.2) + 9 * 60 + 42;
+    const hh = String(Math.floor(totalMins / 60) % 24).padStart(2, '0');
+    const mm = String(totalMins % 60).padStart(2, '0');
+    screenCtx.fillStyle = '#1e293b';
+    screenCtx.fillRect(w - 118, 5, 108, 18);
+    screenCtx.fillStyle = '#fbbf24';
+    screenCtx.font = 'bold 11px "JetBrains Mono", monospace';
+    screenCtx.fillText(`${hh}:${mm}`, w - 110, 18);
+    screenCtx.fillStyle = '#cbd5e1';
+    screenCtx.font = 'bold 10px sans-serif';
+    screenCtx.fillText('مباشر', w - 58, 18);
+
+    // 5. Iconic Lower-Third Breaking Headline Chyron (y: 202..248)
+    screenCtx.fillStyle = '#f8fafc';
+    screenCtx.fillRect(0, 204, w, 44);
+    screenCtx.fillStyle = '#b91c1c';
+    screenCtx.fillRect(w - 118, 204, 118, 44);
+    screenCtx.fillStyle = '#f59e0b';
+    screenCtx.fillRect(0, 202, w, 3);
+
+    screenCtx.direction = 'rtl';
+    screenCtx.fillStyle = '#ffffff';
+    screenCtx.font = 'bold 15px "Cairo", sans-serif';
+    screenCtx.textAlign = 'center';
+    screenCtx.fillText(seg.tag, w - 59, 232);
+
+    const headlineSlide = Math.min(1, localT / 0.32);
+    const hlAlpha = headlineSlide;
+    screenCtx.save();
+    screenCtx.beginPath();
+    screenCtx.rect(8, 206, w - 134, 40);
+    screenCtx.clip();
+    screenCtx.fillStyle = `rgba(11, 31, 58, ${hlAlpha})`;
+    screenCtx.font = 'bold 16px "Cairo", sans-serif';
+    screenCtx.textAlign = 'right';
+    screenCtx.fillText(seg.headline, w - 130, 232 + (1 - headlineSlide) * 10);
+    screenCtx.restore();
+
+    // 6. Continuous Seamless Scrolling News Ticker Strip (y: 248..288)
+    screenCtx.fillStyle = '#091b36';
+    screenCtx.fillRect(0, 248, w, 40);
+    screenCtx.fillStyle = '#facc15';
+    screenCtx.fillRect(w - 92, 248, 92, 40);
+    screenCtx.fillStyle = '#091b36';
+    screenCtx.font = 'bold 14px "Cairo", sans-serif';
+    screenCtx.textAlign = 'center';
+    screenCtx.fillText('الأخبار', w - 46, 273);
+
+    screenCtx.save();
+    screenCtx.beginPath();
+    screenCtx.rect(0, 248, w - 94, 40);
+    screenCtx.clip();
+    screenCtx.direction = 'rtl';
+    screenCtx.textAlign = 'left';
+    screenCtx.fillStyle = '#f8fafc';
+    screenCtx.font = 'bold 14px "Cairo", sans-serif';
+    const scrollShift = (tSec * 68) % newsTickerSpan;
+    const x1 = -newsTickerSpan + scrollShift;
+    screenCtx.fillText(newsTickerText, x1, 273);
+    screenCtx.fillText(newsTickerText, x1 + newsTickerSpan, 273);
+    screenCtx.restore();
+
+    screenCtx.direction = 'ltr';
+    screenCtx.textAlign = 'left';
   };
   drawReceptionScreenFrame(0);
   const receptionScreen = track(finalizeTexture(screenCanvas, aniso, 1, 1, true, true));
@@ -1437,7 +2095,7 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
   receptionScreen.magFilter = THREE.LinearFilter;
   let lastScreenBucket = -1;
   const updateReceptionScreen = (tSec: number) => {
-    const bucket = Math.floor(tSec * 10);
+    const bucket = Math.floor(tSec * 15);
     if (bucket === lastScreenBucket) return;
     lastScreenBucket = bucket;
     drawReceptionScreenFrame(tSec);
@@ -1457,6 +2115,7 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     asphaltBump,
     sidewalk,
     wood,
+    woodBump,
     bark,
     barkBump,
     birchBark,
@@ -1464,7 +2123,18 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     cypressFoliage,
     oliveFoliage,
     roofShingle,
+    plasterAlbedo,
     stuccoBump,
+    plasterRough,
+    wainscotAlbedo,
+    wainscotBump,
+    brushedMetalBump,
+    fabricWeaveBump,
+    leatherBump,
+    skinMicroMap,
+    skinRoughMap,
+    waterNormal,
+    rugPattern,
     contactShadow,
     therasonWall,
     therasonMonument,

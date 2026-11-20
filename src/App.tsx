@@ -28,6 +28,7 @@ import {
   isInSolarZone,
   isTileInOutdoorGarden,
   isTileWalkable,
+  isValidWallMount,
   isWallDecorId,
   overlapsActiveWorldTree,
   resolveTileStep,
@@ -262,6 +263,39 @@ export default function App() {
                 break;
               }
             }
+          }
+        }
+
+        // Auto-repair any legacy wall-mounted items whose saved rotation/tile is not on a visible wall face
+        const occupiedWallKeys = new Set<string>();
+        for (const it of relocatedItems) {
+          const cat = catalogById.get(it.catalogId);
+          if (!cat?.isWallDecor && !isWallDecorId(it.catalogId)) continue;
+          if (isValidWallMount(it.gridX, it.gridY, it.rotation, nextState.rooms)) {
+            const k = `${it.gridX},${it.gridY},${it.rotation}`;
+            if (!occupiedWallKeys.has(k)) {
+              occupiedWallKeys.add(k);
+              continue;
+            }
+          }
+          const tileRots = getValidWallRotationsForTile(it.gridX, it.gridY, nextState.rooms);
+          const freeTileRot = tileRots.find((r) => !occupiedWallKeys.has(`${it.gridX},${it.gridY},${r}`));
+          if (freeTileRot !== undefined) {
+            it.rotation = freeTileRot;
+            occupiedWallKeys.add(`${it.gridX},${it.gridY},${freeTileRot}`);
+            continue;
+          }
+          const fallback = snapToNearestValidWallSlot(
+            it.gridX + 0.5,
+            it.gridY + 0.5,
+            it.rotation === 0 ? 0 : 1,
+            nextState.rooms
+          );
+          if (fallback) {
+            it.gridX = fallback.gx;
+            it.gridY = fallback.gy;
+            it.rotation = fallback.rotation;
+            occupiedWallKeys.add(`${fallback.gx},${fallback.gy},${fallback.rotation}`);
           }
         }
 
@@ -2187,6 +2221,65 @@ export default function App() {
             hoverY: item.gridY,
           });
         }}
+        onStartDragPlacedItem={(item) => {
+          if (visitingFriend) return;
+          const cat = catalogById.get(item.catalogId);
+          if (!cat) return;
+          setPlacementDraft({
+            catalogItem: cat,
+            movingInstanceId: item.instanceId,
+            rotation: item.rotation,
+            hoverX: item.gridX,
+            hoverY: item.gridY,
+          });
+        }}
+        onSwitchEditingItem={(nextItem, commitCurrent = true) => {
+          if (visitingFriend) return;
+          const nextCat = catalogById.get(nextItem.catalogId);
+          if (!nextCat) return;
+          soundFx.tap();
+          if (commitCurrent && placementDraft?.movingInstanceId) {
+            const prev = placementDraft;
+            const targetRoom = clinic.rooms.find(
+              (r) =>
+                prev.hoverX >= r.minX &&
+                prev.hoverX <= r.maxX &&
+                prev.hoverY >= r.minY &&
+                prev.hoverY <= r.maxY
+            );
+            const nextRoomId = targetRoom ? targetRoom.id : 'outdoor';
+            const isMoved = clinic.placedItems.some(
+              (it) =>
+                it.instanceId === prev.movingInstanceId &&
+                (it.gridX !== prev.hoverX ||
+                  it.gridY !== prev.hoverY ||
+                  it.rotation !== prev.rotation)
+            );
+            if (isMoved) {
+              setClinic((cur) => ({
+                ...cur,
+                placedItems: cur.placedItems.map((it) =>
+                  it.instanceId === prev.movingInstanceId
+                    ? {
+                        ...it,
+                        gridX: prev.hoverX,
+                        gridY: prev.hoverY,
+                        rotation: prev.rotation,
+                        roomId: nextRoomId,
+                      }
+                    : it
+                ),
+              }));
+            }
+          }
+          setPlacementDraft({
+            catalogItem: nextCat,
+            movingInstanceId: nextItem.instanceId,
+            rotation: nextItem.rotation,
+            hoverX: nextItem.gridX,
+            hoverY: nextItem.gridY,
+          });
+        }}
         onTapReceptionDesk={handleTapReceptionDesk}
         onInspectItem={(item) => {
           const assignedPatient = patients.find(
@@ -2227,23 +2320,39 @@ export default function App() {
                 prev.hoverY,
                 clinic.rooms
               );
-              if (validRots.length > 0) {
+              if (validRots.length > 1) {
                 const idx = validRots.indexOf(prev.rotation);
                 const nextRot = validRots[(idx + 1) % validRots.length];
                 return { ...prev, rotation: nextRot };
               }
-              const snapped = snapToNearestValidWallSlot(
-                prev.hoverX + 0.5,
-                prev.hoverY + 0.5,
-                ((prev.rotation + 1) % 4) as 0 | 1 | 2 | 3,
-                clinic.rooms
-              );
-              if (snapped) {
+              const targetRot: 0 | 1 = prev.rotation === 0 ? 1 : 0;
+              const occupiedWallKeys = new Set<string>();
+              for (const existing of clinic.placedItems) {
+                if (existing.instanceId === prev.movingInstanceId) continue;
+                const ec = catalogById.get(existing.catalogId);
+                if (!ec?.isWallDecor && !isWallDecorId(existing.catalogId)) continue;
+                occupiedWallKeys.add(`${existing.gridX},${existing.gridY},${existing.rotation}`);
+              }
+              let best: { gx: number; gy: number; rotation: 0 | 1; distSq: number } | null = null;
+              for (let gx = 2; gx <= 21; gx++) {
+                for (let gy = 2; gy <= 21; gy++) {
+                  const rots = getValidWallRotationsForTile(gx, gy, clinic.rooms);
+                  if (!rots.includes(targetRot)) continue;
+                  if (occupiedWallKeys.has(`${gx},${gy},${targetRot}`)) continue;
+                  const distSq =
+                    (gx - prev.hoverX) * (gx - prev.hoverX) +
+                    (gy - prev.hoverY) * (gy - prev.hoverY);
+                  if (!best || distSq < best.distSq) {
+                    best = { gx, gy, rotation: targetRot, distSq };
+                  }
+                }
+              }
+              if (best) {
                 return {
                   ...prev,
-                  hoverX: snapped.gx,
-                  hoverY: snapped.gy,
-                  rotation: snapped.rotation,
+                  hoverX: best.gx,
+                  hoverY: best.gy,
+                  rotation: best.rotation,
                 };
               }
               return prev;

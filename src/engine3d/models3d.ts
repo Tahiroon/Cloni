@@ -69,7 +69,6 @@ export interface WaterCoolerRigMeta {
 
 export interface ClinicWorldHandle {
   group: THREE.Group;
-  waterMesh: THREE.Mesh;
   doors: ClinicDoorHandle[];
   skyUniforms: {
     uTopColor: { value: THREE.Color };
@@ -267,9 +266,45 @@ export function buildClinicWorld3D(
           return fract((p.x + p.y) * p.z);
         }
 
+        float skyHash2(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
+        float skyNoise2(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(skyHash2(i), skyHash2(i + vec2(1.0, 0.0)), f.x),
+            mix(skyHash2(i + vec2(0.0, 1.0)), skyHash2(i + vec2(1.0, 1.0)), f.x),
+            f.y
+          );
+        }
+
+        float skyFbm(vec2 p) {
+          float v = 0.0;
+          float a = 0.52;
+          for (int i = 0; i < 3; i++) {
+            v += a * skyNoise2(p);
+            p = p * 2.08 + vec2(13.4, 7.1);
+            a *= 0.48;
+          }
+          return v;
+        }
+
         void main() {
           float h = clamp((vWorldPos.y + 4.0) / 55.0, 0.0, 1.0);
           vec3 col = mix(uHorizonColor, uTopColor, pow(h, 0.65));
+
+          // Soft atmospheric horizon warm haze + daytime high-altitude cloud wisps
+          float dayMask = 1.0 - smoothstep(0.0, 0.55, uNightFactor);
+          if (dayMask > 0.01 && vLocalDir.y > 0.02) {
+            vec2 cloudUv = vLocalDir.xz / (vLocalDir.y + 0.18) * 1.15 + vec2(uTime * 0.0045, uTime * 0.0018);
+            float cNoise = skyFbm(cloudUv);
+            float cloudBand = smoothstep(0.52, 0.80, cNoise) * smoothstep(0.04, 0.28, vLocalDir.y) * (1.0 - smoothstep(0.55, 0.92, vLocalDir.y));
+            vec3 cloudCol = mix(vec3(0.95, 0.96, 0.98), vec3(1.0, 0.98, 0.94), 0.35);
+            col = mix(col, cloudCol, cloudBand * 0.38 * dayMask);
+          }
 
           if (uNightFactor > 0.02 && vLocalDir.y > 0.04) {
             vec3 grid = floor(vLocalDir * 135.0);
@@ -357,27 +392,89 @@ export function buildClinicWorld3D(
   const curbMat = trackMat(makeMat({ color: 0xb6afa3, roughness: 0.78 }));
   const stuccoWhiteMat = trackMat(
     makeMat({
-      color: 0xd8d2c7,
+      map: textures.plasterAlbedo,
       bumpMap: textures.stuccoBump,
-      bumpScale: 0.015,
-      roughness: 0.92,
+      roughnessMap: textures.plasterRough,
+      bumpScale: 0.022,
+      roughness: 0.94,
       metalness: 0.0,
+      envMapIntensity: 0.46,
     })
   );
-  const darkMullionMat = trackMat(makeMat({ color: 0x2c3646, roughness: 0.36, metalness: 0.68 }));
-  const aluminumTrimMat = trackMat(makeMat({ color: 0xb0bac6, roughness: 0.44, metalness: 0.5 }));
-  const wainscotBlueMat = trackMat(makeMat({ color: 0x205d88, roughness: 0.64, metalness: 0.04 }));
-  const woodSlatMat = trackMat(makeMat({ map: textures.wood, roughness: 0.66, metalness: 0.02 }));
-  const curtainMat = trackMat(makeMat({ color: 0x5c96b8, roughness: 0.88, side: THREE.DoubleSide }));
+  const darkMullionMat = trackMat(
+    makeMat({
+      color: 0x26303e,
+      bumpMap: textures.brushedMetalBump,
+      bumpScale: 0.003,
+      roughness: 0.34,
+      metalness: 0.74,
+      envMapIntensity: 0.7,
+    })
+  );
+  const aluminumTrimMat = trackMat(
+    makeMat({
+      color: 0xbac3cf,
+      bumpMap: textures.brushedMetalBump,
+      bumpScale: 0.004,
+      roughness: 0.34,
+      metalness: 0.72,
+      envMapIntensity: 0.75,
+    })
+  );
+  const wainscotBlueMat = trackMat(
+    makeMat({
+      map: textures.wainscotAlbedo,
+      bumpMap: textures.wainscotBump,
+      bumpScale: 0.018,
+      roughness: 0.56,
+      metalness: 0.05,
+    })
+  );
+  const epdmGasketMat = trackMat(
+    makeMat({ color: 0x18202c, roughness: 0.88, metalness: 0.05 })
+  );
+  const woodSlatMat = trackMat(
+    makeMat({
+      map: textures.wood,
+      bumpMap: textures.woodBump,
+      bumpScale: 0.012,
+      roughness: 0.62,
+      metalness: 0.02,
+    })
+  );
+  const curtainMat = trackMat(
+    new THREE.MeshPhysicalMaterial({
+      color: 0x5c96b8,
+      bumpMap: textures.fabricWeaveBump,
+      bumpScale: 0.008,
+      roughness: 0.86,
+      sheen: 0.55,
+      sheenRoughness: 0.7,
+      side: THREE.DoubleSide,
+    })
+  );
   const glassMat = trackMat(
     new THREE.MeshPhysicalMaterial({
-      color: 0x9abed9,
-      roughness: 0.14,
-      metalness: 0.06,
+      color: 0x9ec5e0,
+      roughness: 0.08,
+      metalness: 0.08,
       transparent: true,
-      opacity: 0.4,
-      clearcoat: 0.75,
-      envMapIntensity: 0.6,
+      opacity: 0.34,
+      reflectivity: 0.92,
+      ior: 1.5,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.04,
+      envMapIntensity: 1.05,
+    })
+  );
+  const etchedGlassMat = trackMat(
+    new THREE.MeshPhysicalMaterial({
+      color: 0xe2eef7,
+      roughness: 0.32,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.54,
+      clearcoat: 0.35,
     })
   );
   const warmLedMat = trackMat(
@@ -778,38 +875,6 @@ export function buildClinicWorld3D(
     root.add(beam);
   }
 
-  // Modern Courtyard Reflecting Pool / Fountain (centered at x=25.0, z=8.0 -> tiles 24..25, 7..8)
-  const poolBasin = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.78, 0.22, 1.78)),
-    trackMat(makeMat({ color: 0xbdc6d0, roughness: 0.56 }))
-  );
-  poolBasin.position.set(25.0, 0.1, 8.0);
-  poolBasin.castShadow = true;
-  poolBasin.receiveShadow = true;
-  root.add(poolBasin);
-  const waterMesh = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.5, 0.12, 1.5)),
-    trackMat(
-      new THREE.MeshPhysicalMaterial({
-        color: 0x3b8ea5,
-        roughness: 0.08,
-        metalness: 0.05,
-        transmission: 0.45,
-        transparent: true,
-        opacity: 0.84,
-        clearcoat: 1.0,
-      })
-    )
-  );
-  waterMesh.position.set(25.0, 0.15, 8.0);
-  root.add(waterMesh);
-  const fountainSpout = new THREE.Mesh(
-    trackGeom(new THREE.CylinderGeometry(0.11, 0.17, 0.36, 12)),
-    aluminumTrimMat
-  );
-  fountainSpout.position.set(25.0, 0.27, 8.0);
-  root.add(fountainSpout);
-
   // 3. Compound Perimeter Architectural Fence (stucco + timber rail slats) around x=27, z=2..22
   const addFenceSegment = (x: number, z: number, lenX: number, lenZ: number) => {
     const base = new THREE.Mesh(
@@ -1177,19 +1242,26 @@ export function buildClinicWorld3D(
       knee.receiveShadow = true;
       root.add(knee);
 
-      // Floor baseboard skirting + protruding window sill reveal for real architectural wall depth
+      // Floor baseboard skirting + protruding window sill reveal + EPDM gasket + transom
       const skirt = new THREE.Mesh(
-        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.7, 0.1, sz + trimAddZ * 0.7)),
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.72, 0.105, sz + trimAddZ * 0.72)),
         darkMullionMat
       );
       skirt.position.set(cx, 0.12, cz);
       root.add(skirt);
 
+      const sillReveal = new THREE.Mesh(
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.9, 0.025, sz + trimAddZ * 0.9)),
+        epdmGasketMat
+      );
+      sillReveal.position.set(cx, 0.07 + kneeH - 0.005, cz);
+      root.add(sillReveal);
+
       const sill = new THREE.Mesh(
-        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 1.45, 0.065, sz + trimAddZ * 1.45)),
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 1.48, 0.068, sz + trimAddZ * 1.48)),
         aluminumTrimMat
       );
-      sill.position.set(cx, 0.07 + kneeH + 0.02, cz);
+      sill.position.set(cx, 0.07 + kneeH + 0.022, cz);
       sill.castShadow = true;
       root.add(sill);
 
@@ -1200,11 +1272,22 @@ export function buildClinicWorld3D(
       pane.position.set(cx, 0.07 + kneeH + 0.04 + glassH / 2, cz);
       root.add(pane);
 
+      // Horizontal architectural transom bar on tall curtain glass bays
+      if (height >= 2.0) {
+        const transom = new THREE.Mesh(
+          trackGeom(new THREE.BoxGeometry(isAlongX ? len - 0.08 : thickness * 0.88, 0.06, isAlongX ? thickness * 0.88 : len - 0.08)),
+          darkMullionMat
+        );
+        transom.position.set(cx, 0.07 + height - 0.62, cz);
+        transom.castShadow = true;
+        root.add(transom);
+      }
+
       // Vertical architectural window mullions dividing curtain glass into realistic bays
       const mullCount = Math.floor(len / 2.2);
       if (mullCount >= 1) {
-        const mullW = isAlongX ? 0.08 : thickness * 0.9;
-        const mullD = isAlongX ? thickness * 0.9 : 0.08;
+        const mullW = isAlongX ? 0.085 : thickness * 0.92;
+        const mullD = isAlongX ? thickness * 0.92 : 0.085;
         const mullGeom = trackGeom(new THREE.BoxGeometry(mullW, glassH + 0.04, mullD));
         for (let mi = 1; mi <= mullCount; mi++) {
           const t = mi / (mullCount + 1);
@@ -1216,7 +1299,7 @@ export function buildClinicWorld3D(
       }
 
       const topFrame = new THREE.Mesh(
-        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.9, 0.11, sz + trimAddZ * 0.9)),
+        trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.92, 0.11, sz + trimAddZ * 0.92)),
         darkMullionMat
       );
       topFrame.position.set(cx, 0.07 + height - 0.05, cz);
@@ -1226,9 +1309,9 @@ export function buildClinicWorld3D(
     }
 
     const baseH = Math.min(height * 0.28, 0.44);
-    // Recessed dark floor baseboard / skirting trim
+    // Recessed dark floor baseboard / skirting trim + shadow-gap reveal
     const skirt = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.75, 0.11, sz + trimAddZ * 0.75)),
+      trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.78, 0.11, sz + trimAddZ * 0.78)),
       darkMullionMat
     );
     skirt.position.set(cx, 0.125, cz);
@@ -1240,14 +1323,19 @@ export function buildClinicWorld3D(
     wain.receiveShadow = true;
     root.add(wain);
 
-    // Protruding architectural dado / chair-rail molding between wainscot & plaster
+    // Shadow-gap trim + protruding architectural dado / chair-rail molding between wainscot & plaster
+    const dadoShadow = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.55, 0.022, sz + trimAddZ * 0.55)),
+      epdmGasketMat
+    );
+    dadoShadow.position.set(cx, 0.07 + baseH - 0.015, cz);
     const dado = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(sx + trimAddX, 0.055, sz + trimAddZ)),
       aluminumTrimMat
     );
-    dado.position.set(cx, 0.07 + baseH, cz);
+    dado.position.set(cx, 0.07 + baseH + 0.008, cz);
     dado.castShadow = true;
-    root.add(dado);
+    root.add(dadoShadow, dado);
 
     const upperH = Math.max(0.06, height - baseH);
     const upper = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(sx, upperH, sz)), stuccoWhiteMat);
@@ -1256,13 +1344,18 @@ export function buildClinicWorld3D(
     upper.receiveShadow = true;
     root.add(upper);
 
+    const capReveal = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(sx + trimAddX * 0.65, 0.02, sz + trimAddZ * 0.65)),
+      epdmGasketMat
+    );
+    capReveal.position.set(cx, 0.07 + height - 0.005, cz);
     const cap = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(sx + trimAddX * 1.25, 0.075, sz + trimAddZ * 1.25)),
       aluminumTrimMat
     );
     cap.position.set(cx, 0.07 + height + 0.037, cz);
     cap.castShadow = true;
-    root.add(cap);
+    root.add(capReveal, cap);
   };
 
   // Back perimeter walls (deep 0.30m thickness, tall 3.50m, x: 2..22, z: 2..22)
@@ -1332,19 +1425,34 @@ export function buildClinicWorld3D(
   addPilaster(22, 10, 0.28, 1.9);
   addPilaster(12, 22, 0.28, 1.15);
 
-  // Mounted Reception Brand Logo + Framed License Certificate + Anatomy Chart (cleanly positioned on deeper walls)
-  const wallLogo = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(0.05, 0.68, 2.2)),
-    trackMat(makeMat({ map: textures.therasonWall, roughness: 0.35 }))
+  // Mounted Reception Brand Logo + Framed License Certificate + Anatomy Chart (clean matte glare-free plaque)
+  const wallLogoFrame = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.036, 0.75, 2.52)),
+    darkMullionMat
   );
-  wallLogo.position.set(12.125, 1.18, 18.6);
+  wallLogoFrame.position.set(12.126, 1.43, 18.6);
+  wallLogoFrame.castShadow = true;
+  root.add(wallLogoFrame);
+
+  const wallLogo = new THREE.Mesh(
+    trackGeom(new THREE.PlaneGeometry(2.44, 0.68)),
+    trackMat(
+      makeMat({
+        map: textures.therasonWall,
+        roughness: 0.92,
+        metalness: 0.0,
+      })
+    )
+  );
+  wallLogo.rotation.y = Math.PI / 2;
+  wallLogo.position.set(12.148, 1.43, 18.6);
   root.add(wallLogo);
 
   const wallCert = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(0.04, 0.46, 0.6)),
-    trackMat(makeMat({ map: textures.certificateFrame, roughness: 0.4 }))
+    trackGeom(new THREE.BoxGeometry(0.04, 0.48, 0.62)),
+    trackMat(makeMat({ map: textures.certificateFrame, roughness: 0.38 }))
   );
-  wallCert.position.set(12.125, 1.18, 12.0);
+  wallCert.position.set(12.125, 1.38, 12.0);
   root.add(wallCert);
 
   const wallChart = new THREE.Mesh(
@@ -1387,19 +1495,45 @@ export function buildClinicWorld3D(
     body.position.set(axis === 'z' ? 0 : len / 2, 0.89, axis === 'z' ? len / 2 : 0);
     body.castShadow = true;
 
+    // Brushed stainless steel kickplate along bottom edge
+    const kickPlate = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.062 : len - 0.04, 0.2, axis === 'z' ? len - 0.04 : 0.062)),
+      aluminumTrimMat
+    );
+    kickPlate.position.set(axis === 'z' ? 0 : len / 2, 0.11, axis === 'z' ? len / 2 : 0);
+
+    // EPDM gasket frame + safety vision glass panel
+    const visionBezel = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.068 : 0.31, 0.6, axis === 'z' ? 0.31 : 0.068)),
+      epdmGasketMat
+    );
+    visionBezel.position.set(axis === 'z' ? 0 : len * 0.58, 1.24, axis === 'z' ? len * 0.58 : 0);
     const visionGlass = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.065 : 0.28, 0.56, axis === 'z' ? 0.28 : 0.065)),
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.072 : 0.25, 0.54, axis === 'z' ? 0.25 : 0.072)),
       glassMat
     );
     visionGlass.position.set(axis === 'z' ? 0 : len * 0.58, 1.24, axis === 'z' ? len * 0.58 : 0);
 
-    const handle = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.1 : 0.14, 0.035, axis === 'z' ? 0.14 : 0.1)),
+    // Brushed lever lockset & escutcheon plate
+    const lockPlate = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.076 : 0.05, 0.14, axis === 'z' ? 0.05 : 0.076)),
       aluminumTrimMat
     );
-    handle.position.set(axis === 'z' ? 0 : len * 0.82, 0.9, axis === 'z' ? len * 0.82 : 0);
+    lockPlate.position.set(axis === 'z' ? 0 : len * 0.84, 0.9, axis === 'z' ? len * 0.84 : 0);
+    const handle = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.115 : 0.14, 0.026, axis === 'z' ? 0.14 : 0.115)),
+      aluminumTrimMat
+    );
+    handle.position.set(axis === 'z' ? 0 : len * 0.81, 0.92, axis === 'z' ? len * 0.81 : 0);
 
-    piv.add(body, visionGlass, handle);
+    // Overhead hydraulic door closer arm & body
+    const closerBody = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(axis === 'z' ? 0.08 : 0.22, 0.055, axis === 'z' ? 0.22 : 0.08)),
+      darkMullionMat
+    );
+    closerBody.position.set(axis === 'z' ? 0 : len * 0.28, 1.71, axis === 'z' ? len * 0.28 : 0);
+
+    piv.add(body, kickPlate, visionBezel, visionGlass, lockPlate, handle, closerBody);
     root.add(piv);
 
     doors.push({
@@ -1425,6 +1559,14 @@ export function buildClinicWorld3D(
   // 6. Grand Main Entrance Portico Canopy & Automatic Sliding Glass Double Doors (x = 22, z = 14..16)
   const entranceGroup = new THREE.Group();
   entranceGroup.position.set(22.0, 0, 15.0);
+  // Brushed stainless steel sliding threshold track
+  const thresholdStrip = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.14, 0.018, 2.04)),
+    aluminumTrimMat
+  );
+  thresholdStrip.position.set(0, 0.085, 0);
+  entranceGroup.add(thresholdStrip);
+
   for (const dz of [-1.06, 1.06]) {
     const col = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.36, 3.12, 0.32)), stuccoWhiteMat);
     col.position.set(0, 1.56, dz);
@@ -1440,11 +1582,16 @@ export function buildClinicWorld3D(
     frame.position.y = 1.22;
     const pane = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.035, 2.16, 0.8)), glassMat);
     pane.position.y = 1.26;
+    const safetyStripe = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.04, 0.16, 0.8)),
+      etchedGlassMat
+    );
+    safetyStripe.position.y = 1.12;
     const kick = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.08, 0.18, 0.92)), aluminumTrimMat);
     kick.position.y = 0.09;
     const pullBar = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.11, 0.54, 0.035)), aluminumTrimMat);
     pullBar.position.set(0, 1.12, zOffset < 0 ? 0.34 : -0.34);
-    panelGroup.add(frame, pane, kick, pullBar);
+    panelGroup.add(frame, pane, safetyStripe, kick, pullBar);
     entranceGroup.add(panelGroup);
     return panelGroup;
   };
@@ -1461,6 +1608,24 @@ export function buildClinicWorld3D(
     rightLeaf: mainRightSlide,
     baseOffset: 0.47,
   });
+
+  // Overhead automatic door header bar + motion sensor + green active status LED
+  const doorHeaderBar = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.22, 0.18, 2.1)),
+    darkMullionMat
+  );
+  doorHeaderBar.position.set(0, 2.62, 0);
+  const sensorBox = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.09, 0.07, 0.28)),
+    epdmGasketMat
+  );
+  sensorBox.position.set(0.14, 2.62, 0);
+  const sensorLed = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.02, 0.025, 0.05)),
+    trackMat(makeMat({ color: 0x34d399, emissive: 0x10b981, emissiveIntensity: 1.1, roughness: 0.3 }))
+  );
+  sensorLed.position.set(0.185, 2.62, 0);
+  entranceGroup.add(doorHeaderBar, sensorBox, sensorLed);
 
   const canopy = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(1.36, 0.16, 2.78)), darkMullionMat);
   canopy.position.set(0.46, 3.04, 0);
@@ -1947,8 +2112,8 @@ export function buildClinicWorld3D(
   const leafList: Array<{ mat4: THREE.Matrix4; tint: number }> = [];
   const cypressCardList: Array<{ mat4: THREE.Matrix4; tint: number }> = [];
 
-  const leafTints = [0xffffff, 0xe8f5df, 0xf2efd8, 0xd4eac6, 0xdfeede];
-  const cypressTints = [0xffffff, 0xe2f0e4, 0xd8e8dc];
+  const leafTints = [0xffffff, 0xe4f3db, 0xf2efd8, 0xd1e8c2, 0xdbedda, 0xe8f0cc];
+  const cypressTints = [0xffffff, 0xdeeee0, 0xd4e6d8];
 
   if (activeTrees.length > 0) {
     const treeAoInst = new THREE.InstancedMesh(aoPlaneGeom, contactAoMat, activeTrees.length);
@@ -2130,7 +2295,6 @@ export function buildClinicWorld3D(
 
   return {
     group: root,
-    waterMesh,
     doors,
     skyUniforms,
     roomLightMats,
@@ -2186,25 +2350,81 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
   if (cached) return cached;
 
   const pool: SharedCatalogMats = {
-    whiteBody: makeMat({ color: 0xdadfe6, roughness: 0.54, metalness: 0.05 }),
-    silverMetal: makeMat({ color: 0xb0b8c2, roughness: 0.34, metalness: 0.68 }),
-    darkSlate: makeMat({ color: 0x243042, roughness: 0.54, metalness: 0.2 }),
-    blueUpholstery: makeMat({ color: 0x225d8a, roughness: 0.62, metalness: 0.04 }),
-    cyanAccent: makeMat({ color: 0x2e7fa8, roughness: 0.44, metalness: 0.08 }),
-    woodMat: makeMat({ map: textures.wood, roughness: 0.66, metalness: 0.02 }),
-    leafGreen: makeMat({ color: 0x3b6e2d, roughness: 0.86 }),
-    ceramicPot: makeMat({ color: 0xc5bdb0, roughness: 0.56 }),
-    blackRubber: makeMat({ color: 0x111827, roughness: 0.78, metalness: 0.08 }),
-    warmTimber: makeMat({ color: 0x9c6b3f, roughness: 0.62, metalness: 0.03 }),
-    redAccent: makeMat({ color: 0xdc2626, roughness: 0.36, metalness: 0.1 }),
-    emeraldAccent: makeMat({ color: 0x10b981, roughness: 0.36, metalness: 0.1 }),
-    amberAccent: makeMat({ color: 0xf59e0b, roughness: 0.35, metalness: 0.15 }),
+    whiteBody: new THREE.MeshPhysicalMaterial({
+      color: 0xdadfe6,
+      roughness: 0.46,
+      metalness: 0.04,
+      clearcoat: 0.34,
+      clearcoatRoughness: 0.38,
+      envMapIntensity: 0.6,
+    }),
+    silverMetal: makeMat({
+      color: 0xbac2cc,
+      bumpMap: textures.brushedMetalBump,
+      bumpScale: 0.004,
+      roughness: 0.28,
+      metalness: 0.78,
+      envMapIntensity: 0.85,
+    }),
+    darkSlate: makeMat({
+      color: 0x243042,
+      bumpMap: textures.brushedMetalBump,
+      bumpScale: 0.003,
+      roughness: 0.46,
+      metalness: 0.28,
+    }),
+    blueUpholstery: new THREE.MeshPhysicalMaterial({
+      color: 0x225d8a,
+      bumpMap: textures.leatherBump,
+      bumpScale: 0.005,
+      roughness: 0.54,
+      metalness: 0.03,
+      sheen: 0.24,
+      sheenRoughness: 0.65,
+    }),
+    cyanAccent: new THREE.MeshPhysicalMaterial({
+      color: 0x2e7fa8,
+      bumpMap: textures.fabricWeaveBump,
+      bumpScale: 0.006,
+      roughness: 0.48,
+      metalness: 0.06,
+      sheen: 0.35,
+      sheenRoughness: 0.6,
+    }),
+    woodMat: makeMat({
+      map: textures.wood,
+      bumpMap: textures.woodBump,
+      bumpScale: 0.012,
+      roughness: 0.62,
+      metalness: 0.02,
+    }),
+    leafGreen: makeMat({ color: 0x3b6e2d, roughness: 0.84 }),
+    ceramicPot: new THREE.MeshPhysicalMaterial({
+      color: 0xc5bdb0,
+      roughness: 0.44,
+      clearcoat: 0.25,
+      clearcoatRoughness: 0.35,
+    }),
+    blackRubber: makeMat({ color: 0x141a24, roughness: 0.82, metalness: 0.06 }),
+    warmTimber: makeMat({
+      color: 0x9c6b3f,
+      bumpMap: textures.woodBump,
+      bumpScale: 0.01,
+      roughness: 0.58,
+      metalness: 0.03,
+    }),
+    redAccent: makeMat({ color: 0xdc2626, roughness: 0.34, metalness: 0.12 }),
+    emeraldAccent: makeMat({ color: 0x10b981, roughness: 0.34, metalness: 0.12 }),
+    amberAccent: makeMat({ color: 0xf59e0b, roughness: 0.32, metalness: 0.16 }),
     frostGlassMat: new THREE.MeshPhysicalMaterial({
       color: 0xdbeafe,
       transparent: true,
-      opacity: 0.56,
+      opacity: 0.54,
       roughness: 0.16,
-      metalness: 0.02,
+      metalness: 0.04,
+      ior: 1.5,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.08,
     }),
     aoPlaneMat: new THREE.MeshBasicMaterial({
       map: textures.contactShadow,
@@ -2272,9 +2492,9 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       map: textures.receptionScreen,
       emissiveMap: textures.receptionScreen,
       emissive: 0xffffff,
-      emissiveIntensity: 0.92,
-      roughness: 0.24,
-      metalness: 0.06,
+      emissiveIntensity: 0.72,
+      roughness: 0.28,
+      metalness: 0.04,
     }),
   };
 
@@ -2730,7 +2950,7 @@ export function createCatalogMesh3D(
         roughness: 0.3,
       });
 
-      const cy = 1.44;
+      const cy = 1.32;
       // Outer recessed duct housing flange sitting flush against the wall (x = -0.40 .. -0.22)
       box(0.18, 0.62, 0.9, frameMat, -0.31, cy, 0);
       // Wide bezel frame around the big rectangular air opening
@@ -2788,7 +3008,7 @@ export function createCatalogMesh3D(
         metalness: 0.15,
       });
 
-      const cy = 1.62;
+      const cy = 1.46;
       // Sculpted aerodynamic side profile extruded along Z (unit width 0.96m)
       const acShape = new THREE.Shape();
       acShape.moveTo(0, -0.135);
@@ -4028,9 +4248,21 @@ export function createCatalogMesh3D(
     }
 
     case 'privacy_screen': {
-      // 3-panel folding chrome medical privacy curtain screen on swivel feet
+      // 3-panel folding chrome medical privacy curtain screen on swivel feet with woven curtain fabric
+      const screenClothMat = new THREE.MeshPhysicalMaterial({
+        color: 0x3882a6,
+        bumpMap: textures.fabricWeaveBump,
+        bumpScale: 0.01,
+        roughness: 0.86,
+        sheen: 0.58,
+        sheenRoughness: 0.65,
+        sheenColor: new THREE.Color(0x9bd6f0),
+      });
       for (const lz of [-0.36, 0, 0.36]) {
-        box(0.16, 0.04, 0.06, silverMetal, 0, 0.03, lz);
+        box(0.16, 0.032, 0.055, silverMetal, 0, 0.034, lz);
+        for (const cx of [-0.06, 0.06]) {
+          cyl(0.018, 0.018, 0.022, blackRubber, cx, 0.012, lz);
+        }
       }
       const panels = [
         { x: -0.04, z: -0.27, rotY: 0.22 },
@@ -4041,9 +4273,10 @@ export function createCatalogMesh3D(
         const g = new THREE.Group();
         g.position.set(p.x, 0, p.z);
         g.rotation.y = p.rotY;
-        const fr = new THREE.Mesh(new THREE.BoxGeometry(0.035, 1.48, 0.28), silverMetal);
+        const fr = new THREE.Mesh(new THREE.BoxGeometry(0.034, 1.48, 0.28), silverMetal);
         fr.position.y = 0.82;
-        const cloth = new THREE.Mesh(new THREE.BoxGeometry(0.042, 1.24, 0.24), cyanAccent);
+        fr.userData.sharedGlbMat = true;
+        const cloth = new THREE.Mesh(new THREE.BoxGeometry(0.042, 1.24, 0.24), screenClothMat);
         cloth.position.y = 0.86;
         g.add(fr, cloth);
         inner.add(g);
@@ -4343,7 +4576,7 @@ export function createCatalogMesh3D(
       }
       const glassShade = cyl(0.065, 0.085, 0.18, sconceMat, -0.28, 1.5, 0);
       glassShade.userData.noCastShadow = true;
-      addWallWash(1.25, 1.45, 0xffd79e, 0.5, -0.385, 0.88, 0, Math.PI / 2);
+      addWallWash(1.25, 1.45, 0xffd79e, 0.5, -0.372, 0.88, 0, Math.PI / 2);
       addFloorHalo(1.95, 0xffd79e, 0.36, -0.08, 0.026, 0);
       addBulbAura(0.18, 0xffe5b4, 0.34, -0.28, 1.5, 0);
       outer.userData.smartLight = {
@@ -5461,13 +5694,22 @@ export function createCatalogMesh3D(
     }
 
     case 'floor_rug': {
-      // Woven acoustic clinical reception rug (walkable floor layer)
-      const rugOuter = box(1.82, 0.022, 0.92, makeMat({ color: 0x1e4068, roughness: 0.92 }), 0, 0.014, 0);
-      const rugBorder = box(1.68, 0.024, 0.78, makeMat({ color: 0xe2e8f0, roughness: 0.92 }), 0, 0.015, 0);
-      const rugCenter = box(1.5, 0.026, 0.62, makeMat({ color: 0x0e7490, roughness: 0.9 }), 0, 0.016, 0);
-      const rugMedallion = box(0.64, 0.028, 0.3, makeMat({ color: 0x38bdf8, roughness: 0.88 }), 0, 0.017, 0);
-      for (const r of [rugOuter, rugBorder, rugCenter, rugMedallion]) {
-        r.userData.noCastShadow = true;
+      // High-detail woven acoustic clinical reception rug with tapestry pattern & fringed edges (walkable)
+      const rugMat = new THREE.MeshPhysicalMaterial({
+        map: textures.rugPattern,
+        bumpMap: textures.fabricWeaveBump,
+        bumpScale: 0.012,
+        roughness: 0.92,
+        sheen: 0.38,
+        sheenRoughness: 0.78,
+        sheenColor: new THREE.Color(0xcbd5e1),
+      });
+      const rugPile = box(1.82, 0.022, 0.92, rugMat, 0, 0.014, 0);
+      rugPile.userData.noCastShadow = true;
+      const fringeMat = makeMat({ color: 0xe2dfd7, roughness: 0.95 });
+      for (const fx of [-0.935, 0.935]) {
+        const fringe = box(0.05, 0.012, 0.88, fringeMat, fx, 0.011, 0);
+        fringe.userData.noCastShadow = true;
       }
       break;
     }
@@ -5490,13 +5732,13 @@ export function createCatalogMesh3D(
 
     case 'anatomy_poster': {
       // Backplane flush at local x = -0.40 so it mounts cleanly onto any wall
-      box(0.045, 0.8, 0.58, darkSlate, -0.378, 1.15, 0);
-      box(0.03, 0.74, 0.52, whiteBody, -0.36, 1.15, 0);
+      box(0.045, 0.8, 0.58, darkSlate, -0.378, 1.1, 0);
+      box(0.03, 0.74, 0.52, whiteBody, -0.36, 1.1, 0);
       const art = new THREE.Mesh(
         new THREE.BoxGeometry(0.02, 0.68, 0.46),
         makeMat({ map: textures.anatomyPoster, roughness: 0.4 })
       );
-      art.position.set(-0.348, 1.15, 0);
+      art.position.set(-0.348, 1.1, 0);
       art.userData.noCastShadow = true;
       inner.add(art);
       break;
@@ -5717,18 +5959,19 @@ export function createCatalogMesh3D(
     }
 
     case 'wall_clock': {
-      // Crisp brushed-aluminum clinical wall clock mounted flush on wall at x = -0.38, y = 1.56
+      // Crisp brushed-aluminum clinical wall clock mounted flush on wall at x = -0.38, y = 1.40
       const dialMat = makeMat({ color: 0xf8fafc, roughness: 0.28 });
+      const clockY = 1.4;
       const frame = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.024, 10, 28), silverMetal);
       frame.rotation.y = Math.PI / 2;
-      frame.position.set(-0.37, 1.56, 0);
+      frame.position.set(-0.37, clockY, 0);
       frame.userData.sharedGlbMat = true;
       inner.add(frame);
 
-      const backCase = cyl(0.22, 0.22, 0.045, darkSlate, -0.382, 1.56, 0);
+      const backCase = cyl(0.22, 0.22, 0.045, darkSlate, -0.382, clockY, 0);
       backCase.rotation.z = Math.PI / 2;
 
-      const face = cyl(0.195, 0.195, 0.018, dialMat, -0.362, 1.56, 0);
+      const face = cyl(0.195, 0.195, 0.018, dialMat, -0.362, clockY, 0);
       face.rotation.z = Math.PI / 2;
       face.userData.noCastShadow = true;
 
@@ -5741,7 +5984,7 @@ export function createCatalogMesh3D(
           isMajor ? 0.014 : 0.008,
           darkSlate,
           -0.351,
-          1.56 + Math.cos(ang) * 0.165,
+          clockY + Math.cos(ang) * 0.165,
           Math.sin(ang) * 0.165
         );
         tick.rotation.x = ang;
@@ -5749,16 +5992,16 @@ export function createCatalogMesh3D(
       }
 
       // Hour, minute, and crimson sweep second hands
-      const hrHand = box(0.012, 0.095, 0.014, darkSlate, -0.346, 1.59, 0.024);
+      const hrHand = box(0.012, 0.095, 0.014, darkSlate, -0.346, clockY + 0.03, 0.024);
       hrHand.rotation.x = 0.65;
       hrHand.userData.noCastShadow = true;
-      const minHand = box(0.012, 0.135, 0.01, darkSlate, -0.343, 1.605, -0.028);
+      const minHand = box(0.012, 0.135, 0.01, darkSlate, -0.343, clockY + 0.045, -0.028);
       minHand.rotation.x = -0.42;
       minHand.userData.noCastShadow = true;
-      const secHand = box(0.01, 0.145, 0.006, redAccent, -0.34, 1.56, 0.055);
+      const secHand = box(0.01, 0.145, 0.006, redAccent, -0.34, clockY, 0.055);
       secHand.rotation.x = 1.8;
       secHand.userData.noCastShadow = true;
-      cyl(0.015, 0.015, 0.016, silverMetal, -0.342, 1.56, 0).rotation.z = Math.PI / 2;
+      cyl(0.015, 0.015, 0.016, silverMetal, -0.342, clockY, 0).rotation.z = Math.PI / 2;
       break;
     }
 
@@ -5828,7 +6071,7 @@ export function createCatalogMesh3D(
         const clonedMats = mats.map((orig) => {
           const cloned = (orig as THREE.MeshStandardMaterial).clone();
           cloned.transparent = true;
-          cloned.opacity = 0.65;
+          cloned.opacity = 0.82;
           return cloned;
         });
         mesh.material = clonedMats.length === 1 ? clonedMats[0] : clonedMats;

@@ -21,6 +21,11 @@ export interface HumanoidAppearance {
   isStaff?: boolean;
   role?: StaffRole;
   contactShadowTex?: THREE.Texture;
+  skinMicroMap?: THREE.Texture;
+  skinRoughMap?: THREE.Texture;
+  fabricWeaveBump?: THREE.Texture;
+  leatherBump?: THREE.Texture;
+  brushedMetalBump?: THREE.Texture;
 }
 
 interface SkinnedBoneRef {
@@ -38,6 +43,7 @@ export interface HumanoidRig {
   handCup?: THREE.Group;
   isSkinnedGlb: boolean;
   hipHeight?: number;
+  heightScale?: number;
   bones?: Record<string, SkinnedBoneRef>;
   // Procedural fallback references
   torso?: THREE.Group;
@@ -52,6 +58,74 @@ export interface HumanoidRig {
 }
 
 const _euler = new THREE.Euler();
+const _sheenSubsurface = new THREE.Color(0xe8a088);
+
+function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.56) {
+  return new THREE.MeshPhysicalMaterial({
+    color: hex,
+    map: appearance.skinMicroMap ?? null,
+    roughnessMap: appearance.skinRoughMap ?? null,
+    roughness,
+    metalness: 0.0,
+    sheen: 0.22,
+    sheenRoughness: 0.7,
+    sheenColor: _sheenSubsurface,
+    envMapIntensity: 0.48,
+  });
+}
+
+function makeClothMat(
+  hex: string | number,
+  appearance: HumanoidAppearance,
+  roughness = 0.84,
+  sheen = 0.58,
+  doubleSide = false,
+  vertexColors = false
+) {
+  const sheenCol = new THREE.Color(hex).lerp(new THREE.Color(0xffffff), 0.35);
+  return new THREE.MeshPhysicalMaterial({
+    color: hex,
+    bumpMap: appearance.fabricWeaveBump ?? null,
+    bumpScale: 0.008,
+    roughness,
+    metalness: 0.01,
+    sheen,
+    sheenRoughness: 0.66,
+    sheenColor: sheenCol,
+    side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
+    vertexColors,
+    envMapIntensity: 0.46,
+  });
+}
+
+function makeLeatherMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.46) {
+  return new THREE.MeshPhysicalMaterial({
+    color: hex,
+    bumpMap: appearance.leatherBump ?? null,
+    bumpScale: 0.004,
+    roughness,
+    metalness: 0.05,
+    clearcoat: 0.26,
+    clearcoatRoughness: 0.4,
+    envMapIntensity: 0.56,
+  });
+}
+
+function makeMetalMat(
+  hex: string | number,
+  appearance: HumanoidAppearance,
+  roughness = 0.28,
+  metalness = 0.82
+) {
+  return new THREE.MeshPhysicalMaterial({
+    color: hex,
+    bumpMap: appearance.brushedMetalBump ?? null,
+    bumpScale: 0.003,
+    roughness,
+    metalness,
+    envMapIntensity: 0.72,
+  });
+}
 
 function colorMat(hex: string | number, roughness = 0.76, metalness = 0.02, doubleSide = false) {
   return new THREE.MeshStandardMaterial({
@@ -109,6 +183,7 @@ function findBoneIdx(bones: THREE.Bone[], names: string[]): number {
  */
 function createSkinnedGarmentMesh(
   legMesh: THREE.SkinnedMesh,
+  appearance: HumanoidAppearance,
   opts: {
     colorHex: number;
     zTop: number;
@@ -136,8 +211,8 @@ function createSkinnedGarmentMesh(
   const idxUR = findBoneIdx(bones, ['UpperLegR', 'UpperLeg.R']);
   const idxLR = findBoneIdx(bones, ['LowerLegR', 'LowerLeg.R']);
 
-  const rings = 14;
-  const radialSegs = 24;
+  const rings = 18;
+  const radialSegs = 32;
   const gap = opts.openFrontGapRad || 0;
   const thetaStart = gap;
   const thetaSpan = Math.PI * 2 - gap * 2;
@@ -145,9 +220,19 @@ function createSkinnedGarmentMesh(
 
   const positions: number[] = [];
   const uvs: number[] = [];
+  const colors: number[] = [];
   const skinIndices: number[] = [];
   const skinWeights: number[] = [];
   const indices: number[] = [];
+
+  const hemCol =
+    opts.accentHemHex !== undefined
+      ? new THREE.Color(opts.accentHemHex)
+      : new THREE.Color(0x000000);
+  const baseCol = new THREE.Color(opts.colorHex);
+  const hemRatioR = baseCol.r > 0.02 ? hemCol.r / baseCol.r : 0.72;
+  const hemRatioG = baseCol.g > 0.02 ? hemCol.g / baseCol.g : 0.72;
+  const hemRatioB = baseCol.b > 0.02 ? hemCol.b / baseCol.b : 0.72;
 
   for (let r = 0; r <= rings; r++) {
     const v = r / rings; // 0 = top waist/chest, 1 = bottom hem
@@ -170,11 +255,27 @@ function createSkinnedGarmentMesh(
     for (let c = 0; c <= radialSegs; c++) {
       const u = c / radialSegs;
       const theta = thetaStart + u * thetaSpan;
+      // Subtle organic vertical pleats widening toward the lower hem
+      const pleatWave = Math.sin(theta * 7 + v * 1.4);
+      const pleatAmp = 0.042 * Math.max(0, v - 0.06);
+      const pleatMul = 1 + pleatWave * pleatAmp;
       // In CharacterArmature space: +X is left, -Y is world front (+Z), +Y is world back (-Z)
-      const x = rx * Math.sin(theta);
-      const y = cy - ry * Math.cos(theta);
+      const x = rx * pleatMul * Math.sin(theta);
+      const y = cy - ry * pleatMul * Math.cos(theta);
       positions.push(x, y, z);
       uvs.push(u, 1 - v);
+
+      // Subtle trough ambient occlusion + delicate hem contrast
+      const troughAo = (0.94 + 0.06 * pleatWave) * (1 - 0.07 * v);
+      if (opts.accentHemHex !== undefined && v >= 0.93) {
+        colors.push(
+          Math.min(1.2, hemRatioR * troughAo),
+          Math.min(1.2, hemRatioG * troughAo),
+          Math.min(1.2, hemRatioB * troughAo)
+        );
+      } else {
+        colors.push(troughAo, troughAo, troughAo);
+      }
 
       // Left/Right leg weighting with smooth center drape seam
       const sideL = THREE.MathUtils.smoothstep(x, -0.0013, 0.0013);
@@ -248,6 +349,7 @@ function createSkinnedGarmentMesh(
     const centerIdx = positions.length / 3;
     positions.push(0, opts.botCy, opts.zBot + 0.0001);
     uvs.push(0.5, 0);
+    colors.push(0.75, 0.75, 0.75);
     skinIndices.push(idxLL, idxLR, idxHips, idxHips);
     skinWeights.push(0.5, 0.5, 0, 0);
     const botRingStart = rings * cols;
@@ -259,12 +361,13 @@ function createSkinnedGarmentMesh(
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geom.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
   geom.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
   geom.setIndex(indices);
   geom.computeVertexNormals();
 
-  const mat = colorMat(opts.colorHex, 0.86, 0.01, true);
+  const mat = makeClothMat(opts.colorHex, appearance, 0.86, 0.62, true, true);
   const mesh = new THREE.SkinnedMesh(geom, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
@@ -373,22 +476,19 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
         const origMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         const clonedMats = origMats.map((m) => {
-          const c = (m as THREE.MeshStandardMaterial).clone();
-          const mName = c.name || '';
+          const orig = m as THREE.MeshStandardMaterial;
+          const mName = orig.name || '';
+          let targetHex = orig.color ? orig.color.getHex() : 0xcbd5e1;
+          let mat: THREE.MeshStandardMaterial;
 
           if (mName === 'Skin') {
             if (meshName.includes('Feet') && isFemaleLook) {
-              // Cover instep/ankle with modest dark sock/shoe tone
-              c.color.setHex(0x1f1916);
-              c.roughness = 0.72;
+              mat = makeLeatherMat(0x1f1916, appearance, 0.62);
             } else {
-              c.color.copy(skinCol);
-              c.roughness = 0.64;
-              c.metalness = 0.02;
+              mat = makeSkinMat(skinCol.getHex(), appearance, 0.56);
             }
           } else if (mName === 'Skin_Darker') {
-            c.color.copy(darkerSkinCol);
-            c.roughness = 0.68;
+            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.6);
           } else if (
             mName === 'Hair' ||
             mName === 'Hair_Blond' ||
@@ -396,102 +496,109 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             mName === 'Eyebrows'
           ) {
             if (isFemaleLook && appearance.hasHijab && mName === 'Hair_Blond') {
-              // Sculpted hair becomes a clean inner hijab under-cap so no hair ever clips through Tarha
-              c.color.copy(tarhaUnderCapCol);
-              c.roughness = 0.86;
+              mat = makeClothMat(tarhaUnderCapCol.getHex(), appearance, 0.86, 0.45);
             } else {
-              c.color.copy(hairCol);
-              c.roughness = 0.88;
+              mat = new THREE.MeshPhysicalMaterial({
+                color: hairCol.getHex(),
+                roughness: 0.78,
+                metalness: 0.02,
+                sheen: 0.28,
+                sheenRoughness: 0.45,
+                sheenColor: new THREE.Color(0x6b5344),
+                envMapIntensity: 0.45,
+              });
             }
           } else if (isTherapist) {
             if (mName === 'Black' && meshName === 'Suit_Body') {
-              c.color.setHex(0xedf2f7); // Crisp white medical coat
-              c.roughness = 0.72;
+              mat = makeClothMat(0xedf2f7, appearance, 0.72, 0.38);
             } else if (mName === 'White' && meshName === 'Suit_Body') {
-              c.color.setHex(0x0284c7); // Teal clinical scrubs underneath
-              c.roughness = 0.78;
+              mat = makeClothMat(0x0284c7, appearance, 0.78, 0.48);
             } else if (mName === 'Black' && meshName === 'Suit_Legs') {
-              c.color.setHex(0x0f3a5c); // Navy scrub trousers
-              c.roughness = 0.82;
+              mat = makeClothMat(0x0f3a5c, appearance, 0.82, 0.42);
             } else if (meshName === 'Suit_Feet') {
-              c.color.setHex(0x1e293b);
-              c.roughness = 0.56;
+              mat = makeLeatherMat(0x1e293b, appearance, 0.48);
+            } else {
+              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.75, 0.35);
             }
           } else if (outfitStyle === 'jalabiya') {
             if (mName === 'Suit' || mName === 'White' || mName === 'Tie') {
-              c.color.copy(shirtCol);
-              c.roughness = 0.84;
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.84, 0.52);
             } else if (mName === 'Black') {
-              c.color.setHex(0x3a2618);
-              c.roughness = 0.56;
+              mat = makeLeatherMat(0x3a2618, appearance, 0.48);
+            } else {
+              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.78, 0.35);
             }
           } else if (outfitStyle === 'abaya') {
             if ((mName === 'Black' || mName === 'White') && meshName === 'Suit_Body') {
-              c.color.copy(shirtCol);
-              c.roughness = 0.86;
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.86, 0.62);
             } else if (meshName === 'Suit_Feet') {
-              c.color.setHex(0x181615);
-              c.roughness = 0.62;
+              mat = makeLeatherMat(0x181615, appearance, 0.52);
+            } else {
+              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.82, 0.4);
             }
           } else if (outfitStyle === 'abaya_open') {
             if (mName === 'Black' && meshName === 'Suit_Body') {
-              c.color.copy(shirtCol); // Outer open Abaya sleeves & coat
-              c.roughness = 0.86;
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.86, 0.6);
             } else if (
               (mName === 'White' && meshName === 'Suit_Body') ||
               (mName === 'Black' && meshName === 'Suit_Legs')
             ) {
-              c.color.copy(pantsCol); // Harmonious modest inner dress / trousers
-              c.roughness = 0.82;
+              mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.5);
             } else if (meshName === 'Suit_Feet') {
-              c.color.setHex(0x1f1916);
-              c.roughness = 0.6;
+              mat = makeLeatherMat(0x1f1916, appearance, 0.5);
+            } else {
+              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.82, 0.4);
             }
           } else if (outfitStyle === 'dress') {
             if ((mName === 'Black' || mName === 'White') && meshName === 'Suit_Body') {
-              c.color.copy(shirtCol);
-              c.roughness = 0.82;
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.82, 0.58);
             } else if (meshName === 'Suit_Feet') {
-              c.color.setHex(0x27201c);
-              c.roughness = 0.58;
+              mat = makeLeatherMat(0x27201c, appearance, 0.48);
+            } else {
+              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.8, 0.4);
             }
           } else if (isFemaleLook) {
-            // Modest women's trousers + long-sleeve shirt + Tarha
             if (mName === 'Black' && meshName === 'Suit_Body') {
-              c.color.copy(shirtCol);
-              c.roughness = 0.78;
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.48);
             } else if (mName === 'White' && meshName === 'Suit_Body') {
-              c.color.copy(shirtCol).offsetHSL(0, -0.05, 0.14);
-              c.roughness = 0.78;
+              mat = makeClothMat(
+                shirtCol.clone().offsetHSL(0, -0.05, 0.14).getHex(),
+                appearance,
+                0.78,
+                0.48
+              );
             } else if (mName === 'Black' && meshName === 'Suit_Legs') {
-              c.color.copy(pantsCol);
-              c.roughness = 0.84;
+              mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.36);
             } else if (meshName === 'Suit_Feet') {
-              c.color.setHex(0x1e293b);
-              c.roughness = 0.58;
+              mat = makeLeatherMat(0x1e293b, appearance, 0.48);
+            } else {
+              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.8, 0.35);
             }
           } else {
-            // Men's casual (trousers + shirt / t-shirt)
             if (
               mName === 'LightBrown' ||
               (mName === 'Suit' && meshName === 'Suit_Body') ||
               mName === 'Tie'
             ) {
-              c.color.copy(shirtCol);
-              c.roughness = 0.8;
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.8, 0.45);
             } else if (mName === 'White' && meshName === 'Suit_Body') {
-              c.color.copy(shirtCol).offsetHSL(0, -0.05, 0.08);
-              c.roughness = 0.78;
+              mat = makeClothMat(
+                shirtCol.clone().offsetHSL(0, -0.05, 0.08).getHex(),
+                appearance,
+                0.78,
+                0.45
+              );
             } else if (mName === 'LightBlue' || (mName === 'Suit' && meshName === 'Suit_Legs')) {
-              c.color.copy(pantsCol);
-              c.roughness = 0.84;
+              mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.34);
             } else if (mName === 'Red_Dark' || mName === 'Black') {
-              c.color.setHex(0x27272a);
-              c.roughness = 0.58;
+              mat = makeLeatherMat(0x27272a, appearance, 0.48);
+            } else {
+              mat = orig.clone();
             }
           }
 
-          return c;
+          mat.name = mName;
+          return mat;
         });
 
         mesh.userData.sharedGlbMat = false;
@@ -502,7 +609,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     // Build SkinnedMesh garments directly on the character's skeleton (zero leg/body clipping!)
     if (legSkinnedMesh && !isTherapist) {
       if (outfitStyle === 'abaya') {
-        createSkinnedGarmentMesh(legSkinnedMesh, {
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
           zTop: 0.0124,
           zBot: 0.0012,
@@ -515,9 +622,10 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           topCy: -0.00072,
           botCy: -0.00058,
           closeBottomCap: true,
+          accentHemHex: (appearance.variantSeed || 0) % 2 === 0 ? 0xc59b57 : undefined,
         });
       } else if (outfitStyle === 'abaya_open') {
-        createSkinnedGarmentMesh(legSkinnedMesh, {
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
           zTop: 0.0124,
           zBot: 0.0013,
@@ -532,7 +640,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           openFrontGapRad: 0.28,
         });
       } else if (outfitStyle === 'dress') {
-        createSkinnedGarmentMesh(legSkinnedMesh, {
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
           zTop: 0.0116,
           zBot: 0.0016,
@@ -548,7 +656,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         });
       } else if (outfitStyle === 'casual' && isFemaleLook) {
         // Neat modest hip-length tunic / blouse extension over full trousers
-        createSkinnedGarmentMesh(legSkinnedMesh, {
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
           zTop: 0.0117,
           zBot: 0.0086,
@@ -562,7 +670,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           botCy: -0.00062,
         });
       } else if (outfitStyle === 'jalabiya') {
-        createSkinnedGarmentMesh(legSkinnedMesh, {
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
           zTop: 0.0116,
           zBot: 0.0014,
@@ -575,6 +683,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           topCy: -0.00062,
           botCy: -0.00056,
           closeBottomCap: true,
+          accentHemHex: 0xd6c7a8,
         });
       }
     }
@@ -631,32 +740,92 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     });
 
-    // Subtle Chest Accents (Jalabiya collar/placket, Embroidered Abaya placket, Dress sash)
-    if (bones['Chest'] && !appearance.isStaff) {
-      if (outfitStyle === 'jalabiya') {
-        const collarGrp = new THREE.Group();
-        collarGrp.scale.setScalar(0.01);
-        const jMat = colorMat(shirtCol.getHex(), 0.84, 0.01);
-        const trimMat = colorMat(0xd6c7a8, 0.65, 0.05);
-        const bandCollar = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.084, 0.09, 0.055, 14),
-          jMat
+    // Subtle Chest Accents (Jalabiya collar/placket, Embroidered Abaya placket, Dress sash, Therapist Stethoscope & ID badge)
+    if (bones['Chest']) {
+      if (isTherapist) {
+        const medAcc = new THREE.Group();
+        medAcc.scale.setScalar(0.01);
+        const tubeMat = makeLeatherMat(0x1e293b, appearance, 0.44);
+        const chromeMat = makeMetalMat(0xdbe2ea, appearance, 0.22, 0.88);
+        const badgeMat = colorMat(0xf8fafc, 0.35, 0.04);
+        const lanyardBlue = colorMat(0x0284c7, 0.55, 0.05);
+
+        // Stethoscope draped smoothly around the collar and down the chest coat
+        const stethCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(-0.088, 0.025, 0.118),
+          new THREE.Vector3(-0.072, 0.12, 0.085),
+          new THREE.Vector3(-0.062, 0.165, -0.025),
+          new THREE.Vector3(0, 0.175, -0.068),
+          new THREE.Vector3(0.062, 0.165, -0.025),
+          new THREE.Vector3(0.072, 0.115, 0.085),
+          new THREE.Vector3(0.068, 0.01, 0.125),
+        ]);
+        const stethTube = new THREE.Mesh(
+          new THREE.TubeGeometry(stethCurve, 20, 0.009, 7, false),
+          tubeMat
         );
-        bandCollar.position.set(0, 0.145, 0.004);
-        const placket = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.21, 0.022), trimMat);
-        placket.position.set(0, 0.038, 0.122);
-        collarGrp.add(bandCollar, placket);
-        bones['Chest'].bone.add(collarGrp);
-      } else if (outfitStyle === 'abaya' && (appearance.variantSeed || 0) % 2 === 0) {
-        // Subtle gold/copper embroidered chest trim on alternate Abayas
-        const abayaTrimGrp = new THREE.Group();
-        abayaTrimGrp.scale.setScalar(0.01);
-        const embMat = colorMat(0xc59b57, 0.55, 0.18);
-        const trimStrip = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.24, 0.018), embMat);
-        trimStrip.position.set(0, 0.01, 0.124);
-        abayaTrimGrp.add(trimStrip);
-        bones['Chest'].bone.add(abayaTrimGrp);
+        const chestDiaphragm = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.024, 0.026, 0.014, 14),
+          chromeMat
+        );
+        chestDiaphragm.rotation.x = Math.PI / 2;
+        chestDiaphragm.position.set(0.068, 0.008, 0.132);
+        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), chromeMat);
+        earTipL.position.set(-0.088, 0.025, 0.118);
+
+        // Clinic ID Badge clipped on left coat lapel
+        const badgeCard = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.062, 0.006), badgeMat);
+        badgeCard.position.set(-0.078, 0.048, 0.125);
+        const badgeStripe = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.014, 0.007), lanyardBlue);
+        badgeStripe.position.set(-0.078, 0.072, 0.125);
+
+        medAcc.add(stethTube, chestDiaphragm, earTipL, badgeCard, badgeStripe);
+        bones['Chest'].bone.add(medAcc);
+      } else if (!appearance.isStaff) {
+        if (outfitStyle === 'jalabiya') {
+          const collarGrp = new THREE.Group();
+          collarGrp.scale.setScalar(0.01);
+          const jMat = makeClothMat(shirtCol.getHex(), appearance, 0.84, 0.5);
+          const trimMat = makeClothMat(0xd6c7a8, appearance, 0.65, 0.35);
+          const bandCollar = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.084, 0.09, 0.055, 16),
+            jMat
+          );
+          bandCollar.position.set(0, 0.145, 0.004);
+          const placket = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.21, 0.022), trimMat);
+          placket.position.set(0, 0.038, 0.122);
+          collarGrp.add(bandCollar, placket);
+          bones['Chest'].bone.add(collarGrp);
+        } else if (outfitStyle === 'abaya' && (appearance.variantSeed || 0) % 2 === 0) {
+          const abayaTrimGrp = new THREE.Group();
+          abayaTrimGrp.scale.setScalar(0.01);
+          const embMat = makeMetalMat(0xc59b57, appearance, 0.42, 0.55);
+          const trimStrip = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.24, 0.018), embMat);
+          trimStrip.position.set(0, 0.01, 0.124);
+          abayaTrimGrp.add(trimStrip);
+          bones['Chest'].bone.add(abayaTrimGrp);
+        }
       }
+    }
+
+    // Subtle wristwatch on therapists and select adult patients
+    if (bones['LowerArmL'] && (isTherapist || (!isFemaleLook && (Math.abs(appearance.variantSeed || 0) % 3 === 1)))) {
+      const watchGrp = new THREE.Group();
+      watchGrp.scale.setScalar(0.01);
+      const strap = new THREE.Mesh(
+        new THREE.TorusGeometry(0.036, 0.007, 8, 16),
+        makeLeatherMat(isTherapist ? 0x1e293b : 0x3a2618, appearance, 0.44)
+      );
+      strap.rotation.x = Math.PI / 2;
+      strap.position.set(0, 0.215, 0);
+      const watchFace = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.016, 0.016, 0.008, 12),
+        makeMetalMat(0xe2e8f0, appearance, 0.25, 0.85)
+      );
+      watchFace.rotation.x = Math.PI / 2;
+      watchFace.position.set(0, 0.215, 0.038);
+      watchGrp.add(strap, watchFace);
+      bones['LowerArmL'].bone.add(watchGrp);
     }
 
     if (bones['Hips'] && outfitStyle === 'dress' && !appearance.isStaff) {
@@ -664,8 +833,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       sashGrp.scale.setScalar(0.01);
       const sashCol = shirtCol.clone().offsetHSL(0, -0.1, -0.14);
       const sashMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.155, 0.158, 0.042, 18),
-        colorMat(sashCol.getHex(), 0.72, 0.04)
+        new THREE.CylinderGeometry(0.155, 0.158, 0.042, 20),
+        makeClothMat(sashCol.getHex(), appearance, 0.72, 0.55)
       );
       sashMesh.scale.set(1.0, 1.0, 0.82);
       sashMesh.position.set(0, 0.14, 0.068);
@@ -673,86 +842,160 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       bones['Hips'].bone.add(sashGrp);
     }
 
-    // Authentic Sudanese Headwear (White Emma Turban / Taqiyah for men; Draped Tarha/Hijab for women)
+    // Authentic Sudanese Headwear, Beards & Eyeglasses
     if (bones['Head']) {
       if (outfitStyle === 'jalabiya' && !isFemaleLook && !appearance.isStaff) {
         const headAcc = new THREE.Group();
         headAcc.scale.setScalar(0.01);
-        const whiteCloth = colorMat(0xf4f2ec, 0.82, 0.01);
+        const whiteCloth = makeClothMat(0xf4f2ec, appearance, 0.82, 0.45);
 
         if (appearance.hasTurban) {
-          for (const [ty, rad, tilt] of [
-            [0.195, 0.128, 0.07],
-            [0.228, 0.124, -0.06],
-            [0.258, 0.114, 0.05],
-          ] as Array<[number, number, number]>) {
-            const wrap = new THREE.Mesh(new THREE.TorusGeometry(rad, 0.032, 10, 18), whiteCloth);
-            wrap.rotation.x = Math.PI / 2 + tilt;
-            wrap.rotation.y = tilt * 1.4;
+          for (const [ty, rad, tubeR, tiltX, tiltY] of [
+            [0.188, 0.128, 0.030, 0.08, 0.09],
+            [0.214, 0.125, 0.029, -0.06, -0.08],
+            [0.238, 0.121, 0.028, 0.06, 0.06],
+            [0.260, 0.114, 0.026, -0.05, -0.05],
+            [0.279, 0.102, 0.022, 0.03, 0.04],
+          ] as Array<[number, number, number, number, number]>) {
+            const wrap = new THREE.Mesh(new THREE.TorusGeometry(rad, tubeR, 12, 24), whiteCloth);
+            wrap.rotation.x = Math.PI / 2 + tiltX;
+            wrap.rotation.y = tiltY;
             wrap.position.set(0, ty, -0.006);
             wrap.castShadow = true;
             headAcc.add(wrap);
           }
           const crown = new THREE.Mesh(
-            new THREE.SphereGeometry(0.118, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+            new THREE.SphereGeometry(0.118, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
             whiteCloth
           );
-          crown.position.set(0, 0.235, -0.006);
-          headAcc.add(crown);
+          crown.position.set(0, 0.242, -0.006);
+          const emmaTail = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.026, 0.038, 0.13, 10),
+            whiteCloth
+          );
+          emmaTail.position.set(-0.075, 0.125, -0.092);
+          emmaTail.rotation.z = -0.18;
+          emmaTail.rotation.x = 0.22;
+          headAcc.add(crown, emmaTail);
         } else {
-          const taqMat = colorMat(0xede9df, 0.8, 0.01);
+          const taqMat = makeClothMat(0xede9df, appearance, 0.82, 0.35);
+          const brimStitchMat = makeClothMat(0xcabfa8, appearance, 0.78, 0.2);
           const capSide = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.118, 0.122, 0.062, 16),
+            new THREE.CylinderGeometry(0.118, 0.122, 0.062, 20),
             taqMat
           );
           capSide.position.set(0, 0.21, -0.006);
+          const capRim = new THREE.Mesh(new THREE.TorusGeometry(0.121, 0.007, 8, 24), brimStitchMat);
+          capRim.rotation.x = Math.PI / 2;
+          capRim.position.set(0, 0.182, -0.006);
           const capTop = new THREE.Mesh(
-            new THREE.SphereGeometry(0.118, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.5),
+            new THREE.SphereGeometry(0.118, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
             taqMat
           );
           capTop.position.set(0, 0.24, -0.006);
-          headAcc.add(capSide, capTop);
+          headAcc.add(capSide, capRim, capTop);
         }
         bones['Head'].bone.add(headAcc);
       } else if (isFemaleLook && (appearance.hasHijab || appearance.role === 'receptionist' || appearance.role === 'therapist')) {
-        const tarhaMat = colorMat(tarhaCol.getHex(), 0.84, 0.01);
+        const tarhaMat = makeClothMat(tarhaCol.getHex(), appearance, 0.84, 0.62, true);
         const scarfGrp = new THREE.Group();
         scarfGrp.scale.setScalar(0.01);
 
         // Outer draped hood framing forehead and covering crown & back bun completely
-        const hood = new THREE.Mesh(new THREE.SphereGeometry(0.126, 16, 12), tarhaMat);
+        const hood = new THREE.Mesh(new THREE.SphereGeometry(0.126, 20, 14), tarhaMat);
         hood.scale.set(1.10, 1.22, 1.24);
         hood.position.set(0, 0.165, -0.022);
         hood.castShadow = true;
 
+        // Draped brow/temple fold framing face cleanly
+        const browFold = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.016, 10, 20, Math.PI * 1.15), tarhaMat);
+        browFold.rotation.set(0.28, 0, -Math.PI * 0.075);
+        browFold.position.set(0, 0.165, 0.018);
+
         // Soft neck & chin wrap
         const neckWrap = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.098, 0.146, 0.17, 14),
+          new THREE.CylinderGeometry(0.098, 0.146, 0.17, 18),
           tarhaMat
         );
         neckWrap.position.set(0, 0.010, -0.008);
 
         // Flowing rear Tarha tail down the back of shoulders
         const backTail = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.105, 0.142, 0.22, 12, 1, false, Math.PI * 0.55, Math.PI * 0.9),
+          new THREE.CylinderGeometry(0.105, 0.142, 0.23, 14, 1, false, Math.PI * 0.55, Math.PI * 0.9),
           tarhaMat
         );
-        backTail.position.set(0, -0.04, -0.032);
-        scarfGrp.add(hood, neckWrap, backTail);
+        backTail.position.set(0, -0.042, -0.032);
+        scarfGrp.add(hood, browFold, neckWrap, backTail);
         bones['Head'].bone.add(scarfGrp);
 
         if (bones['Chest']) {
           const chestDrape = new THREE.Group();
           chestDrape.scale.setScalar(0.01);
           const shawl = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.136, 0.192, 0.21, 14),
+            new THREE.CylinderGeometry(0.136, 0.194, 0.22, 18),
             tarhaMat
           );
           shawl.scale.set(1.06, 1.0, 0.78);
-          shawl.position.set(0, 0.058, 0.018);
-          chestDrape.add(shawl);
+          shawl.position.set(0, 0.056, 0.018);
+          const shoulderThrow = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.045, 0.068, 0.24, 12),
+            tarhaMat
+          );
+          shoulderThrow.position.set(-0.088, 0.04, 0.072);
+          shoulderThrow.rotation.z = -0.22;
+          chestDrape.add(shawl, shoulderThrow);
           bones['Chest'].bone.add(chestDrape);
         }
+      }
+
+      // Sculpted 3D beard for bearded adult men
+      if (appearance.hasBeard && !isFemaleLook) {
+        const beardGrp = new THREE.Group();
+        beardGrp.scale.setScalar(0.01);
+        const beardMat = new THREE.MeshPhysicalMaterial({
+          color: hairCol.getHex(),
+          roughness: 0.9,
+          metalness: 0.0,
+          sheen: 0.2,
+          sheenRoughness: 0.7,
+        });
+        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.058, 12, 10), beardMat);
+        chinBeard.scale.set(1.02, 0.92, 0.85);
+        chinBeard.position.set(0, 0.056, 0.058);
+        const jawBeard = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.084, 0.068, 0.052, 14, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+          beardMat
+        );
+        jawBeard.position.set(0, 0.078, 0.025);
+        beardGrp.add(chinBeard, jawBeard);
+        bones['Head'].bone.add(beardGrp);
+      }
+
+      // Slim optical eyeglasses on ~25% of patients for crisp life-like variety
+      if (!appearance.isStaff && Math.abs(appearance.variantSeed || 0) % 4 === 0) {
+        const glassGrp = new THREE.Group();
+        glassGrp.scale.setScalar(0.01);
+        const frameMat = makeMetalMat(0x27272a, appearance, 0.3, 0.75);
+        const lensMat = new THREE.MeshPhysicalMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.28,
+          roughness: 0.08,
+          clearcoat: 1.0,
+        });
+        for (const side of [-1, 1]) {
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.0032, 6, 16), frameMat);
+          rim.position.set(side * 0.032, 0.132, 0.105);
+          const lens = new THREE.Mesh(new THREE.CircleGeometry(0.021, 14), lensMat);
+          lens.position.set(side * 0.032, 0.132, 0.105);
+          const arm = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.095), frameMat);
+          arm.position.set(side * 0.056, 0.132, 0.058);
+          glassGrp.add(rim, lens, arm);
+        }
+        const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.004, 0.004), frameMat);
+        bridge.position.set(0, 0.134, 0.106);
+        glassGrp.add(bridge);
+        bones['Head'].bone.add(glassGrp);
       }
     }
 
@@ -790,6 +1033,18 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       cupAnchor.add(handCup);
     }
 
+    const hScale = appearance.heightScale || 1;
+    let measuredHipH = 0.63 * hScale;
+    const hipBoneRef = bones['UpperLegL']?.bone || bones['UpperLegR']?.bone || bones['Hips']?.bone;
+    if (hipBoneRef) {
+      bodyPivot.updateMatrixWorld(true);
+      const tmpHip = new THREE.Vector3();
+      hipBoneRef.getWorldPosition(tmpHip);
+      if (tmpHip.y > 0.25 && tmpHip.y < 1.15) {
+        measuredHipH = tmpHip.y;
+      }
+    }
+
     return {
       root,
       bodyPivot,
@@ -797,23 +1052,29 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       hitMesh,
       handCup,
       isSkinnedGlb: true,
-      hipHeight: 0.63 * (appearance.heightScale || 1),
+      hipHeight: measuredHipH,
+      heightScale: hScale,
       bones,
     };
   }
 
   // Fallback anatomical procedural rig during the initial <200ms GLB preload
-  const skinMat = colorMat(appearance.skinTone, 0.62, 0.02);
-  const hairMat = colorMat(appearance.hairColor, 0.86, 0.02);
-  const shirtMat = colorMat(appearance.shirtColor, 0.78, 0.02);
+  const skinMat = makeSkinMat(appearance.skinTone || '#7f4d31', appearance, 0.58);
+  const hairMat = colorMat(appearance.hairColor, 0.84, 0.02);
+  const shirtMat = makeClothMat(appearance.shirtColor, appearance, 0.8, 0.45);
   const isFullRobeFallback =
     outfitStyle === 'jalabiya' ||
     outfitStyle === 'abaya' ||
     outfitStyle === 'abaya_open' ||
     outfitStyle === 'dress';
-  const pantsMat = colorMat(isFullRobeFallback ? appearance.shirtColor : appearance.pantsColor, 0.8, 0.02);
-  const shoeMat = colorMat(appearance.isStaff ? 0xf8fafc : 0x1e293b, 0.48, 0.08);
-  const coatMat = colorMat(0xf1f5f9, 0.68, 0.02);
+  const pantsMat = makeClothMat(
+    isFullRobeFallback ? appearance.shirtColor : appearance.pantsColor,
+    appearance,
+    0.82,
+    0.35
+  );
+  const shoeMat = makeLeatherMat(appearance.isStaff ? 0xf8fafc : 0x1e293b, appearance, 0.48);
+  const coatMat = makeClothMat(0xf1f5f9, appearance, 0.72, 0.38);
 
   const makeLeg = (xOffset: number) => {
     const legPivot = new THREE.Group();
@@ -989,9 +1250,11 @@ export function animateHumanoid3D(
     isMoving: boolean;
     walkBlend?: number;
     sitBlend?: number;
+    lieBlend?: number;
     doorPush?: number;
     seatHeight?: number;
     lyingHeight?: number;
+    bedBodyZOffset?: number;
     tiltPitch?: number;
     facingRad: number;
     timeSec: number;
@@ -1000,6 +1263,8 @@ export function animateHumanoid3D(
     activeGait?: boolean;
     isDrinking?: boolean;
     drinkStage?: 'none' | 'filling' | 'sipping' | 'returning';
+    actorSeed?: number;
+    seatedActivity?: 'idle' | 'typing' | 'writing' | 'glance' | 'rest';
   }
 ) {
   const {
@@ -1008,9 +1273,11 @@ export function animateHumanoid3D(
     isMoving,
     walkBlend,
     sitBlend,
+    lieBlend,
     doorPush = 0,
     seatHeight = 0.375,
-    lyingHeight = 0.49,
+    lyingHeight = 0.51,
+    bedBodyZOffset,
     tiltPitch = -Math.PI / 2,
     facingRad,
     timeSec,
@@ -1019,7 +1286,15 @@ export function animateHumanoid3D(
     activeGait,
     isDrinking,
     drinkStage = isDrinking ? 'sipping' : 'none',
+    actorSeed = 0,
+    seatedActivity = 'idle',
   } = opts;
+
+  // Individualized phase & cadence so people never breathe, fidget, or glance in lockstep
+  const seedMod = Math.abs(actorSeed) % 13;
+  const t = timeSec + (actorSeed % 97) * 1.43;
+  const breathFreq = 1.42 + seedMod * 0.045;
+  const breathWave = Math.sin(t * breathFreq);
 
   rig.selectRing.visible = isSelected;
   if (isSelected) {
@@ -1027,132 +1302,331 @@ export function animateHumanoid3D(
     rig.selectRing.scale.set(s, s, 1);
   }
 
+  const lie = THREE.MathUtils.clamp(lieBlend ?? (pose === 'lying' ? 1 : 0), 0, 1);
   const sit = THREE.MathUtils.clamp(sitBlend ?? (pose === 'seated' ? 1 : 0), 0, 1);
+  const hScale = rig.heightScale ?? 1;
 
   if (rig.handCup) {
     rig.handCup.visible =
       !isMoving &&
       sit < 0.2 &&
+      lie < 0.1 &&
       pose === 'standing' &&
       (drinkStage === 'sipping' || drinkStage === 'returning');
   }
 
   if (rig.isSkinnedGlb && rig.bones) {
     const b = rig.bones;
+    rig.root.rotation.y = facingRad;
 
-    if (pose === 'lying') {
+    const isTilted = Math.abs(tiltPitch + Math.PI / 2) > 0.1;
+    const lieBreath = breathWave * 0.5 + 0.5;
+    const liePosZ = bedBodyZOffset ?? (isTilted ? 0.56 * hScale : 0.67 * hScale);
+    const hipShift = isTilted ? 0 : Math.sin(t * 0.21) * 0.024;
+    const lieHeadYaw = Math.sin(t * 0.28) * 0.17 + Math.sin(t * 0.13 + 0.9) * 0.075;
+    const lieHeadPitch = 0.145 + Math.sin(t * 0.37) * 0.026 + lieBreath * 0.014;
+    const lieHeadRoll = Math.sin(t * 0.23) * 0.042;
+    const kneeRestBase = isTilted ? 0.03 : 0.11;
+    const kneeRelaxL =
+      kneeRestBase + (isTilted ? 0 : Math.pow(Math.max(0, Math.sin(t * 0.19)), 1.5) * 0.26);
+    const kneeRelaxR =
+      kneeRestBase + (isTilted ? 0 : Math.pow(Math.max(0, Math.sin(t * 0.19 + 2.55)), 1.5) * 0.24);
+    const ankleL = Math.sin(t * 0.54) * 0.055;
+    const ankleR = Math.sin(t * 0.47 + 1.4) * 0.055;
+    const armRelaxL = Math.pow(Math.max(0, Math.sin(t * 0.23 + 0.6)), 1.4) * 0.22;
+    const armRelaxR = Math.pow(Math.max(0, Math.cos(t * 0.21)), 1.4) * 0.24;
+
+    // Fast path for full supine lying posture
+    if (lie >= 0.999) {
       rig.bodyPivot.rotation.set(tiltPitch, 0, 0);
-      const isTilted = Math.abs(tiltPitch + Math.PI / 2) > 0.1;
-      rig.bodyPivot.position.set(0, lyingHeight, isTilted ? 0.34 : 0.67);
-      rig.root.rotation.y = facingRad;
-      applyCharEuler(b['Hips'], 0, 0, 0);
-      applyCharEuler(b['Torso'], 0.02, 0, 0);
-      applyCharEuler(b['UpperLegL'], -0.06, 0, 0.02);
-      applyCharEuler(b['UpperLegR'], -0.06, 0, -0.02);
-      applyCharEuler(b['LowerLegL'], isTilted ? 0.06 : 0.18, 0, 0);
-      applyCharEuler(b['LowerLegR'], isTilted ? 0.06 : 0.18, 0, 0);
-      applyCharEuler(b['FootL'], isTilted ? 0.04 : 0.14, 0, 0);
-      applyCharEuler(b['FootR'], isTilted ? 0.04 : 0.14, 0, 0);
-      applyArmSagittal(b['UpperArmL'], -1.46, -0.06);
-      applyArmSagittal(b['UpperArmR'], 1.46, -0.06);
-      applyLocalElbowFlex(b['LowerArmL'], true, 0.2);
-      applyLocalElbowFlex(b['LowerArmR'], false, 0.2);
-      applyCharEuler(b['Head'], 0.12 + Math.sin(timeSec * 1.8) * 0.015, 0, 0);
+      rig.bodyPivot.position.set(0, lyingHeight, liePosZ);
+
+      applyCharEuler(b['Hips'], 0, hipShift * 0.55, hipShift);
+      applyCharEuler(b['Torso'], 0.018 + lieBreath * 0.022, Math.sin(t * 0.24) * 0.022, -hipShift * 0.5);
+      applyCharEuler(b['Chest'], 0.015 + lieBreath * 0.03, Math.sin(t * 0.26) * 0.018, 0);
+      applyCharEuler(b['ShoulderL'], 0, 0, -0.045 - lieBreath * 0.015);
+      applyCharEuler(b['ShoulderR'], 0, 0, 0.045 + lieBreath * 0.015);
+
+      applyCharEuler(
+        b['UpperLegL'],
+        -0.04 - kneeRelaxL * 0.62,
+        0.065 + Math.sin(t * 0.17) * 0.028,
+        0.042
+      );
+      applyCharEuler(
+        b['UpperLegR'],
+        -0.04 - kneeRelaxR * 0.62,
+        -0.065 - Math.cos(t * 0.16) * 0.028,
+        -0.042
+      );
+      applyCharEuler(b['LowerLegL'], (isTilted ? 0.06 : 0.12) + kneeRelaxL * 1.15, 0, 0);
+      applyCharEuler(b['LowerLegR'], (isTilted ? 0.06 : 0.12) + kneeRelaxR * 1.15, 0, 0);
+      applyCharEuler(b['FootL'], (isTilted ? 0.05 : 0.14) + ankleL, 0.035, 0);
+      applyCharEuler(b['FootR'], (isTilted ? 0.05 : 0.14) + ankleR, -0.035, 0);
+
+      applyArmSagittal(b['UpperArmL'], -1.41, -0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16);
+      applyArmSagittal(b['UpperArmR'], 1.41, -0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16);
+      applyLocalElbowFlex(b['LowerArmL'], true, 0.26 + armRelaxL);
+      applyLocalElbowFlex(b['LowerArmR'], false, 0.28 + armRelaxR);
+
+      applyCharEuler(b['Neck'], 0.045, lieHeadYaw * 0.4, lieHeadRoll * 0.35);
+      applyCharEuler(b['Head'], lieHeadPitch, lieHeadYaw * 0.72, lieHeadRoll);
       return;
     }
 
-    rig.bodyPivot.rotation.set(0, 0, 0);
-    rig.root.rotation.y = facingRad;
+    const gaitActive = Boolean(activeGait ?? inTreatment) && pose !== 'seated' && lie < 0.05;
+    const activeBlend = (gaitActive ? 1 : walkBlend ?? (isMoving ? 1 : 0)) * (1 - sit) * (1 - lie);
+    const pushAmt = THREE.MathUtils.clamp(doorPush, 0, 1) * (1 - sit) * (1 - lie);
+    const breath = breathWave * 0.015;
+    const standIdleAmt = (1 - activeBlend) * (1 - sit) * (1 - pushAmt) * (1 - lie);
 
-    const gaitActive = Boolean(activeGait ?? inTreatment) && pose !== 'seated';
-    const activeBlend = (gaitActive ? 1 : walkBlend ?? (isMoving ? 1 : 0)) * (1 - sit);
-    const pushAmt = THREE.MathUtils.clamp(doorPush, 0, 1) * (1 - sit);
-    const breath = Math.sin(timeSec * 1.85) * 0.014;
-    const idleShift = Math.sin(timeSec * 0.85) * 0.014 * (1 - activeBlend) * (1 - sit);
-    // Exact hip-bone world alignment: itemBase(0.08) + seatHeight + pelvisRadius(0.055) minus rootY(0.02) & hipHeight
-    const hipH = rig.hipHeight ?? 0.63;
-    const sitHipY = THREE.MathUtils.clamp(0.115 + seatHeight - hipH, -0.25, 0.25);
+    // Organic multi-frequency standing weight shift & subtle opposite-knee soften
+    const standWeight =
+      (Math.sin(t * 0.42) * 0.65 + Math.sin(t * 0.19 + 1.2) * 0.35) * standIdleAmt;
 
-    // Compute standing/walking baseline angles
+    // Exact hip-joint world alignment: itemBase(0.08) + seatHeight + seatedThighPad(0.068*hScale) - rootY(0.02) - hipHeight
+    const hipH = rig.hipHeight ?? 0.63 * hScale;
+    const sitHipY = THREE.MathUtils.clamp(0.06 + seatHeight + 0.068 * hScale - hipH, -0.52, 0.25);
+
     const phase = gaitActive ? timeSec * 4.2 : walkPhase;
     const stride = Math.sin(phase);
     const cosP = Math.cos(phase);
     const cos2 = Math.cos(phase * 2);
 
-    const standY = 0.042 + (cos2 - 1) * 0.012 * activeBlend;
-    const standX = -cosP * 0.012 * activeBlend + idleShift * 0.4;
+    const standY = 0.042 + (cos2 - 1) * 0.012 * activeBlend - Math.abs(standWeight) * 0.008;
+    const standX = -cosP * 0.012 * activeBlend + standWeight * 0.036;
+
+    const basePosX = standX;
+    const basePosY = THREE.MathUtils.lerp(standY, sitHipY, sit);
+    const basePosZ = THREE.MathUtils.lerp(0, -0.012, sit);
+
+    // Anchor the hip joint (0, hipH, 0) along a physically grounded trajectory instead of linearly
+    // lerping foot-origin bodyPivot across a 90deg rotation (which otherwise balloons hips +14cm mid-air).
+    const theta = THREE.MathUtils.lerp(0, tiltPitch, lie);
+    const hipStartY = basePosY + hipH;
+    const hipStartZ = basePosZ;
+    const hipEndY = lyingHeight + hipH * Math.cos(tiltPitch);
+    const hipEndZ = liePosZ + hipH * Math.sin(tiltPitch);
+    const hipShiftArc = Math.sin(lie * Math.PI) * 0.012;
+    const hipTargetY = THREE.MathUtils.lerp(hipStartY, hipEndY, lie) + hipShiftArc;
+    const hipTargetZ = THREE.MathUtils.lerp(hipStartZ, hipEndZ, lie);
+
+    rig.bodyPivot.rotation.set(theta, 0, 0);
     rig.bodyPivot.position.set(
-      standX,
-      THREE.MathUtils.lerp(standY, sitHipY, sit),
-      THREE.MathUtils.lerp(0, 0.025, sit)
+      THREE.MathUtils.lerp(basePosX, 0, lie),
+      hipTargetY - hipH * Math.cos(theta),
+      hipTargetZ - hipH * Math.sin(theta)
     );
 
-    const walkHipY = -stride * 0.052 * activeBlend + idleShift * 0.9;
-    const walkHipZ = stride * 0.024 * activeBlend + idleShift * 0.8;
-    applyCharEuler(b['Hips'], 0, walkHipY * (1 - sit), walkHipZ * (1 - sit));
+    const walkHipY = -stride * 0.052 * activeBlend + standWeight * 0.038;
+    const walkHipZ = stride * 0.024 * activeBlend + standWeight * 0.055;
+    const sitHipSway = Math.sin(t * 0.33) * 0.014 * (seatedActivity === 'idle' ? 1 : 0.4);
+    const baseHipY = walkHipY * (1 - sit);
+    const baseHipZ = walkHipZ * (1 - sit) + sitHipSway * sit;
+    applyCharEuler(
+      b['Hips'],
+      0,
+      THREE.MathUtils.lerp(baseHipY, hipShift * 0.55, lie),
+      THREE.MathUtils.lerp(baseHipZ, hipShift, lie)
+    );
 
-    const torsoStandX = -0.035 * activeBlend - pushAmt * 0.065 + breath * 0.55;
-    const torsoStandY = stride * 0.04 * activeBlend - pushAmt * 0.09 - idleShift * 0.6;
-    const torsoStandZ = -stride * 0.014 * activeBlend - idleShift * 0.5;
+    // Seated torso, arms & head targets based on natural activity
+    let sitTorsoX = -0.068 + Math.sin(t * 0.24) * 0.026 + breath * 0.4;
+    let sitTorsoY = Math.sin(t * 0.36) * 0.038;
+    let sitTorsoZ = Math.sin(t * 0.29) * 0.018;
+    let sitChestX = -0.035 + breath * 0.85;
+    let sitArmLSwing = -0.12 + Math.sin(t * 0.37) * 0.035;
+    let sitArmRSwing = -0.12 + Math.cos(t * 0.33) * 0.035;
+    let sitElbowLFlex = 0.56 + Math.sin(t * 0.41) * 0.045;
+    let sitElbowRFlex = 0.56 + Math.cos(t * 0.39) * 0.045;
+    let sitLookYaw = Math.sin(t * 0.44) * 0.2 + Math.sin(t * 0.17 + 0.8) * 0.1;
+    let sitLookPitch = Math.sin(t * 0.61) * 0.04 + Math.sin(t * 0.23) * 0.025;
+
+    if (seatedActivity === 'typing') {
+      sitTorsoX = 0.085 + breath * 0.35;
+      sitTorsoY = Math.sin(t * 0.7) * 0.022;
+      sitTorsoZ = Math.sin(t * 0.45) * 0.012;
+      sitChestX = 0.045 + breath * 0.7;
+      sitArmLSwing = -0.37 + Math.sin(timeSec * 3.8) * 0.02;
+      sitArmRSwing = -0.37 + Math.cos(timeSec * 4.1) * 0.02;
+      sitElbowLFlex = 1.02 + Math.sin(timeSec * 13.5) * 0.048;
+      sitElbowRFlex = 1.02 + Math.cos(timeSec * 15.2) * 0.048;
+      sitLookYaw = Math.sin(t * 0.9) * 0.075;
+      sitLookPitch = 0.075 + Math.sin(t * 1.55) * 0.022;
+    } else if (seatedActivity === 'writing') {
+      sitTorsoX = 0.115 + breath * 0.3;
+      sitTorsoY = -0.055 + Math.sin(timeSec * 1.9) * 0.012;
+      sitTorsoZ = -0.018;
+      sitChestX = 0.055 + breath * 0.6;
+      sitArmLSwing = -0.31 + Math.sin(t * 0.9) * 0.015;
+      sitArmRSwing = -0.43 + Math.sin(timeSec * 4.8) * 0.036;
+      sitElbowLFlex = 0.92;
+      sitElbowRFlex = 1.0 + Math.cos(timeSec * 6.4) * 0.052;
+      sitLookYaw = -0.095 + Math.sin(timeSec * 2.3) * 0.032;
+      sitLookPitch = 0.19 + Math.sin(t * 1.6) * 0.022;
+    } else if (seatedActivity === 'glance') {
+      sitTorsoX = -0.01 + breath * 0.4;
+      sitTorsoY = Math.sin(t * 0.8) * 0.055;
+      sitTorsoZ = Math.sin(t * 0.42) * 0.018;
+      sitChestX = 0.01 + breath * 0.8;
+      sitArmLSwing = -0.2 + Math.sin(t * 0.65) * 0.03;
+      sitArmRSwing = -0.25 + Math.cos(t * 0.72) * 0.045;
+      sitElbowLFlex = 0.78;
+      sitElbowRFlex = 0.84 + Math.sin(t * 1.05) * 0.06;
+      sitLookYaw = Math.sin(t * 0.95) * 0.26;
+      sitLookPitch = -0.03 + Math.sin(t * 0.68) * 0.038;
+    } else if (seatedActivity === 'rest') {
+      sitTorsoX = -0.085 + breath * 0.5;
+      sitTorsoY = Math.sin(t * 0.35) * 0.036;
+      sitTorsoZ = Math.sin(t * 0.28) * 0.022;
+      sitChestX = -0.04 + breath;
+      sitArmLSwing = -0.1 + Math.sin(t * 0.45) * 0.025;
+      sitArmRSwing = -0.1 + Math.cos(t * 0.41) * 0.025;
+      sitElbowLFlex = 0.54;
+      sitElbowRFlex = 0.54 + Math.sin(t * 0.5) * 0.04;
+      sitLookYaw = Math.sin(t * 0.52) * 0.2;
+      sitLookPitch = -0.02 + Math.sin(t * 0.4) * 0.032;
+    } else if (!inTreatment && lie < 0.05) {
+      // Waiting room / courtyard seated subtle hand adjustment
+      const gestCycle = Math.sin(t * 0.39 + 0.5);
+      const sitGest = Math.max(0, (gestCycle - 0.64) / 0.36);
+      const smoothGest = sitGest * sitGest * (3 - 2 * sitGest);
+      sitArmRSwing -= smoothGest * 0.22;
+      sitElbowRFlex += smoothGest * 0.36;
+    }
+
+    const torsoStandX = -0.035 * activeBlend - pushAmt * 0.065 + breath * 0.65;
+    const torsoStandY = stride * 0.04 * activeBlend - pushAmt * 0.09 - standWeight * 0.05;
+    const torsoStandZ = -stride * 0.014 * activeBlend - standWeight * 0.042;
+    const baseTorsoX = THREE.MathUtils.lerp(torsoStandX, sitTorsoX, sit);
+    const baseTorsoY = THREE.MathUtils.lerp(torsoStandY, sitTorsoY, sit);
+    const baseTorsoZ = THREE.MathUtils.lerp(torsoStandZ, sitTorsoZ, sit);
     applyCharEuler(
       b['Torso'],
-      THREE.MathUtils.lerp(torsoStandX, 0.06 + breath * 0.4, sit),
-      torsoStandY * (1 - sit),
-      torsoStandZ * (1 - sit)
+      THREE.MathUtils.lerp(baseTorsoX, 0.018 + lieBreath * 0.022, lie),
+      THREE.MathUtils.lerp(baseTorsoY, Math.sin(t * 0.24) * 0.022, lie),
+      THREE.MathUtils.lerp(baseTorsoZ, -hipShift * 0.5, lie)
     );
 
+    const baseChestX = THREE.MathUtils.lerp(0.015 * activeBlend - pushAmt * 0.04 + breath, sitChestX, sit);
+    const baseChestY = THREE.MathUtils.lerp(stride * 0.048 * activeBlend - pushAmt * 0.08 - standWeight * 0.03, sitTorsoY * 0.45, sit);
+    const baseChestZ = THREE.MathUtils.lerp(-stride * 0.018 * activeBlend - standWeight * 0.025, -sitTorsoZ * 0.3, sit);
     applyCharEuler(
       b['Chest'],
-      THREE.MathUtils.lerp(0.015 * activeBlend - pushAmt * 0.04 + breath, 0.04 + breath, sit),
-      (stride * 0.048 * activeBlend - pushAmt * 0.08 - idleShift * 0.5) * (1 - sit),
-      -stride * 0.018 * activeBlend * (1 - sit)
+      THREE.MathUtils.lerp(baseChestX, 0.015 + lieBreath * 0.03, lie),
+      THREE.MathUtils.lerp(baseChestY, Math.sin(t * 0.26) * 0.018, lie),
+      THREE.MathUtils.lerp(baseChestZ, 0, lie)
     );
-    applyCharEuler(b['ShoulderL'], 0, -stride * 0.04 * activeBlend * (1 - sit), -0.04);
-    applyCharEuler(b['ShoulderR'], 0, (-stride * 0.04 * activeBlend - pushAmt * 0.12) * (1 - sit), 0.04);
 
-    // Legs smoothly transition between natural gait and seated posture (level thighs, vertical shins)
-    const pedal = sit > 0.7 && inTreatment ? Math.sin(timeSec * 5.2) * 0.32 : 0;
+    const restShrug = seatedActivity === 'rest' ? Math.sin(t * 1.1) * 0.022 * sit * (1 - lie) : 0;
+    const baseShoulderLY = -stride * 0.04 * activeBlend * (1 - sit);
+    const baseShoulderRY = (-stride * 0.04 * activeBlend - pushAmt * 0.12) * (1 - sit);
+    applyCharEuler(
+      b['ShoulderL'],
+      0,
+      THREE.MathUtils.lerp(baseShoulderLY, 0, lie),
+      THREE.MathUtils.lerp(-0.04 - restShrug, -0.045 - lieBreath * 0.015, lie)
+    );
+    applyCharEuler(
+      b['ShoulderR'],
+      0,
+      THREE.MathUtils.lerp(baseShoulderRY, 0, lie),
+      THREE.MathUtils.lerp(0.04 + restShrug, 0.045 + lieBreath * 0.015, lie)
+    );
+
+    // Legs transition seamlessly between gait, stance, grounded chair sit (or low floor mat sit), and relaxed lying
+    const pedal = sit > 0.7 && inTreatment && lie < 0.05 ? Math.sin(timeSec * 5.2) * 0.32 : 0;
+    const sitLegFidget =
+      sit > 0.7 && !inTreatment && seatedActivity === 'idle' && lie < 0.05
+        ? Math.sin(t * 0.31) * 0.032
+        : 0;
+    const toeTapMask =
+      sit > 0.7 && !inTreatment && seatedActivity === 'idle' && lie < 0.05
+        ? Math.max(0, (Math.sin(t * 0.17 + 1.1) - 0.58) / 0.42)
+        : 0;
+    const toeTap = Math.sin(t * 3.1) * toeTapMask * 0.09;
+
+    // Low floor mat (seatHeight < 0.24) tucks knees softly forward instead of pushing shins into floor
+    const lowMatFactor = THREE.MathUtils.clamp((0.24 - seatHeight) / 0.18, 0, 1);
+    const sitThighAngle = THREE.MathUtils.lerp(-1.3, -1.5, lowMatFactor);
+    const sitKneeAngle = THREE.MathUtils.lerp(1.34, 0.62, lowMatFactor);
+    const sitFootAngle = THREE.MathUtils.lerp(0.06, 0.28, lowMatFactor);
+
     const swing = stride * 0.33 * activeBlend;
-    const sitThighAngle = -1.48;
-    const sitKneeAngle = 1.50;
-    const standKneeL = 0.04 + (Math.max(0, -cosP) * 0.56 + Math.max(0, stride) * 0.12) * activeBlend;
-    const standKneeR = 0.04 + (Math.max(0, cosP) * 0.56 + Math.max(0, -stride) * 0.12) * activeBlend;
+    const idleKneeL = Math.max(0, -standWeight) * 0.12;
+    const idleKneeR = Math.max(0, standWeight) * 0.12;
+    const standKneeL =
+      0.04 + idleKneeL + (Math.max(0, -cosP) * 0.56 + Math.max(0, stride) * 0.12) * activeBlend;
+    const standKneeR =
+      0.04 + idleKneeR + (Math.max(0, cosP) * 0.56 + Math.max(0, -stride) * 0.12) * activeBlend;
 
+    // During reclining (lie 0->1), swing knees slightly upward and extend shins ahead of full recline
+    // so heels sweep smoothly onto the mattress without stabbing downward through it.
+    const shinFrac = THREE.MathUtils.clamp((lie - 0.1) / 0.72, 0, 1);
+    const shinBlend = shinFrac * shinFrac * (3 - 2 * shinFrac);
+    const legSwingLift = Math.sin(lie * Math.PI) * (isTilted ? 0.08 : 0.16);
+    const ankleLift = Math.sin(lie * Math.PI) * 0.1;
+
+    const baseULX = THREE.MathUtils.lerp(-swing - idleKneeL * 0.45, sitThighAngle - pedal, sit);
+    const baseULY = THREE.MathUtils.lerp(0.025 * (1 - activeBlend), 0.05 + sitLegFidget * 0.35, sit);
+    const baseULZ = THREE.MathUtils.lerp(0.018 + standWeight * 0.03, 0.038, sit);
     applyCharEuler(
       b['UpperLegL'],
-      THREE.MathUtils.lerp(-swing, sitThighAngle - pedal, sit),
-      THREE.MathUtils.lerp(0.02 * (1 - activeBlend), 0.04, sit),
-      THREE.MathUtils.lerp(0.018, 0.035, sit)
-    );
-    applyCharEuler(
-      b['UpperLegR'],
-      THREE.MathUtils.lerp(swing, sitThighAngle + pedal, sit),
-      THREE.MathUtils.lerp(-0.02 * (1 - activeBlend), -0.04, sit),
-      THREE.MathUtils.lerp(-0.018, -0.035, sit)
+      THREE.MathUtils.lerp(baseULX, -0.04 - kneeRelaxL * 0.62, lie) - legSwingLift,
+      THREE.MathUtils.lerp(baseULY, 0.065 + Math.sin(t * 0.17) * 0.028, lie),
+      THREE.MathUtils.lerp(baseULZ, 0.042, lie)
     );
 
+    const baseURX = THREE.MathUtils.lerp(swing - idleKneeR * 0.45, sitThighAngle + pedal, sit);
+    const baseURY = THREE.MathUtils.lerp(-0.025 * (1 - activeBlend), -0.05 - sitLegFidget * 0.35, sit);
+    const baseURZ = THREE.MathUtils.lerp(-0.018 + standWeight * 0.03, -0.038, sit);
+    applyCharEuler(
+      b['UpperLegR'],
+      THREE.MathUtils.lerp(baseURX, -0.04 - kneeRelaxR * 0.62, lie) - legSwingLift,
+      THREE.MathUtils.lerp(baseURY, -0.065 - Math.cos(t * 0.16) * 0.028, lie),
+      THREE.MathUtils.lerp(baseURZ, -0.042, lie)
+    );
+
+    const baseLLX = THREE.MathUtils.lerp(standKneeL, sitKneeAngle + pedal * 0.65 + sitLegFidget, sit);
+    const baseLRX = THREE.MathUtils.lerp(standKneeR, sitKneeAngle - pedal * 0.65 - sitLegFidget, sit);
     applyCharEuler(
       b['LowerLegL'],
-      THREE.MathUtils.lerp(standKneeL, sitKneeAngle + pedal * 0.65, sit),
+      THREE.MathUtils.lerp(baseLLX, (isTilted ? 0.06 : 0.12) + kneeRelaxL * 1.15, shinBlend),
       0,
       0
     );
     applyCharEuler(
       b['LowerLegR'],
-      THREE.MathUtils.lerp(standKneeR, sitKneeAngle - pedal * 0.65, sit),
+      THREE.MathUtils.lerp(baseLRX, (isTilted ? 0.06 : 0.12) + kneeRelaxR * 1.15, shinBlend),
       0,
       0
     );
 
-    applyCharEuler(b['FootL'], THREE.MathUtils.lerp(-stride * 0.17 * activeBlend, 0.02, sit), 0, 0);
-    applyCharEuler(b['FootR'], THREE.MathUtils.lerp(stride * 0.17 * activeBlend, 0.02, sit), 0, 0);
+    const baseFootLX = THREE.MathUtils.lerp(-stride * 0.17 * activeBlend - idleKneeL * 0.35, sitFootAngle + toeTap, sit);
+    const baseFootRX = THREE.MathUtils.lerp(stride * 0.17 * activeBlend - idleKneeR * 0.35, sitFootAngle, sit);
+    applyCharEuler(
+      b['FootL'],
+      THREE.MathUtils.lerp(baseFootLX, (isTilted ? 0.05 : 0.14) + ankleL, shinBlend) - ankleLift,
+      THREE.MathUtils.lerp(0, 0.035, lie),
+      0
+    );
+    applyCharEuler(
+      b['FootR'],
+      THREE.MathUtils.lerp(baseFootRX, (isTilted ? 0.05 : 0.14) + ankleR, shinBlend) - ankleLift,
+      THREE.MathUtils.lerp(0, -0.035, lie),
+      0
+    );
 
-    // Arms blend smoothly: walking swing, pushing interior door open, seated lap rest, or 3-stage water cooler interaction
+    // Arms blend smoothly across standing, door push, drinking, seated lap/desk, and relaxed lying
+    const standArmGest = Math.max(0, (Math.sin(t * 0.31 + 0.9) - 0.62) / 0.38) * standIdleAmt;
+    const smoothStandGest = standArmGest * standArmGest * (3 - 2 * standArmGest);
+
     const armSwing = stride * 0.24 * activeBlend;
-    const armStandL = armSwing - 0.02 + breath * 0.6 * (1 - activeBlend);
-    const armStandRBase = -armSwing - 0.02 - breath * 0.6 * (1 - activeBlend);
+    const armStandL = armSwing - 0.025 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03;
+    const armStandRBase =
+      -armSwing - 0.025 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.18;
     const armStandR = THREE.MathUtils.lerp(armStandRBase, -1.06, pushAmt);
-    const activeDrink = !isMoving && sit < 0.2 && drinkStage !== 'none';
+    const activeDrink = !isMoving && sit < 0.2 && lie < 0.05 && drinkStage !== 'none';
     const drinkSip = drinkStage === 'sipping' ? 0.5 + 0.5 * Math.sin(timeSec * 4.2) : 0;
 
     const rightArmSwingX = activeDrink
@@ -1161,10 +1635,10 @@ export function animateHumanoid3D(
         : drinkStage === 'sipping'
           ? -0.68 - drinkSip * 0.24
           : -0.48
-      : THREE.MathUtils.lerp(armStandR, -0.22, sit);
+      : THREE.MathUtils.lerp(armStandR, sitArmRSwing, sit);
 
     const standElbowR = THREE.MathUtils.lerp(
-      0.13 + Math.max(0, stride) * 0.22 * activeBlend,
+      0.14 + smoothStandGest * 0.44 + Math.max(0, stride) * 0.22 * activeBlend,
       0.42,
       pushAmt
     );
@@ -1174,36 +1648,61 @@ export function animateHumanoid3D(
         : drinkStage === 'sipping'
           ? 1.2 + drinkSip * 0.28
           : 0.44
-      : THREE.MathUtils.lerp(standElbowR, 0.78, sit);
+      : THREE.MathUtils.lerp(standElbowR, sitElbowRFlex, sit);
+
+    const baseArmDropL = THREE.MathUtils.lerp(-1.49, -1.43, sit);
+    const baseArmDropR = THREE.MathUtils.lerp(1.49, 1.43, sit);
+    const baseArmSwingL = THREE.MathUtils.lerp(armStandL, sitArmLSwing, sit);
 
     applyArmSagittal(
       b['UpperArmL'],
-      THREE.MathUtils.lerp(-1.49, -1.45, sit),
-      THREE.MathUtils.lerp(armStandL, -0.22, sit)
+      THREE.MathUtils.lerp(baseArmDropL, -1.41, lie),
+      THREE.MathUtils.lerp(baseArmSwingL, -0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16, lie)
     );
     applyArmSagittal(
       b['UpperArmR'],
-      THREE.MathUtils.lerp(1.49, 1.45, sit),
-      rightArmSwingX
+      THREE.MathUtils.lerp(baseArmDropR, 1.41, lie),
+      THREE.MathUtils.lerp(rightArmSwingX, -0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16, lie)
     );
 
-    const elbowStandL = 0.13 + Math.max(0, -stride) * 0.22 * activeBlend;
-    applyLocalElbowFlex(b['LowerArmL'], true, THREE.MathUtils.lerp(elbowStandL, 0.78, sit));
-    applyLocalElbowFlex(b['LowerArmR'], false, rightElbowFlex);
+    const elbowStandL = 0.14 + Math.max(0, -stride) * 0.22 * activeBlend + Math.sin(t * 0.47) * 0.03 * standIdleAmt;
+    const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit);
+    applyLocalElbowFlex(b['LowerArmL'], true, THREE.MathUtils.lerp(baseElbowL, 0.26 + armRelaxL, lie));
+    applyLocalElbowFlex(b['LowerArmR'], false, THREE.MathUtils.lerp(rightElbowFlex, 0.28 + armRelaxR, lie));
 
-    // Natural head & neck glance when waiting, sitting, pushing door, filling cup, or sipping water
+    // Natural head & neck glance
+    const standYaw =
+      (Math.sin(t * 0.51) * 0.16 + Math.sin(t * 0.21 + 0.9) * 0.11) *
+      (1 - activeBlend * 0.62) *
+      (1 - pushAmt);
+    const standPitch = (Math.sin(t * 0.78) * 0.032 + Math.sin(t * 0.29) * 0.02) * (1 - activeBlend * 0.4);
+
     const lookYaw = activeDrink
       ? 0
-      : Math.sin(timeSec * 0.52) * (1 - activeBlend * 0.55) * 0.11 * (1 - pushAmt);
+      : THREE.MathUtils.lerp(standYaw, sitLookYaw, sit);
     const lookPitch = activeDrink
       ? drinkStage === 'filling'
         ? 0.1
         : drinkStage === 'sipping'
           ? -0.15 * drinkSip
           : 0.06
-      : Math.sin(timeSec * 1.15) * 0.022;
-    applyCharEuler(b['Neck'], THREE.MathUtils.lerp(0.01 * activeBlend, -0.02, sit), lookYaw * 0.45, 0);
-    applyCharEuler(b['Head'], THREE.MathUtils.lerp(lookPitch, -0.03 + lookPitch, sit), lookYaw, 0);
+      : THREE.MathUtils.lerp(standPitch, sitLookPitch, sit);
+    const headTiltZ = activeDrink ? 0 : Math.sin(t * 0.37) * 0.035 * (1 - activeBlend * 0.7) * (1 - pushAmt);
+
+    const baseNeckX = THREE.MathUtils.lerp(0.01 * activeBlend, -0.025 + sitLookPitch * 0.25, sit);
+    const baseHeadX = THREE.MathUtils.lerp(lookPitch, -0.02 + lookPitch, sit);
+    applyCharEuler(
+      b['Neck'],
+      THREE.MathUtils.lerp(baseNeckX, 0.045, lie),
+      THREE.MathUtils.lerp(lookYaw * 0.45, lieHeadYaw * 0.4, lie),
+      THREE.MathUtils.lerp(headTiltZ * 0.35, lieHeadRoll * 0.35, lie)
+    );
+    applyCharEuler(
+      b['Head'],
+      THREE.MathUtils.lerp(baseHeadX, lieHeadPitch, lie),
+      THREE.MathUtils.lerp(lookYaw, lieHeadYaw * 0.72, lie),
+      THREE.MathUtils.lerp(headTiltZ, lieHeadRoll, lie)
+    );
     return;
   }
 
@@ -1211,23 +1710,44 @@ export function animateHumanoid3D(
   if (!rig.torso || !rig.leftLeg || !rig.rightLeg || !rig.leftArm || !rig.rightArm || !rig.leftShin || !rig.rightShin || !rig.headGroup) {
     return;
   }
-  if (pose === 'lying') {
-    rig.bodyPivot.rotation.set(-Math.PI / 2, 0, 0);
-    rig.bodyPivot.position.set(0, lyingHeight + 0.05, -0.35);
-    rig.root.rotation.y = facingRad;
+  rig.root.rotation.y = facingRad;
+  if (lie > 0.05) {
+    const fbHipH = 0.62 * hScale;
+    const fbSitY = THREE.MathUtils.clamp(0.08 + seatHeight - 0.39, -0.4, 0.18);
+    const fbTheta = THREE.MathUtils.lerp(0, tiltPitch, lie);
+    const fbLieZ = bedBodyZOffset ?? -0.35;
+    const fbHipStartY = fbSitY + fbHipH;
+    const fbHipEndY = lyingHeight + 0.05 + fbHipH * Math.cos(tiltPitch);
+    const fbHipEndZ = fbLieZ + fbHipH * Math.sin(tiltPitch);
+    const fbHipY = THREE.MathUtils.lerp(fbHipStartY, fbHipEndY, lie);
+    const fbHipZ = THREE.MathUtils.lerp(0, fbHipEndZ, lie);
+    rig.bodyPivot.rotation.set(fbTheta, 0, 0);
+    rig.bodyPivot.position.set(
+      0,
+      fbHipY - fbHipH * Math.cos(fbTheta),
+      fbHipZ - fbHipH * Math.sin(fbTheta)
+    );
+    const fbShinFrac = THREE.MathUtils.clamp((lie - 0.1) / 0.72, 0, 1);
+    const fbShinBlend = fbShinFrac * fbShinFrac * (3 - 2 * fbShinFrac);
+    rig.leftLeg.rotation.x = THREE.MathUtils.lerp(-Math.PI * 0.45, 0, lie);
+    rig.rightLeg.rotation.x = THREE.MathUtils.lerp(-Math.PI * 0.45, 0, lie);
+    rig.leftShin.rotation.x = THREE.MathUtils.lerp(Math.PI * 0.45, 0, fbShinBlend);
+    rig.rightShin.rotation.x = THREE.MathUtils.lerp(Math.PI * 0.45, 0, fbShinBlend);
+    rig.headGroup.rotation.y = Math.sin(t * 0.3) * 0.15;
     return;
   }
   rig.bodyPivot.rotation.set(0, 0, 0);
-  rig.root.rotation.y = facingRad;
   if (sit > 0.05) {
-    const fbSitY = THREE.MathUtils.clamp(0.08 + seatHeight - 0.39, -0.18, 0.18);
-    rig.bodyPivot.position.set(0, THREE.MathUtils.lerp(0.05, fbSitY, sit), THREE.MathUtils.lerp(0, 0.02, sit));
-    rig.leftLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.48, sit);
-    rig.rightLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.48, sit);
-    rig.leftShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.48, sit);
-    rig.rightShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.48, sit);
-    rig.leftArm.rotation.x = THREE.MathUtils.lerp(0, -0.25, sit);
-    rig.rightArm.rotation.x = THREE.MathUtils.lerp(0, -0.25, sit);
+    const fbSitY = THREE.MathUtils.clamp(0.08 + seatHeight - 0.39, -0.4, 0.18);
+    rig.bodyPivot.position.set(0, THREE.MathUtils.lerp(0.05, fbSitY, sit), THREE.MathUtils.lerp(0, -0.01, sit));
+    rig.leftLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.44, sit);
+    rig.rightLeg.rotation.x = THREE.MathUtils.lerp(0, -Math.PI * 0.44, sit);
+    rig.leftShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.45, sit);
+    rig.rightShin.rotation.x = THREE.MathUtils.lerp(0, Math.PI * 0.45, sit);
+    const fbArm = seatedActivity === 'typing' ? -0.45 - Math.sin(timeSec * 12) * 0.05 : -0.15;
+    rig.leftArm.rotation.x = THREE.MathUtils.lerp(0, fbArm, sit);
+    rig.rightArm.rotation.x = THREE.MathUtils.lerp(0, fbArm, sit);
+    rig.headGroup.rotation.y = Math.sin(t * 0.45) * 0.18;
     return;
   }
   rig.bodyPivot.position.set(0, 0.05, 0);
@@ -1236,6 +1756,7 @@ export function animateHumanoid3D(
   rig.rightLeg.rotation.x = -swing;
   rig.leftArm.rotation.x = -swing * 0.65;
   rig.rightArm.rotation.x = THREE.MathUtils.lerp(swing * 0.65, -0.95, THREE.MathUtils.clamp(doorPush, 0, 1));
+  rig.headGroup.rotation.y = Math.sin(t * 0.5) * 0.14;
 }
 
 export function disposeHumanoid3D(rig: HumanoidRig) {

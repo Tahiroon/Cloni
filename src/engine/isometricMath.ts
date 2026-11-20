@@ -123,8 +123,6 @@ export function isTileInOutdoorGarden(
 ): boolean {
   // Keep sliding main entrance path & gate promenade clear
   if (tx >= 21 && tx <= 29 && (ty === 14 || ty === 15)) return false;
-  // Keep central reflecting fountain basin in courtyard clear
-  if ((tx === 24 || tx === 25) && (ty === 7 || ty === 8)) return false;
   // Keep rear solar conduit cable bridge strip clear (-1..1, z=12..13)
   if (tx >= -1 && tx <= 1 && (ty === 12 || ty === 13)) return false;
   // Exclude indoor building footprint (2..21, 2..21)
@@ -185,8 +183,9 @@ export function overlapsActiveWorldTree(
 }
 
 /**
- * Returns all valid wall-mount orientations (0..3) at grid tile (gx, gy)
- * inside unlocked rooms, excluding door openings and built-in wall signage.
+ * Returns all camera-visible wall-mount orientations (0 = East-facing wall, 1 = South-facing wall)
+ * at grid tile (gx, gy) inside unlocked rooms, excluding door openings and built-in wall signage.
+ * Back-facing interior faces (rot 2, 3) are excluded so items never hide behind solid partition walls.
  */
 export function getValidWallRotationsForTile(
   gx: number,
@@ -200,7 +199,7 @@ export function getValidWallRotationsForTile(
 
   const rots: Array<0 | 1 | 2 | 3> = [];
 
-  // 0 = West face (x = gx, facing +X into room)
+  // 0 = West wall face (x = gx, facing +X into room)
   if (gx === 2 && gy >= 2 && gy <= 21) {
     // Built-in anatomy chart sits at x=2.175, z=15.8 (gy=15)
     if (gy !== 15) rots.push(0);
@@ -211,24 +210,12 @@ export function getValidWallRotationsForTile(
     if (!isDoor && !isBuiltIn) rots.push(0);
   }
 
-  // 1 = North face (z = gy, facing +Z into room)
+  // 1 = North wall face (z = gy, facing +Z into room)
   if (gy === 2 && gx >= 2 && gx <= 21) {
     rots.push(1);
   } else if (gy === 10 && gx >= 2 && gx <= 21) {
     const isDoor = gx === 6 || gx === 16;
     if (!isDoor) rots.push(1);
-  }
-
-  // 2 = East face (x = gx + 1, facing -X into room)
-  if (gx === 11 && gy >= 2 && gy <= 21) {
-    const isDoor = gy === 5 || gy === 14;
-    if (!isDoor) rots.push(2);
-  }
-
-  // 3 = South face (z = gy + 1, facing -Z into room)
-  if (gy === 9 && gx >= 2 && gx <= 21) {
-    const isDoor = gx === 6 || gx === 16;
-    if (!isDoor) rots.push(3);
   }
 
   return rots;
@@ -360,9 +347,6 @@ export function buildObstacleBoxes(
   for (const pz of [13.75, 16.25]) {
     boxes.push({ minX: 26.76, maxX: 27.24, minZ: pz - 0.24, maxZ: pz + 0.24 });
   }
-
-  // Courtyard Reflecting Pool / Fountain (24..25, 7..8)
-  boxes.push({ minX: 24.06, maxX: 25.94, minZ: 7.06, maxZ: 8.94 });
 
   // Courtyard Shrubs so actors walk around planted bushes cleanly
   for (const [bx, bz] of [
@@ -571,7 +555,7 @@ export function buildWaitSeatSlots(
       const facingRad = (-item.rotation * Math.PI) / 2;
       const slotXs = [-0.62, 0, 0.62];
       for (let i = 0; i < slotXs.length; i++) {
-        const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], 0.05);
+        const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], -0.015);
         const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], 0.76);
         seats.push({
           seatKey: `${item.instanceId}_${i}`,
@@ -594,7 +578,7 @@ export function buildWaitSeatSlots(
       const facingRad = Math.PI / 2 - (item.rotation * Math.PI) / 2;
       const slotZs = [-0.36, 0.36];
       for (let i = 0; i < slotZs.length; i++) {
-        const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.06, slotZs[i]);
+        const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.02, slotZs[i]);
         const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.68, slotZs[i]);
         seats.push({
           seatKey: `${item.instanceId}_${i}`,
@@ -614,7 +598,7 @@ export function buildWaitSeatSlots(
       const cz = item.gridY + 0.5;
       const facingRad = (-item.rotation * Math.PI) / 2;
       const isLux = item.catalogId === 'luxury_chair';
-      const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, isLux ? 0.06 : 0.04);
+      const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, isLux ? 0.07 : 0.04);
       const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.74);
       seats.push({
         seatKey: `${item.instanceId}_0`,
@@ -938,12 +922,8 @@ export function findGridPath(
     return [{ x: goalX, y: goalY }];
   }
 
-  // Build blocked set for furniture, courtyard shrubs, exterior doctor villa pad, and courtyard fountain
+  // Build blocked set for furniture, courtyard shrubs, and exterior doctor villa pad
   const blocked = new Set<string>([
-    '24,7',
-    '25,7',
-    '24,8',
-    '25,8',
     '22,3',
     '22,12',
     '26,3',
