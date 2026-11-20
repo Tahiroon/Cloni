@@ -1537,7 +1537,7 @@ export const INITIAL_STAFF: StaffMember[] = [
     role: 'receptionist',
     nameAr: 'أ. ليلى (الاستقبال)',
     nameEn: 'Layla (Reception)',
-    hired: false,
+    hired: true,
     hireCost: 200,
     gridX: 14,
     gridY: 12,

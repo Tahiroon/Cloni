@@ -1,5 +1,5 @@
 import React from 'react';
-import { Coins, Settings, Star, Users } from 'lucide-react';
+import { BellRing, Coins, Settings, Star, Users } from 'lucide-react';
 import {
   normalizePlayerProfile,
   PLAYER_DEFAULT_SKIN,
@@ -12,6 +12,7 @@ interface TopHudBarProps {
   stars: number;
   level?: number;
   xp?: number;
+  waitingCount?: number;
   onlineFriends: number;
   satisfaction: number;
   language: Language;
@@ -19,17 +20,19 @@ interface TopHudBarProps {
   playerProfile?: PlayerCharacterConfig;
   visitingFriendName: string | null;
   onOpenBonus: () => void;
+  onOpenWaitingQueue?: () => void;
   onOpenFriends: () => void;
   onOpenSettings: () => void;
   onOpenPlayerProfile?: () => void;
   onExitFriendVisit: () => void;
 }
 
-export const TopHudBar: React.FC<TopHudBarProps> = ({
+export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
   coins,
   stars,
   level = 1,
   xp = 0,
+  waitingCount = 0,
   onlineFriends,
   satisfaction,
   language,
@@ -37,6 +40,7 @@ export const TopHudBar: React.FC<TopHudBarProps> = ({
   playerProfile,
   visitingFriendName,
   onOpenBonus,
+  onOpenWaitingQueue,
   onOpenFriends,
   onOpenSettings,
   onOpenPlayerProfile,
@@ -143,8 +147,30 @@ export const TopHudBar: React.FC<TopHudBarProps> = ({
           </div>
         </button>
 
-        {/* Top-Right Cluster: Coins (∞) + Colleagues + Settings */}
+        {/* Top-Right Cluster: Coins (∞) + Smart Waiting Queue + Colleagues + Settings */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          {!visitingFriendName && onOpenWaitingQueue && (
+            <button
+              type="button"
+              onClick={onOpenWaitingQueue}
+              aria-label={isAr ? 'قائمة انتظار المرضى' : 'Waiting Queue'}
+              className={`pointer-events-auto h-8 sm:h-9 px-2 sm:px-2.5 rounded-xl border flex items-center gap-1.5 transition-all active:scale-95 ${
+                waitingCount > 0
+                  ? isNight
+                    ? 'bg-sky-950/94 border-sky-400/60 text-sky-100 hover:bg-sky-900/95 shadow-[0_8px_24px_rgba(2,132,199,0.28)]'
+                    : 'bg-sky-700 hover:bg-sky-600 border-sky-300/60 text-white shadow-lg'
+                  : `${pillSurface} text-white hover:bg-slate-900/95`
+              }`}
+            >
+              <BellRing
+                className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                  waitingCount > 0 ? 'text-amber-300' : 'text-sky-300'
+                }`}
+              />
+              <span className="text-xs font-extrabold tabular-nums">{waitingCount}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onOpenBonus}
@@ -200,4 +226,4 @@ export const TopHudBar: React.FC<TopHudBarProps> = ({
       )}
     </div>
   );
-};
+});

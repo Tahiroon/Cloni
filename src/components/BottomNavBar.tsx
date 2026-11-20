@@ -13,7 +13,7 @@ interface BottomNavBarProps {
   onToggleEditMode: () => void;
 }
 
-export const BottomNavBar: React.FC<BottomNavBarProps> = ({
+export const BottomNavBar: React.FC<BottomNavBarProps> = React.memo(({
   activeTab,
   editMode,
   language,
@@ -97,4 +97,4 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
       </div>
     </nav>
   );
-};
+});

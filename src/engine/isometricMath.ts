@@ -521,16 +521,18 @@ export function buildObstacleBoxes(
               item.catalogId === 'pt_toolkit_cart' ||
               item.catalogId === 'infrared_lamp'
             ? 0.16
-            : item.catalogId === 'waiting_chairs' ||
-                item.catalogId === 'lounge_chair' ||
-                item.catalogId === 'luxury_chair' ||
-                item.catalogId === 'park_bench'
-              ? 0.1
-              : item.catalogId === 'flower_bed' ||
-                  item.catalogId === 'garden_lamp' ||
-                  item.catalogId === 'garden_spot_lamp'
-                ? 0.14
-                : 0.1;
+            : item.catalogId === 'coffee_table'
+              ? 0.17
+              : item.catalogId === 'waiting_chairs' ||
+                  item.catalogId === 'lounge_chair' ||
+                  item.catalogId === 'luxury_chair' ||
+                  item.catalogId === 'park_bench'
+                ? 0.1
+                : item.catalogId === 'flower_bed' ||
+                    item.catalogId === 'garden_lamp' ||
+                    item.catalogId === 'garden_spot_lamp'
+                  ? 0.14
+                  : 0.1;
     boxes.push({
       minX: item.gridX + inset,
       maxX: item.gridX + w - inset,
@@ -773,12 +775,35 @@ function rotateLocalSeatPoint(
 /**
  * Generates exact seat cushions + unobstructed front approach points for every waiting seat
  * (3 simultaneous seats on waiting_chairs, 2 on park_bench, 1 on lounge_chair & luxury_chair).
+ * When obstacleBoxes are supplied, flexibly probes closer/slightly angled front clearances so
+ * chairs near coffee tables or room walls remain reliably usable.
  */
 export function buildWaitSeatSlots(
   placedItems: PlacedItem[],
-  rooms: ClinicRoom[]
+  rooms: ClinicRoom[],
+  obstacleBoxes?: ObstacleBox[]
 ): WaitSeatSlot[] {
   const seats: WaitSeatSlot[] = [];
+
+  const isApproachOk = (
+    wx: number,
+    wz: number,
+    room: ClinicRoom | undefined,
+    seatItemId: string
+  ): boolean => {
+    if (room) {
+      if (
+        wx < room.minX + 0.16 ||
+        wx > room.maxX + 0.84 ||
+        wz < room.minY + 0.16 ||
+        wz > room.maxY + 0.84
+      ) {
+        return false;
+      }
+    }
+    if (!obstacleBoxes) return true;
+    return isWorldWalkable(wx, wz, 0.16, obstacleBoxes, seatItemId);
+  };
 
   for (const item of placedItems) {
     const room = rooms.find(
@@ -799,15 +824,33 @@ export function buildWaitSeatSlots(
       const slotXs = [-0.62, 0, 0.62];
       for (let i = 0; i < slotXs.length; i++) {
         const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], -0.015);
-        const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], 0.76);
+        let chosenApp = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], 0.76);
+        if (obstacleBoxes) {
+          const offsets: Array<[number, number]> = [
+            [slotXs[i], 0.76],
+            [slotXs[i], 0.64],
+            [slotXs[i], 0.56],
+            [slotXs[i], 0.48],
+            [slotXs[i], 0.88],
+            [slotXs[i] + 0.14, 0.72],
+            [slotXs[i] - 0.14, 0.72],
+          ];
+          for (const [lx, lz] of offsets) {
+            const cand = rotateLocalSeatPoint(cx, cz, item.rotation, lx, lz);
+            if (isApproachOk(cand.x, cand.z, room, item.instanceId)) {
+              chosenApp = cand;
+              break;
+            }
+          }
+        }
         seats.push({
           seatKey: `${item.instanceId}_${i}`,
           itemId: item.instanceId,
           catalogId: item.catalogId,
           seatTileX: seatPt.x - 0.5,
           seatTileY: seatPt.z - 0.5,
-          approachTileX: appPt.x - 0.5,
-          approachTileY: appPt.z - 0.5,
+          approachTileX: chosenApp.x - 0.5,
+          approachTileY: chosenApp.z - 0.5,
           facingRad,
           seatHeight: 0.375,
           isOutdoor: !room,
@@ -822,15 +865,24 @@ export function buildWaitSeatSlots(
       const slotZs = [-0.36, 0.36];
       for (let i = 0; i < slotZs.length; i++) {
         const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.02, slotZs[i]);
-        const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.68, slotZs[i]);
+        let chosenApp = rotateLocalSeatPoint(cx, cz, item.rotation, 0.68, slotZs[i]);
+        if (obstacleBoxes) {
+          for (const lx of [0.68, 0.58, 0.50, 0.80]) {
+            const cand = rotateLocalSeatPoint(cx, cz, item.rotation, lx, slotZs[i]);
+            if (isApproachOk(cand.x, cand.z, room, item.instanceId)) {
+              chosenApp = cand;
+              break;
+            }
+          }
+        }
         seats.push({
           seatKey: `${item.instanceId}_${i}`,
           itemId: item.instanceId,
           catalogId: item.catalogId,
           seatTileX: seatPt.x - 0.5,
           seatTileY: seatPt.z - 0.5,
-          approachTileX: appPt.x - 0.5,
-          approachTileY: appPt.z - 0.5,
+          approachTileX: chosenApp.x - 0.5,
+          approachTileY: chosenApp.z - 0.5,
           facingRad,
           seatHeight: 0.396,
           isOutdoor: !room,
@@ -842,15 +894,32 @@ export function buildWaitSeatSlots(
       const facingRad = (-item.rotation * Math.PI) / 2;
       const isLux = item.catalogId === 'luxury_chair';
       const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, isLux ? 0.062 : 0.037);
-      const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.72);
+      let chosenApp = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.72);
+      if (obstacleBoxes) {
+        const offsets: Array<[number, number]> = [
+          [0, 0.72],
+          [0, 0.60],
+          [0, 0.52],
+          [0, 0.84],
+          [0.18, 0.64],
+          [-0.18, 0.64],
+        ];
+        for (const [lx, lz] of offsets) {
+          const cand = rotateLocalSeatPoint(cx, cz, item.rotation, lx, lz);
+          if (isApproachOk(cand.x, cand.z, room, item.instanceId)) {
+            chosenApp = cand;
+            break;
+          }
+        }
+      }
       seats.push({
         seatKey: `${item.instanceId}_0`,
         itemId: item.instanceId,
         catalogId: item.catalogId,
         seatTileX: seatPt.x - 0.5,
         seatTileY: seatPt.z - 0.5,
-        approachTileX: appPt.x - 0.5,
-        approachTileY: appPt.z - 0.5,
+        approachTileX: chosenApp.x - 0.5,
+        approachTileY: chosenApp.z - 0.5,
         facingRad,
         seatHeight: isLux ? 0.396 : 0.377,
         isOutdoor: !room,
@@ -859,6 +928,206 @@ export function buildWaitSeatSlots(
   }
 
   return seats;
+}
+
+export const LYING_STATION_SPRITES = new Set([
+  'treatment_bed',
+  'traction_table',
+  'magnetotherapy',
+  'exercise_mat',
+  'tilt_table',
+]);
+
+export interface TreatmentBedPose {
+  edgeSign: 1 | -1;
+  edgeX: number;
+  edgeZ: number;
+  edgeFacing: number;
+  bedCenterX: number;
+  bedCenterZ: number;
+  stationFacing: number;
+  approachTileX: number;
+  approachTileY: number;
+}
+
+/**
+ * Computes exact bedside sitting edge, lying center, and unobstructed walkable bedside approach
+ * for all lying treatment stations across all 4 rotations.
+ */
+export function getTreatmentBedPose(
+  station: PlacedItem,
+  sprite: string,
+  baseWidth: number,
+  baseDepth: number,
+  boxes: ObstacleBox[],
+  fromWorldX?: number,
+  fromWorldZ?: number
+): TreatmentBedPose {
+  const effW = station.rotation % 2 === 0 ? baseWidth : baseDepth;
+  const effD = station.rotation % 2 === 0 ? baseDepth : baseWidth;
+  const cx = station.gridX + effW / 2;
+  const cz = station.gridY + effD / 2;
+  const rotPt = (lx: number, lz: number) => rotateLocalSeatPoint(cx, cz, station.rotation, lx, lz);
+
+  const bedCenter =
+    sprite === 'tilt_table'
+      ? rotPt(0.074, 0)
+      : sprite === 'traction_table'
+        ? rotPt(-0.066, 0)
+        : { x: cx, z: cz };
+
+  const evalSide = (sign: 1 | -1) => {
+    const probe = rotPt(0, sign * 0.56);
+    const probeClear = isWorldWalkable(probe.x, probe.z, 0.15, boxes, station.instanceId);
+    let chosenApp: { x: number; z: number } | null = null;
+    for (const d of [0.74, 0.64, 0.56]) {
+      for (const ox of [0, 0.28, -0.28]) {
+        const cand = rotPt(ox, sign * d);
+        if (isWorldWalkable(cand.x, cand.z, 0.17, boxes, station.instanceId)) {
+          chosenApp = cand;
+          break;
+        }
+      }
+      if (chosenApp) break;
+    }
+    const dist =
+      fromWorldX !== undefined && fromWorldZ !== undefined && chosenApp
+        ? Math.hypot(chosenApp.x - fromWorldX, chosenApp.z - fromWorldZ)
+        : 0;
+    return {
+      sign,
+      ok: probeClear && chosenApp !== null,
+      hasApp: chosenApp !== null,
+      app: chosenApp ?? rotPt(0, sign * 0.72),
+      dist,
+    };
+  };
+
+  const posSide = evalSide(1);
+  const negSide = evalSide(-1);
+
+  let chosen = posSide;
+  if (posSide.ok && negSide.ok) {
+    if (fromWorldX !== undefined && fromWorldZ !== undefined && negSide.dist + 0.15 < posSide.dist) {
+      chosen = negSide;
+    } else {
+      chosen = posSide;
+    }
+  } else if (negSide.ok) {
+    chosen = negSide;
+  } else if (posSide.ok) {
+    chosen = posSide;
+  } else if (negSide.hasApp && !posSide.hasApp) {
+    chosen = negSide;
+  }
+
+  let approachWorld = chosen.app;
+  if (!chosen.hasApp) {
+    // Fallback if both long edges sit beside walls/other gear: pick closest walkable bedside/foot tile
+    let foundFallback = false;
+    for (const [lx, lz] of [
+      [effW * 0.5 + 0.34, 0],
+      [-effW * 0.5 - 0.34, 0],
+      [0.45, chosen.sign * 0.68],
+      [-0.45, chosen.sign * 0.68],
+    ] as Array<[number, number]>) {
+      const cand = rotPt(lx, lz);
+      if (isWorldWalkable(cand.x, cand.z, 0.17, boxes, station.instanceId)) {
+        approachWorld = cand;
+        foundFallback = true;
+        break;
+      }
+    }
+    if (!foundFallback) {
+      const safe = findNearestWalkableWorld(chosen.app.x, chosen.app.z, 0.18, boxes, station.instanceId);
+      approachWorld = { x: safe.x, z: safe.z };
+    }
+  }
+
+  const edgeSign = chosen.sign;
+  const edgeOffsetZ =
+    sprite === 'exercise_mat' ? 0.22 : sprite === 'treatment_bed' ? 0.24 : 0.27;
+  const edgePt = rotPt(0, edgeSign * edgeOffsetZ);
+  const edgeFacing =
+    edgeSign === 1
+      ? (-station.rotation * Math.PI) / 2
+      : Math.PI - (station.rotation * Math.PI) / 2;
+  const stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
+
+  return {
+    edgeSign,
+    edgeX: edgePt.x,
+    edgeZ: edgePt.z,
+    edgeFacing,
+    bedCenterX: bedCenter.x,
+    bedCenterZ: bedCenter.z,
+    stationFacing,
+    approachTileX: approachWorld.x - 0.5,
+    approachTileY: approachWorld.z - 0.5,
+  };
+}
+
+/**
+ * Returns a reliable walkable target tile for any treatment station (bedside for beds/tables,
+ * open standing/mount tile for standing & seated equipment).
+ */
+export function getStationApproachTarget(
+  station: PlacedItem,
+  sprite: string,
+  baseWidth: number,
+  baseDepth: number,
+  boxes: ObstacleBox[],
+  fromWorldX?: number,
+  fromWorldZ?: number
+): { x: number; y: number } {
+  if (LYING_STATION_SPRITES.has(sprite)) {
+    const pose = getTreatmentBedPose(
+      station,
+      sprite,
+      baseWidth,
+      baseDepth,
+      boxes,
+      fromWorldX,
+      fromWorldZ
+    );
+    return { x: pose.approachTileX, y: pose.approachTileY };
+  }
+
+  const effW = station.rotation % 2 === 0 ? baseWidth : baseDepth;
+  const effD = station.rotation % 2 === 0 ? baseDepth : baseWidth;
+  const cx = station.gridX + effW / 2;
+  const cz = station.gridY + effD / 2;
+  const rotPt = (lx: number, lz: number) => rotateLocalSeatPoint(cx, cz, station.rotation, lx, lz);
+
+  if (sprite === 'exercise_bike' || sprite === 'treadmill' || sprite === 'parallel_bars' || sprite === 'balance_trainer') {
+    for (const [lx, lz] of [
+      [0, effD * 0.5 + 0.34],
+      [0, -effD * 0.5 - 0.34],
+      [effW * 0.5 + 0.34, 0],
+      [-effW * 0.5 - 0.34, 0],
+    ] as Array<[number, number]>) {
+      const pt = rotPt(lx, lz);
+      if (isWorldWalkable(pt.x, pt.z, 0.17, boxes, station.instanceId)) {
+        return { x: pt.x - 0.5, y: pt.z - 0.5 };
+      }
+    }
+    return { x: cx - 0.5, y: cz - 0.5 };
+  }
+
+  const frontZ = sprite === 'wall_bars' ? 0.32 : 0.62;
+  for (const [lx, lz] of [
+    [0, frontZ],
+    [0.62, 0],
+    [-0.62, 0],
+    [0, -frontZ],
+  ] as Array<[number, number]>) {
+    const pt = rotPt(lx, lz);
+    if (isWorldWalkable(pt.x, pt.z, 0.17, boxes, station.instanceId)) {
+      return { x: pt.x - 0.5, y: pt.z - 0.5 };
+    }
+  }
+  const safe = findNearestWalkableWorld(cx, cz, 0.18, boxes, station.instanceId);
+  return { x: safe.x - 0.5, y: safe.z - 0.5 };
 }
 
 /**
@@ -1193,9 +1462,9 @@ export function findGridPath(
     for (let tx = minTx; tx <= maxTx; tx++) {
       for (let ty = minTy; ty <= maxTy; ty++) {
         const isGoalCell =
-          tx === gx &&
-          ty === gy &&
-          Boolean(ignoreGoalItemId && item.instanceId === ignoreGoalItemId);
+          Boolean(ignoreGoalItemId && item.instanceId === ignoreGoalItemId) &&
+          Math.abs(goalX - tx) < 0.72 &&
+          Math.abs(goalY - ty) < 0.72;
         if (!isGoalCell && !(tx === sx && ty === sy)) {
           blocked.add(`${tx},${ty}`);
         }
@@ -1320,7 +1589,11 @@ export function findGridPath(
         }
       }
       if (!canStepBetween(cur.x, cur.y, nx, ny, rooms)) continue;
-      if (!(nx === gx && ny === gy) && !isTileWalkable(nx, ny, 0.18, boxes)) continue;
+      const nearGoalIgnore =
+        ignoreGoalItemId && Math.hypot(nx - gx, ny - gy) <= 1.25
+          ? ignoreGoalItemId
+          : undefined;
+      if (!(nx === gx && ny === gy) && !isTileWalkable(nx, ny, 0.18, boxes, nearGoalIgnore)) continue;
 
       const tentativeG = cur.g + stepCost;
       const prevBestG = gScore.get(key);
@@ -1366,7 +1639,7 @@ export function findGridPath(
         fullNodes[probe].x - fullNodes[anchorIdx].x,
         fullNodes[probe].y - fullNodes[anchorIdx].y
       );
-      const allowGoalIgnore = Boolean(isFinalGoalProbe && ignoreGoalItemId && probeDist < 1.35);
+      const allowGoalIgnore = Boolean(isFinalGoalProbe && ignoreGoalItemId && probeDist < 1.55);
       if (
         hasLineOfSight(
           fullNodes[anchorIdx].x,

@@ -46,10 +46,174 @@ export interface HumanoidRig {
   hitMesh: THREE.Mesh;
   handCup?: THREE.Group;
   handFile?: THREE.Group;
+  blinkLids?: [THREE.Mesh, THREE.Mesh];
   isSkinnedGlb: boolean;
   hipHeight?: number;
   heightScale?: number;
   bones?: Record<string, SkinnedBoneRef>;
+}
+
+let sharedGeomPool: {
+  contactShadowPlane: THREE.PlaneGeometry;
+  selectRing: THREE.RingGeometry;
+  hitCyl: THREE.CylinderGeometry;
+  sclera: THREE.SphereGeometry;
+  iris: THREE.SphereGeometry;
+  pupil: THREE.SphereGeometry;
+  catchlight: THREE.SphereGeometry;
+  blinkLid: THREE.SphereGeometry;
+  upperLid: THREE.TorusGeometry;
+  lashFemale: THREE.TorusGeometry;
+  lashMale: THREE.TorusGeometry;
+  browFemaleL: THREE.TubeGeometry;
+  browFemaleR: THREE.TubeGeometry;
+  browMaleL: THREE.TubeGeometry;
+  browMaleR: THREE.TubeGeometry;
+  nostril: THREE.SphereGeometry;
+  cupBody: THREE.CylinderGeometry;
+  cupRim: THREE.TorusGeometry;
+  cupWater: THREE.CylinderGeometry;
+  folderCover: THREE.BoxGeometry;
+  folderPages: THREE.BoxGeometry;
+  folderTab: THREE.BoxGeometry;
+  badgeCard: THREE.BoxGeometry;
+  badgeClip: THREE.BoxGeometry;
+  pocketPen: THREE.CylinderGeometry;
+  buttonCyl: THREE.CylinderGeometry;
+  beltStrap: THREE.CylinderGeometry;
+  beltBuckle: THREE.BoxGeometry;
+  watchStrap: THREE.TorusGeometry;
+  watchFace: THREE.CylinderGeometry;
+  glassRim: THREE.TorusGeometry;
+  glassLens: THREE.CircleGeometry;
+  glassArm: THREE.BoxGeometry;
+  glassBridge: THREE.BoxGeometry;
+} | null = null;
+
+function getSharedHumanoidGeoms() {
+  if (sharedGeomPool) return sharedGeomPool;
+  const makeBrowTube = (side: -1 | 1, isFem: boolean) => {
+    const ex = isFem ? 0.0462 : 0.0443;
+    const by = isFem ? 0.1165 : 0.1205;
+    const bz = isFem ? 0.1615 : 0.1605;
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(side * (ex - 0.017), by - 0.001, bz + 0.002),
+      new THREE.Vector3(side * ex, by + (isFem ? 0.0042 : 0.0022), bz + 0.003),
+      new THREE.Vector3(side * (ex + 0.018), by - 0.002, bz - 0.005),
+    ]);
+    return new THREE.TubeGeometry(curve, 10, isFem ? 0.0032 : 0.0044, 8, false);
+  };
+  sharedGeomPool = {
+    contactShadowPlane: new THREE.PlaneGeometry(0.68, 0.68),
+    selectRing: new THREE.RingGeometry(0.25, 0.32, 24),
+    hitCyl: new THREE.CylinderGeometry(0.3, 0.3, 1.15, 10),
+    sclera: new THREE.SphereGeometry(0.0138, 16, 12),
+    iris: new THREE.SphereGeometry(0.0078, 14, 10),
+    pupil: new THREE.SphereGeometry(0.0042, 10, 8),
+    catchlight: new THREE.SphereGeometry(0.0017, 6, 6),
+    blinkLid: new THREE.SphereGeometry(0.0145, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    upperLid: new THREE.TorusGeometry(0.0136, 0.0034, 8, 16, Math.PI * 0.92),
+    lashFemale: new THREE.TorusGeometry(0.0132, 0.0022, 8, 16, Math.PI * 0.88),
+    lashMale: new THREE.TorusGeometry(0.0132, 0.0015, 8, 16, Math.PI * 0.88),
+    browFemaleL: makeBrowTube(-1, true),
+    browFemaleR: makeBrowTube(1, true),
+    browMaleL: makeBrowTube(-1, false),
+    browMaleR: makeBrowTube(1, false),
+    nostril: new THREE.SphereGeometry(0.0034, 8, 6),
+    cupBody: new THREE.CylinderGeometry(0.036, 0.025, 0.085, 16),
+    cupRim: new THREE.TorusGeometry(0.036, 0.004, 8, 18),
+    cupWater: new THREE.CylinderGeometry(0.032, 0.029, 0.016, 16),
+    folderCover: new THREE.BoxGeometry(0.21, 0.016, 0.27),
+    folderPages: new THREE.BoxGeometry(0.185, 0.01, 0.245),
+    folderTab: new THREE.BoxGeometry(0.06, 0.018, 0.028),
+    badgeCard: new THREE.BoxGeometry(0.042, 0.054, 0.006),
+    badgeClip: new THREE.BoxGeometry(0.018, 0.010, 0.009),
+    pocketPen: new THREE.CylinderGeometry(0.0042, 0.0042, 0.046, 8),
+    buttonCyl: new THREE.CylinderGeometry(0.0054, 0.0054, 0.005, 10),
+    beltStrap: new THREE.CylinderGeometry(0.154, 0.156, 0.030, 24),
+    beltBuckle: new THREE.BoxGeometry(0.034, 0.034, 0.010),
+    watchStrap: new THREE.TorusGeometry(0.036, 0.007, 10, 20),
+    watchFace: new THREE.CylinderGeometry(0.016, 0.016, 0.008, 16),
+    glassRim: new THREE.TorusGeometry(0.020, 0.0030, 8, 20),
+    glassLens: new THREE.CircleGeometry(0.019, 16),
+    glassArm: new THREE.BoxGeometry(0.004, 0.004, 0.105),
+    glassBridge: new THREE.BoxGeometry(0.022, 0.004, 0.004),
+  };
+  return sharedGeomPool;
+}
+
+let sharedFixedMats: {
+  selectRing: THREE.MeshBasicMaterial;
+  hitInvisible: THREE.MeshBasicMaterial;
+  invisibleMat: THREE.MeshStandardMaterial;
+  sclera: THREE.MeshPhysicalMaterial;
+  iris: THREE.MeshPhysicalMaterial;
+  pupil: THREE.MeshBasicMaterial;
+  catchlight: THREE.MeshBasicMaterial;
+  lash: THREE.MeshStandardMaterial;
+  cupBody: THREE.MeshStandardMaterial;
+  cupRim: THREE.MeshStandardMaterial;
+  cupWater: THREE.MeshStandardMaterial;
+  folderCover: THREE.MeshStandardMaterial;
+  folderPages: THREE.MeshStandardMaterial;
+  folderTab: THREE.MeshStandardMaterial;
+  badgeCard: THREE.MeshPhysicalMaterial;
+  lanyardBlue: THREE.MeshStandardMaterial;
+  glassLens: THREE.MeshPhysicalMaterial;
+} | null = null;
+
+function getSharedFixedMats() {
+  if (sharedFixedMats) return sharedFixedMats;
+  const invis = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
+  invis.visible = false;
+  sharedFixedMats = {
+    selectRing: new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+    }),
+    hitInvisible: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+    invisibleMat: invis,
+    sclera: new THREE.MeshPhysicalMaterial({
+      color: 0xf4efe9,
+      roughness: 0.18,
+      metalness: 0.0,
+      clearcoat: 0.65,
+      clearcoatRoughness: 0.1,
+    }),
+    iris: new THREE.MeshPhysicalMaterial({
+      color: 0x351e12,
+      roughness: 0.10,
+      metalness: 0.0,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+    }),
+    pupil: new THREE.MeshBasicMaterial({ color: 0x090808 }),
+    catchlight: new THREE.MeshBasicMaterial({ color: 0xffffff }),
+    lash: new THREE.MeshStandardMaterial({ color: 0x16100c, roughness: 0.55, metalness: 0.0 }),
+    cupBody: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.45, metalness: 0.02 }),
+    cupRim: new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.35, metalness: 0.05 }),
+    cupWater: new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.18, metalness: 0.05 }),
+    folderCover: new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.48, metalness: 0.04 }),
+    folderPages: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.65, metalness: 0.0 }),
+    folderTab: new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45, metalness: 0.02 }),
+    badgeCard: new THREE.MeshPhysicalMaterial({
+      map: getIdBadgeTexture(),
+      roughness: 0.32,
+      metalness: 0.04,
+      clearcoat: 0.35,
+    }),
+    lanyardBlue: new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.55, metalness: 0.05 }),
+    glassLens: new THREE.MeshPhysicalMaterial({
+      color: 0xe0f2fe,
+      transparent: true,
+      opacity: 0.28,
+      roughness: 0.08,
+      clearcoat: 1.0,
+    }),
+  };
+  return sharedFixedMats;
 }
 
 const _euler = new THREE.Euler();
@@ -551,39 +715,35 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   const root = new THREE.Group();
   const bodyPivot = new THREE.Group();
   root.add(bodyPivot);
+  const sGeoms = getSharedHumanoidGeoms();
+  const sMats = getSharedFixedMats();
 
   if (appearance.contactShadowTex) {
     const ao = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.68, 0.68),
+      sGeoms.contactShadowPlane,
       new THREE.MeshBasicMaterial({
         map: appearance.contactShadowTex,
         transparent: true,
         depthWrite: false,
       })
     );
+    ao.userData.sharedGlbGeom = true;
     ao.rotation.x = -Math.PI / 2;
     ao.position.y = 0.072;
     root.add(ao);
   }
 
-  const selectRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.25, 0.32, 24),
-    new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.9,
-    })
-  );
+  const selectRing = new THREE.Mesh(sGeoms.selectRing, sMats.selectRing);
+  selectRing.userData.sharedGlbGeom = true;
+  selectRing.userData.sharedGlbMat = true;
   selectRing.rotation.x = -Math.PI / 2;
   selectRing.position.y = 0.076;
   selectRing.visible = false;
   root.add(selectRing);
 
-  const hitMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.3, 0.3, 1.15, 10),
-    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
-  );
+  const hitMesh = new THREE.Mesh(sGeoms.hitCyl, sMats.hitInvisible);
+  hitMesh.userData.sharedGlbGeom = true;
+  hitMesh.userData.sharedGlbMat = true;
   hitMesh.position.y = 0.58;
   root.add(hitMesh);
 
@@ -751,17 +911,14 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.60);
           } else if (mName === 'Eye' || (mName === 'Brown' && (meshName.includes('Head') || parentName.includes('Head')))) {
             // Hide flat low-poly GLB eye cube; replaced by anatomically sculpted 3D sclera/iris/eyelid eyes
-            mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
-            mat.visible = false;
+            mat = sMats.invisibleMat;
           } else if (mName === 'Eyebrows' || (mName === 'Hair_Brown' && (meshName.includes('Head') || parentName.includes('Head')))) {
             // Hide boxy GLB eyebrow rectangles; replaced by sculpted curved 3D eyebrows
-            mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
-            mat.visible = false;
+            mat = sMats.invisibleMat;
           } else if (mName === 'Hair' || mName === 'Hair_Blond' || mName === 'Hair_Brown') {
             if (isFemaleLook && effectiveHijab && mName === 'Hair_Blond') {
               // Completely hide hair mesh under Tarha so zero stray tufts clip out
-              mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
-              mat.visible = false;
+              mat = sMats.invisibleMat;
             } else {
               mat = new THREE.MeshPhysicalMaterial({
                 color: hairCol.getHex(),
@@ -792,8 +949,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
                 // Full pure white medical lab coat sleeves/shoulders/neck with zero inner shirt showing
                 mat = makeClothMat(0xf2f4f7, appearance, 0.72, 0.36);
               } else if (mName === 'Tie') {
-                mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
-                mat.visible = false;
+                mat = sMats.invisibleMat;
               } else if (mName === 'Suit' && isSuitLegs) {
                 mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.38);
               } else if (mName === 'Red_Dark' || mName === 'Black') {
@@ -896,8 +1052,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
               mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.45);
             } else if (mName === 'Tie') {
               if (appearance.isPlayer) {
-                mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
-                mat.visible = false;
+                mat = sMats.invisibleMat;
               } else {
                 mat = makeClothMat(tieColorHex, appearance, 0.74, 0.52);
               }
@@ -915,11 +1070,13 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             }
           }
 
-          mat.name = mName;
+          if (mat !== sMats.invisibleMat) {
+            mat.name = mName;
+          }
           return mat;
         });
 
-        mesh.userData.sharedGlbMat = false;
+        mesh.userData.sharedGlbMat = clonedMats.every((cm) => cm === sMats.invisibleMat);
         mesh.material = clonedMats.length === 1 ? clonedMats[0] : clonedMats;
       }
     });
@@ -1217,13 +1374,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         medAcc.scale.setScalar(0.01);
         const tubeMat = makeLeatherMat(0x1b2536, appearance, 0.40);
         const chromeMat = makeMetalMat(0xdbe2ea, appearance, 0.20, 0.88);
-        const badgeMat = new THREE.MeshPhysicalMaterial({
-          map: getIdBadgeTexture(),
-          roughness: 0.32,
-          metalness: 0.04,
-          clearcoat: 0.35,
-        });
-        const lanyardBlue = colorMat(0x0284c7, 0.55, 0.05);
+        const badgeMat = sMats.badgeCard;
+        const lanyardBlue = sMats.lanyardBlue;
 
         // Stethoscope draped smoothly around the neck and resting flush outside the chest contour
         const stethCurve = new THREE.CatmullRomCurve3([
@@ -1238,31 +1390,33 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           new THREE.Vector3(0.062, -0.066, lowerChestZ + 0.014),
         ]);
         const stethTube = new THREE.Mesh(
-          new THREE.TubeGeometry(stethCurve, 38, 0.0080, 12, false),
+          new THREE.TubeGeometry(stethCurve, 34, 0.0080, 10, false),
           tubeMat
         );
         const chestDiaphragm = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.023, 0.025, 0.012, 22),
+          new THREE.CylinderGeometry(0.023, 0.025, 0.012, 18),
           chromeMat
         );
         chestDiaphragm.rotation.x = Math.PI / 2 - 0.15;
         chestDiaphragm.position.set(0.062, -0.070, lowerChestZ + 0.019);
-        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.0095, 12, 10), chromeMat);
+        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.0095, 10, 8), chromeMat);
         earTipL.position.set(-0.070, -0.055, lowerChestZ + 0.014);
 
         // Printed THERASON ID Badge resting flush on upper-left pocket
-        const badgeCard = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.054, 0.006), badgeMat);
+        const badgeCard = new THREE.Mesh(sGeoms.badgeCard, badgeMat);
+        badgeCard.userData.sharedGlbGeom = true;
+        badgeCard.userData.sharedGlbMat = true;
         badgeCard.position.set(-0.082, -0.025, bustFrontZ + 0.002);
         badgeCard.rotation.set(isFemaleLook ? -0.10 : 0.0, -0.18, 0);
-        const badgeClip = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.010, 0.009), lanyardBlue);
+        const badgeClip = new THREE.Mesh(sGeoms.badgeClip, lanyardBlue);
+        badgeClip.userData.sharedGlbGeom = true;
+        badgeClip.userData.sharedGlbMat = true;
         badgeClip.position.set(-0.082, 0.004, bustFrontZ + 0.002);
         badgeClip.rotation.y = -0.18;
 
         // Clipped stainless clinical pen in opposite chest pocket
-        const pocketPen = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.0042, 0.0042, 0.046, 10),
-          chromeMat
-        );
+        const pocketPen = new THREE.Mesh(sGeoms.pocketPen, chromeMat);
+        pocketPen.userData.sharedGlbGeom = true;
         pocketPen.position.set(0.078, -0.012, bustFrontZ + 0.003);
         pocketPen.rotation.z = -0.08;
 
@@ -1301,10 +1455,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             [-0.045, bustFrontZ + 0.007],
             [-0.110, lowerChestZ + 0.012],
           ] as Array<[number, number]>) {
-            const btn = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.0056, 0.0056, 0.005, 12),
-              coatButtonMat
-            );
+            const btn = new THREE.Mesh(sGeoms.buttonCyl, coatButtonMat);
+            btn.userData.sharedGlbGeom = true;
             btn.rotation.x = Math.PI / 2;
             btn.position.set(0, by, bz);
             medAcc.add(btn);
@@ -1390,7 +1542,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           [-0.055, lowerChestZ + 0.006],
           [-0.115, lowerChestZ + 0.004],
         ] as Array<[number, number]>) {
-          const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.0052, 0.0052, 0.005, 12), buttonMat);
+          const btn = new THREE.Mesh(sGeoms.buttonCyl, buttonMat);
+          btn.userData.sharedGlbGeom = true;
           btn.rotation.x = Math.PI / 2;
           btn.position.set(0, by, bz);
           shirtGrp.add(btn);
@@ -1402,13 +1555,12 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           beltGrp.scale.setScalar(0.01);
           const beltLeather = makeLeatherMat(0x221b17, appearance, 0.38);
           const buckleMetal = makeMetalMat(0xd4d4d8, appearance, 0.22, 0.88);
-          const beltBand = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.154, 0.156, 0.030, 28),
-            beltLeather
-          );
+          const beltBand = new THREE.Mesh(sGeoms.beltStrap, beltLeather);
+          beltBand.userData.sharedGlbGeom = true;
           beltBand.scale.set(1.02, 1.0, 0.80);
           beltBand.position.set(0, 0.072, 0.062);
-          const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.034, 0.010), buckleMetal);
+          const buckle = new THREE.Mesh(sGeoms.beltBuckle, buckleMetal);
+          buckle.userData.sharedGlbGeom = true;
           buckle.position.set(0, 0.072, 0.184);
           beltGrp.add(beltBand, buckle);
           bones['Hips'].bone.add(beltGrp);
@@ -1555,15 +1707,17 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       const watchGrp = new THREE.Group();
       watchGrp.scale.setScalar(0.01);
       const strap = new THREE.Mesh(
-        new THREE.TorusGeometry(0.036, 0.007, 12, 24),
+        sGeoms.watchStrap,
         makeLeatherMat(showStethoscope || appearance.isStaff ? 0x1e293b : 0x3a2618, appearance, 0.44)
       );
+      strap.userData.sharedGlbGeom = true;
       strap.rotation.x = Math.PI / 2;
       strap.position.set(0, 0.215, 0);
       const watchFace = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.016, 0.016, 0.008, 18),
+        sGeoms.watchFace,
         makeMetalMat(0xe2e8f0, appearance, 0.25, 0.85)
       );
+      watchFace.userData.sharedGlbGeom = true;
       watchFace.rotation.x = Math.PI / 2;
       watchFace.position.set(0, 0.215, 0.038);
       watchGrp.add(strap, watchFace);
@@ -1584,6 +1738,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       bones['Hips'].bone.add(sashGrp);
     }
 
+    let blinkLids: [THREE.Mesh, THREE.Mesh] | undefined;
+
     // Realistic Human Facial Anatomy + Authentic Headwear, Tarha & Contoured 3D Niqab
     if (bones['Head']) {
       // 1) Lifelike 3D Human Facial Features aligned to exact GLB face-surface Z (~0.150..0.177)
@@ -1593,87 +1749,89 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         const eyeX = isFemaleLook ? 0.0462 : 0.0443;
         const eyeY = isFemaleLook ? 0.1004 : 0.1082;
         const eyeZ = isFemaleLook ? 0.1465 : 0.1450;
-        const browY = isFemaleLook ? 0.1165 : 0.1205;
-        const browZ = isFemaleLook ? 0.1615 : 0.1605;
 
-        const scleraMat = new THREE.MeshPhysicalMaterial({
-          color: 0xf4efe9,
-          roughness: 0.18,
-          metalness: 0.0,
-          clearcoat: 0.65,
-          clearcoatRoughness: 0.1,
-        });
-        const irisMat = new THREE.MeshPhysicalMaterial({
-          color: 0x351e12,
-          roughness: 0.10,
-          metalness: 0.0,
-          clearcoat: 1.0,
-          clearcoatRoughness: 0.05,
-        });
-        const pupilMat = new THREE.MeshBasicMaterial({ color: 0x090808 });
-        const catchlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        const browMat = new THREE.MeshPhysicalMaterial({
-          color: hairCol.getHex(),
-          roughness: 0.65,
-          sheen: 0.25,
-        });
-        const lidMat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.56);
-        const lashMat = colorMat(0x16100c, 0.55, 0.0);
+        const scleraMat = sMats.sclera;
+        const irisMat = sMats.iris;
+        const pupilMat = sMats.pupil;
+        const catchlightMat = sMats.catchlight;
+        const browMat = colorMat(hairCol.getHex(), 0.65, 0.0);
+        const lidMat = colorMat(darkerSkinCol.getHex(), 0.56, 0.0);
+        const blinkSkinMat = colorMat(skinCol.clone().multiplyScalar(0.9).getHex(), 0.56, 0.0);
+        const lashMat = sMats.lash;
+        const lidList: THREE.Mesh[] = [];
 
         for (const side of [-1, 1]) {
           // Sclera orb fitted directly into exact GLB eye socket
-          const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.0138, 18, 14), scleraMat);
+          const sclera = new THREE.Mesh(sGeoms.sclera, scleraMat);
+          sclera.userData.sharedGlbGeom = true;
+          sclera.userData.sharedGlbMat = true;
           sclera.scale.set(1.08, 0.80, 0.82);
           sclera.position.set(side * eyeX, eyeY, eyeZ);
 
           // Warm dark brown Iris + black Pupil + tiny specular catchlight
-          const iris = new THREE.Mesh(new THREE.SphereGeometry(0.0078, 16, 12), irisMat);
+          const iris = new THREE.Mesh(sGeoms.iris, irisMat);
+          iris.userData.sharedGlbGeom = true;
+          iris.userData.sharedGlbMat = true;
           iris.scale.set(1.0, 1.0, 0.45);
           iris.position.set(side * eyeX, eyeY, eyeZ + 0.0096);
 
-          const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0042, 12, 10), pupilMat);
+          const pupil = new THREE.Mesh(sGeoms.pupil, pupilMat);
+          pupil.userData.sharedGlbGeom = true;
+          pupil.userData.sharedGlbMat = true;
           pupil.scale.set(1.0, 1.0, 0.38);
           pupil.position.set(side * eyeX, eyeY, eyeZ + 0.0124);
 
-          const catchlight = new THREE.Mesh(new THREE.SphereGeometry(0.0017, 8, 8), catchlightMat);
+          const catchlight = new THREE.Mesh(sGeoms.catchlight, catchlightMat);
+          catchlight.userData.sharedGlbGeom = true;
+          catchlight.userData.sharedGlbMat = true;
           catchlight.position.set(side * eyeX + 0.0024, eyeY + 0.0024, eyeZ + 0.0135);
 
-          // Upper eyelid contour + natural lash line
-          const upperLid = new THREE.Mesh(
-            new THREE.TorusGeometry(0.0136, 0.0034, 8, 16, Math.PI * 0.92),
-            lidMat
-          );
+          // Upper eyelid contour + natural lash line + animated natural blink cap
+          const upperLid = new THREE.Mesh(sGeoms.upperLid, lidMat);
+          upperLid.userData.sharedGlbGeom = true;
           upperLid.position.set(side * eyeX, eyeY + 0.0022, eyeZ + 0.0068);
           upperLid.rotation.set(0.22, 0, Math.PI * 0.04);
 
+          const blinkLid = new THREE.Mesh(sGeoms.blinkLid, blinkSkinMat);
+          blinkLid.userData.sharedGlbGeom = true;
+          blinkLid.scale.set(1.10, 0.84, 0.86);
+          blinkLid.position.set(side * eyeX, eyeY, eyeZ + 0.0005);
+          blinkLid.rotation.set(-0.98, 0, 0);
+          lidList.push(blinkLid);
+
           const lashRim = new THREE.Mesh(
-            new THREE.TorusGeometry(0.0132, isFemaleLook ? 0.0022 : 0.0015, 8, 16, Math.PI * 0.88),
+            isFemaleLook ? sGeoms.lashFemale : sGeoms.lashMale,
             lashMat
           );
+          lashRim.userData.sharedGlbGeom = true;
+          lashRim.userData.sharedGlbMat = true;
           lashRim.position.set(side * eyeX, eyeY + 0.0008, eyeZ + 0.0092);
           lashRim.rotation.set(0.18, 0, Math.PI * 0.06);
 
-          // Tapered curved human eyebrow hugging brow bone
-          const browCurve = new THREE.CatmullRomCurve3([
-            new THREE.Vector3(side * (eyeX - 0.017), browY - 0.001, browZ + 0.002),
-            new THREE.Vector3(side * eyeX, browY + (isFemaleLook ? 0.0042 : 0.0022), browZ + 0.003),
-            new THREE.Vector3(side * (eyeX + 0.018), browY - 0.002, browZ - 0.005),
-          ]);
-          const browMesh = new THREE.Mesh(
-            new THREE.TubeGeometry(browCurve, 10, isFemaleLook ? 0.0032 : 0.0044, 8, false),
-            browMat
-          );
+          const browGeom = isFemaleLook
+            ? side === -1
+              ? sGeoms.browFemaleL
+              : sGeoms.browFemaleR
+            : side === -1
+              ? sGeoms.browMaleL
+              : sGeoms.browMaleR;
+          const browMesh = new THREE.Mesh(browGeom, browMat);
+          browMesh.userData.sharedGlbGeom = true;
           browMesh.scale.set(1.0, 0.82, 0.72);
 
-          faceGrp.add(sclera, iris, pupil, catchlight, upperLid, lashRim, browMesh);
+          faceGrp.add(sclera, iris, pupil, catchlight, upperLid, blinkLid, lashRim, browMesh);
+        }
+        if (lidList.length === 2) {
+          blinkLids = [lidList[0], lidList[1]];
         }
 
         // Subtle nostril shadows under nose tip (nose tip is at z=0.177)
-        const nostrilMat = makeSkinMat(skinCol.clone().multiplyScalar(0.56).getHex(), appearance, 0.72);
+        const nostrilMat = colorMat(skinCol.clone().multiplyScalar(0.56).getHex(), 0.72, 0.0);
         const nostrilY = isFemaleLook ? 0.0425 : 0.0470;
         const nostrilZ = isFemaleLook ? 0.1635 : 0.1625;
         for (const side of [-1, 1]) {
-          const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.0034, 8, 8), nostrilMat);
+          const nostril = new THREE.Mesh(sGeoms.nostril, nostrilMat);
+          nostril.userData.sharedGlbGeom = true;
           nostril.scale.set(1.1, 0.65, 0.75);
           nostril.position.set(side * 0.0086, nostrilY, nostrilZ);
           faceGrp.add(nostril);
@@ -1684,13 +1842,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           .clone()
           .lerp(new THREE.Color(isFemaleLook ? 0x7d3f36 : 0x6b3b30), isFemaleLook ? 0.56 : 0.44)
           .getHex();
-        const lipMat = new THREE.MeshPhysicalMaterial({
-          color: lipHex,
-          roughness: isFemaleLook ? 0.38 : 0.48,
-          metalness: 0.0,
-          sheen: 0.24,
-          sheenColor: new THREE.Color(0xb86d5e),
-        });
+        const lipMat = colorMat(lipHex, isFemaleLook ? 0.40 : 0.50, 0.0);
         const mouthY = isFemaleLook ? 0.0172 : 0.0252;
         const mouthZ = isFemaleLook ? 0.1552 : 0.1566;
         const upperLipCurve = new THREE.CatmullRomCurve3([
@@ -2079,18 +2231,12 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       if (appearance.hasBeard && !isFemaleLook) {
         const beardGrp = new THREE.Group();
         beardGrp.scale.setScalar(0.01);
-        const beardMat = new THREE.MeshPhysicalMaterial({
-          color: hairCol.getHex(),
-          roughness: 0.86,
-          metalness: 0.0,
-          sheen: 0.24,
-          sheenRoughness: 0.65,
-        });
-        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.056, 18, 14), beardMat);
+        const beardMat = colorMat(hairCol.getHex(), 0.86, 0.0);
+        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.056, 14, 12), beardMat);
         chinBeard.scale.set(1.0, 0.90, 0.84);
         chinBeard.position.set(0, 0.008, 0.116);
         const jawBeard = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.084, 0.068, 0.048, 20, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+          new THREE.CylinderGeometry(0.084, 0.068, 0.048, 16, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
           beardMat
         );
         jawBeard.position.set(0, 0.032, 0.078);
@@ -2103,26 +2249,25 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         const glassGrp = new THREE.Group();
         glassGrp.scale.setScalar(0.01);
         const frameMat = makeMetalMat(0x27272a, appearance, 0.3, 0.75);
-        const lensMat = new THREE.MeshPhysicalMaterial({
-          color: 0xe0f2fe,
-          transparent: true,
-          opacity: 0.28,
-          roughness: 0.08,
-          clearcoat: 1.0,
-        });
+        const lensMat = sMats.glassLens;
         const gEyeX = isFemaleLook ? 0.0462 : 0.0443;
         const gEyeY = isFemaleLook ? 0.1004 : 0.1082;
         const gEyeZ = isFemaleLook ? 0.167 : 0.165;
         for (const side of [-1, 1]) {
-          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.020, 0.0030, 10, 24), frameMat);
+          const rim = new THREE.Mesh(sGeoms.glassRim, frameMat);
+          rim.userData.sharedGlbGeom = true;
           rim.position.set(side * gEyeX, gEyeY, gEyeZ);
-          const lens = new THREE.Mesh(new THREE.CircleGeometry(0.019, 20), lensMat);
+          const lens = new THREE.Mesh(sGeoms.glassLens, lensMat);
+          lens.userData.sharedGlbGeom = true;
+          lens.userData.sharedGlbMat = true;
           lens.position.set(side * gEyeX, gEyeY, gEyeZ);
-          const arm = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.105), frameMat);
+          const arm = new THREE.Mesh(sGeoms.glassArm, frameMat);
+          arm.userData.sharedGlbGeom = true;
           arm.position.set(side * (gEyeX + 0.022), gEyeY, gEyeZ - 0.052);
           glassGrp.add(rim, lens, arm);
         }
-        const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.004, 0.004), frameMat);
+        const bridge = new THREE.Mesh(sGeoms.glassBridge, frameMat);
+        bridge.userData.sharedGlbGeom = true;
         bridge.position.set(0, gEyeY + 0.002, gEyeZ + 0.001);
         glassGrp.add(bridge);
         bones['Head'].bone.add(glassGrp);
@@ -2134,20 +2279,17 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     if (cupAnchor) {
       handCup = new THREE.Group();
       handCup.scale.setScalar(0.01);
-      const cupBody = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.036, 0.025, 0.085, 18),
-        colorMat(0xf8fafc, 0.45, 0.02)
-      );
-      const cupRim = new THREE.Mesh(
-        new THREE.TorusGeometry(0.036, 0.004, 10, 20),
-        colorMat(0x0284c7, 0.35, 0.05)
-      );
+      const cupBody = new THREE.Mesh(sGeoms.cupBody, sMats.cupBody);
+      cupBody.userData.sharedGlbGeom = true;
+      cupBody.userData.sharedGlbMat = true;
+      const cupRim = new THREE.Mesh(sGeoms.cupRim, sMats.cupRim);
+      cupRim.userData.sharedGlbGeom = true;
+      cupRim.userData.sharedGlbMat = true;
       cupRim.rotation.x = Math.PI / 2;
       cupRim.position.y = 0.042;
-      const cupWater = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.032, 0.029, 0.016, 18),
-        colorMat(0x38bdf8, 0.18, 0.05)
-      );
+      const cupWater = new THREE.Mesh(sGeoms.cupWater, sMats.cupWater);
+      cupWater.userData.sharedGlbGeom = true;
+      cupWater.userData.sharedGlbMat = true;
       cupWater.position.y = 0.028;
       handCup.add(cupBody, cupRim, cupWater);
       if (bones['HandR']) {
@@ -2177,20 +2319,17 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
       fileGrip.rotation.set(Math.PI / 2, 0, 0);
 
-      const folderCover = new THREE.Mesh(
-        new THREE.BoxGeometry(0.21, 0.016, 0.27),
-        colorMat(0x0284c7, 0.48, 0.04)
-      );
+      const folderCover = new THREE.Mesh(sGeoms.folderCover, sMats.folderCover);
+      folderCover.userData.sharedGlbGeom = true;
+      folderCover.userData.sharedGlbMat = true;
       folderCover.position.set(0.055, 0, -0.035);
-      const folderPages = new THREE.Mesh(
-        new THREE.BoxGeometry(0.185, 0.01, 0.245),
-        colorMat(0xf8fafc, 0.65, 0.0)
-      );
+      const folderPages = new THREE.Mesh(sGeoms.folderPages, sMats.folderPages);
+      folderPages.userData.sharedGlbGeom = true;
+      folderPages.userData.sharedGlbMat = true;
       folderPages.position.set(0.061, 0.004, -0.027);
-      const folderTab = new THREE.Mesh(
-        new THREE.BoxGeometry(0.06, 0.018, 0.028),
-        colorMat(0xf59e0b, 0.45, 0.02)
-      );
+      const folderTab = new THREE.Mesh(sGeoms.folderTab, sMats.folderTab);
+      folderTab.userData.sharedGlbGeom = true;
+      folderTab.userData.sharedGlbMat = true;
       folderTab.position.set(0.12, 0.002, -0.175);
       fileGrip.add(folderCover, folderPages, folderTab);
       handFile.add(fileGrip);
@@ -2217,6 +2356,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       hitMesh,
       handCup,
       handFile,
+      blinkLids,
       isSkinnedGlb: true,
       hipHeight: measuredHipH,
       heightScale: hScale,
@@ -2327,6 +2467,7 @@ export function animateHumanoid3D(
     actorSeed?: number;
     seatedActivity?: 'idle' | 'typing' | 'writing' | 'glance' | 'rest';
     stairClimb?: number;
+    turnLean?: number;
   }
 ) {
   const {
@@ -2357,13 +2498,29 @@ export function animateHumanoid3D(
     actorSeed = 0,
     seatedActivity = 'idle',
     stairClimb = 0,
+    turnLean = 0,
   } = opts;
 
-  // Individualized phase & cadence so people never breathe, fidget, or glance in lockstep
+  // Individualized phase & cadence so people never breathe, fidget, blink, or glance in lockstep
   const seedMod = Math.abs(actorSeed) % 13;
   const t = timeSec + (actorSeed % 97) * 1.43;
   const breathFreq = 1.42 + seedMod * 0.045;
   const breathWave = Math.sin(t * breathFreq);
+
+  if (rig.blinkLids) {
+    const blinkPeriod = 3.6 + seedMod * 0.22;
+    const cyclePos = t % blinkPeriod;
+    const isDouble = Math.floor(t / blinkPeriod) % 4 === 2;
+    let blinkAmt = 0;
+    if (cyclePos < 0.16) {
+      blinkAmt = Math.sin((cyclePos / 0.16) * Math.PI);
+    } else if (isDouble && cyclePos >= 0.24 && cyclePos < 0.39) {
+      blinkAmt = Math.sin(((cyclePos - 0.24) / 0.15) * Math.PI);
+    }
+    const lidRx = THREE.MathUtils.lerp(-0.98, 0.42, blinkAmt);
+    rig.blinkLids[0].rotation.x = lidRx;
+    rig.blinkLids[1].rotation.x = lidRx;
+  }
 
   rig.selectRing.visible = isSelected;
   if (isSelected) {
@@ -2676,7 +2833,8 @@ export function animateHumanoid3D(
       standWeight * 0.05 +
       (activePickFile ? -0.05 * pickReach * (1 - pickGrasp * 0.7) : 0) +
       (activePlaceFile ? -0.1 * placeReach : 0);
-    const torsoStandZ = -stride * 0.018 * activeBlend - standWeight * 0.042;
+    const walkTurnLean = THREE.MathUtils.clamp(turnLean, -0.09, 0.09) * activeBlend * (1 - sit) * (1 - lie);
+    const torsoStandZ = -stride * 0.018 * activeBlend - standWeight * 0.042 + walkTurnLean;
     const baseTorsoX = THREE.MathUtils.lerp(torsoStandX, sitTorsoX, sit);
     const baseTorsoY = THREE.MathUtils.lerp(torsoStandY, sitTorsoY, sit);
     const baseTorsoZ = THREE.MathUtils.lerp(torsoStandZ, sitTorsoZ, sit);
@@ -2703,7 +2861,11 @@ export function animateHumanoid3D(
       sitTorsoY * 0.45,
       sit
     );
-    const baseChestZ = THREE.MathUtils.lerp(-stride * 0.022 * activeBlend - standWeight * 0.025, -sitTorsoZ * 0.3, sit);
+    const baseChestZ = THREE.MathUtils.lerp(
+      -stride * 0.022 * activeBlend - standWeight * 0.025 + walkTurnLean * 0.55,
+      -sitTorsoZ * 0.3,
+      sit
+    );
     applyCharEuler(
       b['Chest'],
       THREE.MathUtils.lerp(baseChestX, 0.015 + lieBreath * 0.03, lie),
@@ -3039,9 +3201,10 @@ export function animateHumanoid3D(
       ? drinkHeadPitch
       : THREE.MathUtils.lerp(standPitch, sitLookPitch, sit);
     const headTiltZ =
-      activeDrink || activePickFile || activePlaceFile
+      (activeDrink || activePickFile || activePlaceFile
         ? 0
-        : Math.sin(t * 0.37) * 0.035 * (1 - activeBlend * 0.7) * (1 - pushAmt);
+        : Math.sin(t * 0.37) * 0.035 * (1 - activeBlend * 0.7) * (1 - pushAmt)) -
+      walkTurnLean * 0.7;
 
     const baseNeckX = activeDrink
       ? drinkNeckPitch

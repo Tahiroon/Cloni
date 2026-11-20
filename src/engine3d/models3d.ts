@@ -78,6 +78,12 @@ export interface ReceptionDeskRigMeta {
   deskFile: THREE.Group;
 }
 
+export interface FountainRigMeta {
+  arcs: THREE.Mesh[];
+  ripples: THREE.Mesh[];
+  waterMat: THREE.MeshPhysicalMaterial;
+}
+
 export interface ClinicWorldHandle {
   group: THREE.Group;
   doors: ClinicDoorHandle[];
@@ -2641,7 +2647,7 @@ export function buildClinicWorld3D(
     inst.instanceMatrix.needsUpdate = true;
     if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
     inst.computeBoundingSphere();
-    inst.castShadow = true;
+    inst.castShadow = false;
     inst.receiveShadow = true;
     root.add(inst);
   };
@@ -3109,14 +3115,136 @@ export function createCatalogMesh3D(
 
   switch (sprite) {
     case 'treatment_bed': {
-      const glbBed = glbRegistry.cloneNormalized('furn_bed_single', {
-        maxFootprint: { w: 1.72, d: 0.86 },
-        rotY: Math.PI / 2,
-      });
-      if (glbBed) {
-        inner.add(glbBed);
-        box(1.06, 0.02, 0.72, blueUpholstery, 0.16, 0.355, 0);
+      // Authentic hospital & physiotherapy electric hi-lo examination/treatment bed
+      // Head end at -X (-0.86), foot end at +X (+0.86), sitting/lying deck top strictly at y = 0.52
+      const medicalSteel = makeMat({ color: 0xe6ecf2, roughness: 0.36, metalness: 0.22 });
+      const plinthVinyl = makeMat({ color: 0x166982, roughness: 0.44, metalness: 0.04 });
+      const plinthBorder = makeMat({ color: 0x0f4c5c, roughness: 0.52, metalness: 0.06 });
+      const pillowMat = makeMat({ color: 0xe8f4f8, roughness: 0.55, metalness: 0.02 });
+      const paperMat = makeMat({ color: 0xfafcff, roughness: 0.72, metalness: 0.0 });
+      const panelSlate = makeMat({ color: 0x2b3b4e, roughness: 0.42, metalness: 0.14 });
+
+      // 1. Lower powder-coated steel H-base + 4 heavy-duty locking hospital casters
+      for (const bz of [-0.26, 0.26]) {
+        box(1.44, 0.046, 0.078, medicalSteel, 0, 0.122, bz);
       }
+      for (const cxPos of [-0.66, 0.66]) {
+        box(0.088, 0.052, 0.58, medicalSteel, cxPos, 0.125, 0);
+        for (const czPos of [-0.29, 0.29]) {
+          // Swivel fork housing
+          cyl(0.022, 0.026, 0.036, silverMetal, cxPos, 0.088, czPos);
+          // Twin rubber hospital caster wheel
+          const wheel = cyl(0.048, 0.048, 0.034, blackRubber, cxPos, 0.048, czPos);
+          wheel.rotation.x = Math.PI / 2;
+          const hub = cyl(0.024, 0.024, 0.038, silverMetal, cxPos, 0.048, czPos);
+          hub.rotation.x = Math.PI / 2;
+          hub.userData.noCastShadow = true;
+          // Brake pedal tab (emerald/red lock toggle)
+          const brake = box(
+            0.036,
+            0.012,
+            0.018,
+            cxPos > 0 ? emeraldAccent : redAccent,
+            cxPos + (cxPos > 0 ? 0.045 : -0.045),
+            0.088,
+            czPos
+          );
+          brake.rotation.z = cxPos > 0 ? -0.25 : 0.25;
+          brake.userData.noCastShadow = true;
+        }
+      }
+
+      // 2. Twin telescoping electric hydraulic lift columns + X-scissor braces + side foot-control bar
+      for (const colX of [-0.26, 0.28]) {
+        box(0.18, 0.24, 0.22, panelSlate, colX, 0.245, 0);
+        box(0.14, 0.14, 0.18, silverMetal, colX, 0.30, 0);
+      }
+      const scissorA = box(0.76, 0.036, 0.04, silverMetal, 0, 0.25, 0.14);
+      scissorA.rotation.z = 0.34;
+      const scissorB = box(0.76, 0.036, 0.04, silverMetal, 0, 0.25, -0.14);
+      scissorB.rotation.z = -0.34;
+
+      // Side height-control foot pedal bars along front & rear base rails
+      for (const pz of [-0.335, 0.335]) {
+        box(0.44, 0.016, 0.032, silverMetal, 0, 0.116, pz).userData.noCastShadow = true;
+        box(0.075, 0.014, 0.046, cyanAccent, -0.12, 0.122, pz).userData.noCastShadow = true;
+        box(0.075, 0.014, 0.046, darkSlate, 0.12, 0.122, pz).userData.noCastShadow = true;
+      }
+
+      // 3. Upper perimeter chassis deck + 4 soft corner bumper rollers
+      box(1.68, 0.044, 0.76, medicalSteel, 0, 0.394, 0);
+      box(1.56, 0.022, 0.70, panelSlate, 0, 0.368, 0);
+      for (const [rx, rz] of [
+        [-0.85, -0.39],
+        [-0.85, 0.39],
+        [0.85, -0.39],
+        [0.85, 0.39],
+      ]) {
+        const bumper = cyl(0.042, 0.042, 0.026, panelSlate, rx, 0.396, rz);
+        bumper.userData.noCastShadow = true;
+      }
+
+      // 4. Molded hospital headboard (-X) & footboard (+X) with curved grab rails + chart pocket
+      box(0.044, 0.39, 0.78, whiteBody, -0.86, 0.565, 0);
+      box(0.048, 0.056, 0.80, cyanAccent, -0.86, 0.768, 0);
+      box(0.026, 0.09, 0.28, panelSlate, -0.84, 0.69, 0).userData.noCastShadow = true;
+      for (const gz of [-0.34, 0.34]) {
+        cyl(0.016, 0.016, 0.42, silverMetal, -0.86, 0.55, gz);
+      }
+
+      box(0.044, 0.31, 0.78, whiteBody, 0.86, 0.525, 0);
+      box(0.048, 0.052, 0.80, cyanAccent, 0.86, 0.692, 0);
+      for (const gz of [-0.34, 0.34]) {
+        cyl(0.016, 0.016, 0.34, silverMetal, 0.86, 0.51, gz);
+      }
+      // Footboard external clipboard / chart pocket
+      box(0.02, 0.17, 0.23, panelSlate, 0.892, 0.54, 0).userData.noCastShadow = true;
+      box(0.008, 0.145, 0.19, paperMat, 0.903, 0.545, 0).userData.noCastShadow = true;
+
+      // 5. Telescoping split hospital safety rails (retracted smoothly below mattress top for easy transfer/sitting)
+      for (const sz of [-0.408, 0.408]) {
+        // Upper torso folded rail + pivot arms + teal release handle
+        box(0.62, 0.024, 0.024, whiteBody, -0.34, 0.445, sz);
+        box(0.62, 0.02, 0.02, silverMetal, -0.34, 0.355, sz);
+        for (const px of [-0.56, -0.12]) {
+          cyl(0.012, 0.012, 0.12, silverMetal, px, 0.40, sz).userData.noCastShadow = true;
+        }
+        box(0.09, 0.026, 0.028, cyanAccent, -0.34, 0.46, sz).userData.noCastShadow = true;
+
+        // Lower leg folded rail segment
+        box(0.56, 0.022, 0.024, whiteBody, 0.38, 0.44, sz);
+        box(0.56, 0.018, 0.02, silverMetal, 0.38, 0.355, sz);
+        for (const px of [0.18, 0.58]) {
+          cyl(0.012, 0.012, 0.11, silverMetal, px, 0.398, sz).userData.noCastShadow = true;
+        }
+      }
+
+      // 6. Antimicrobial medical vinyl multi-section mattress (main flat deck top strictly at y = 0.52)
+      box(1.62, 0.024, 0.74, plinthBorder, -0.01, 0.428, 0);
+      // Main torso & leg deck: center y=0.475, h=0.09 -> top = 0.520!
+      box(1.06, 0.09, 0.72, plinthVinyl, 0.25, 0.475, 0);
+      // Articulated knee-break seam crease
+      box(0.014, 0.092, 0.726, plinthBorder, 0.32, 0.476, 0).userData.noCastShadow = true;
+      // Gently angled head/backrest cushion (+6.5° incline toward headboard)
+      const backrestDeck = box(0.54, 0.088, 0.72, plinthVinyl, -0.53, 0.492, 0);
+      backrestDeck.rotation.z = -0.105;
+      // Rounded plush side bolsters along the mattress edges
+      for (const mz of [-0.358, 0.358]) {
+        const edgeBolster = cyl(0.024, 0.024, 1.56, plinthVinyl, 0, 0.502, mz);
+        edgeBolster.rotation.z = Math.PI / 2;
+        edgeBolster.userData.noCastShadow = true;
+      }
+
+      // Contoured clinical headrest pillow at -X head end
+      const pillow = box(0.24, 0.042, 0.44, pillowMat, -0.66, 0.556, 0);
+      pillow.rotation.z = -0.09;
+      pillow.userData.noCastShadow = true;
+
+      // Sanitary paper roll bar under head + draped white exam paper sheet over center deck
+      const paperRoll = cyl(0.036, 0.036, 0.56, paperMat, -0.78, 0.455, 0);
+      paperRoll.rotation.x = Math.PI / 2;
+      paperRoll.userData.noCastShadow = true;
+      box(0.76, 0.005, 0.56, paperMat, 0.10, 0.522, 0).userData.noCastShadow = true;
       break;
     }
 
@@ -5242,6 +5370,8 @@ export function createCatalogMesh3D(
         transparent: true,
         opacity: 0.84,
         clearcoat: 1.0,
+        normalMap: textures.waterNormal,
+        normalScale: new THREE.Vector2(0.55, 0.55),
       });
       const poolDisk = cyl(0.39, 0.39, 0.06, waterPoolMat, 0, 0.2, 0);
       poolDisk.userData.noCastShadow = true;
@@ -5264,6 +5394,7 @@ export function createCatalogMesh3D(
       inner.add(finialOrb);
 
       // 4 Translucent arcing water jets cascading from upper bowl
+      const fountainArcs: THREE.Mesh[] = [];
       for (let wi = 0; wi < 4; wi++) {
         const wa = (wi / 4) * Math.PI * 2 + 0.3;
         const arc = tube(
@@ -5277,6 +5408,26 @@ export function createCatalogMesh3D(
           8
         );
         arc.userData.noCastShadow = true;
+        fountainArcs.push(arc);
+      }
+
+      // 2 Subtle expanding water ripple rings across basin surface
+      const fountainRipples: THREE.Mesh[] = [];
+      const rippleGeom = new THREE.RingGeometry(0.11, 0.135, 20);
+      for (let ri = 0; ri < 2; ri++) {
+        const rippleMat = new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.32,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        const rippleMesh = new THREE.Mesh(rippleGeom, rippleMat);
+        rippleMesh.rotation.x = -Math.PI / 2;
+        rippleMesh.position.y = 0.233;
+        rippleMesh.userData.noCastShadow = true;
+        inner.add(rippleMesh);
+        fountainRipples.push(rippleMesh);
       }
 
       addFloorHalo(2.15, 0x38bdf8, 0.44, 0, 0.026, 0);
@@ -5288,6 +5439,11 @@ export function createCatalogMesh3D(
         haloMats,
         haloMaxOpacities,
       } as SmartLightMeta;
+      outer.userData.fountain = {
+        arcs: fountainArcs,
+        ripples: fountainRipples,
+        waterMat: waterPoolMat,
+      } as FountainRigMeta;
       break;
     }
 

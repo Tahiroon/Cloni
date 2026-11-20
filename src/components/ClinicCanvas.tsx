@@ -21,6 +21,7 @@ import {
   getCabinetApproachPoints,
   getReceptionDeskPose,
   getSurfaceElevation,
+  getTreatmentBedPose,
   getValidWallRotationsForTile,
   hasContinuousLineOfSight,
   isInSolarZone,
@@ -49,6 +50,7 @@ import {
   createCatalogMesh3D,
   disposeObject3D,
   DoorActorInput,
+  FountainRigMeta,
   ReceptionDeskRigMeta,
   SmartLightMeta,
   updateDoors3D,
@@ -226,10 +228,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pointerSurfaceRef = useRef<HTMLDivElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [zoomUi, setZoomUi] = useState(DEFAULT_ZOOM);
   const [glbsReady, setGlbsReady] = useState<boolean>(() => glbRegistry.ready);
-  const zoomUiRef = useRef(DEFAULT_ZOOM);
-  zoomUiRef.current = zoomUi;
+  const preFocusZoomRef = useRef<number | null>(null);
   const hoveredEditItemIdRef = useRef<string | null>(null);
   const draggingDraftActiveRef = useRef(false);
   const liveDragDraftRef = useRef<PlacementDraft | null>(null);
@@ -364,7 +364,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     placementDraft,
     editMode,
     language,
-    zoomUi,
     lightingMode,
     removedTreeIds,
     selectedTreeId,
@@ -392,7 +391,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     placementDraft,
     editMode,
     language,
-    zoomUi,
     lightingMode,
     removedTreeIds,
     selectedTreeId,
@@ -414,6 +412,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     targetZ: 12.8,
     curX: 13.2,
     curZ: 12.8,
+    panVelX: 0,
+    panVelZ: 0,
     targetZoom: DEFAULT_ZOOM,
     curZoom: DEFAULT_ZOOM,
     targetYaw: Math.PI / 4, // 45deg architectural angle
@@ -442,16 +442,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
   useEffect(() => {
     if (focusedPatientId) {
-      const p = patients.find((pt) => pt.id === focusedPatientId);
+      if (preFocusZoomRef.current === null) {
+        preFocusZoomRef.current = camStateRef.current.targetZoom;
+      }
+      camStateRef.current.panVelX = 0;
+      camStateRef.current.panVelZ = 0;
+      camStateRef.current.targetZoom = 1.85;
+      const p = latestRef.current.patients.find((pt) => pt.id === focusedPatientId);
       if (p) {
         camStateRef.current.targetX = p.gridX + 0.5;
         camStateRef.current.targetZ = p.gridY + 0.5;
-        camStateRef.current.targetZoom = 1.85;
       }
-    } else {
-      camStateRef.current.targetZoom = zoomUi;
+    } else if (preFocusZoomRef.current !== null) {
+      camStateRef.current.targetZoom = preFocusZoomRef.current;
+      preFocusZoomRef.current = null;
     }
-  }, [focusedPatientId, patients, zoomUi]);
+  }, [focusedPatientId]);
 
   // Frame newly initiated placement drafts smoothly when placed in the rear solar zone or far perimeter
   const draftIdentityKey = placementDraft
@@ -508,9 +514,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const getTargetDpr = (w: number, h: number) => {
       if (isSoftwareGl) return 1;
       const rawDpr = window.devicePixelRatio || 1;
-      const baseDpr = isMobileGpu
-        ? Math.min(Math.max(rawDpr, 1.25), 1.75)
-        : Math.min(Math.max(rawDpr, 1.5), 2.0);
+      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.5) : Math.min(rawDpr, 2.0);
       return Math.min(baseDpr, maxSurfaceSize / Math.max(1, w, h));
     };
     const dpr = getTargetDpr(initW, initH);
@@ -551,6 +555,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const shadowRes = Math.min(2048, maxTexSize);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
+      sunLight.shadow.radius = 2.4;
       sunLight.shadow.camera.near = 6;
       sunLight.shadow.camera.far = 90;
       sunLight.shadow.camera.left = -18;
@@ -655,6 +660,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         rig: HumanoidRig;
         visX: number;
         visZ: number;
+        leadX: number;
+        leadZ: number;
+        lastLogicalX: number;
+        lastLogicalZ: number;
         groundY: number;
         stairClimb: number;
         vx: number;
@@ -665,6 +674,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         lieBlend: number;
         doorPush: number;
         facingRad: number;
+        turnLean: number;
         actorSeed: number;
         bedStationId?: string;
         bedPhase?: 'to_edge' | 'sit_edge' | 'reclining' | 'lying';
@@ -708,6 +718,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         sitBlend: number;
         doorPush: number;
         facingRad: number;
+        turnLean: number;
         ignoreItemId?: string;
         actorSeed: number;
         recMode?:
@@ -785,6 +796,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       sitBlend: number;
       doorPush: number;
       facingRad: number;
+      turnLean: number;
       subOffX: number;
       subOffZ: number;
       seatedMode?: boolean;
@@ -924,6 +936,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           sitBlend: 0,
           doorPush: 0,
           facingRad: Math.random() * Math.PI * 2 - Math.PI,
+          turnLean: 0,
           subOffX: (Math.random() - 0.5) * 0.26,
           subOffZ: (Math.random() - 0.5) * 0.26,
           progressTimer: 0,
@@ -1555,14 +1568,20 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     draftLayer.add(draftPadMesh);
 
     let nightBlend = latestRef.current.lightingMode === 'night' ? 1 : 0;
+    let lastNightBlend = -1;
+    let atmoDirty = true;
+    let wasNightActive = nightBlend > 0.005;
     const _dayTop = new THREE.Color(0x4b7cb3);
     const _nightTop = new THREE.Color(0x0c1b3a);
     const _dayHor = new THREE.Color(0xd2e0ec);
     const _nightHor = new THREE.Color(0x1a325c);
+    const _duskHor = new THREE.Color(0xe8a882);
     const _dayFog = new THREE.Color(0xd2e0ec);
     const _nightFog = new THREE.Color(0x132648);
+    const _duskFog = new THREE.Color(0xdcc2b4);
     const _daySun = new THREE.Color(0xfff1dc);
     const _moonSun = new THREE.Color(0xa8c8ff);
+    const _duskSun = new THREE.Color(0xffb478);
     const _dayHemiSky = new THREE.Color(0xc6dcf0);
     const _nightHemiSky = new THREE.Color(0x3b63a8);
     const _dayHemiGround = new THREE.Color(0x4b5c34);
@@ -1655,47 +1674,110 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const targetNight = latestRef.current.lightingMode === 'night' ? 1 : 0;
       nightBlend = THREE.MathUtils.damp(nightBlend, targetNight, 4.2, dt);
 
-      sunLight.color.copy(_daySun).lerp(_moonSun, nightBlend);
-      sunLight.intensity = THREE.MathUtils.lerp(1.48, 0.64, nightBlend);
-      sunLight.position.set(
-        THREE.MathUtils.lerp(25, -22, nightBlend),
-        THREE.MathUtils.lerp(32, 26, nightBlend),
-        THREE.MathUtils.lerp(18, -18, nightBlend)
-      );
-
-      hemi.color.copy(_dayHemiSky).lerp(_nightHemiSky, nightBlend);
-      hemi.groundColor.copy(_dayHemiGround).lerp(_nightHemiGround, nightBlend);
-      hemi.intensity = THREE.MathUtils.lerp(0.56, 0.48, nightBlend);
-
-      fillLight.color.copy(_dayFill).lerp(_nightFill, nightBlend);
-      fillLight.intensity = 0.26;
-      if (rimLight) {
-        rimLight.intensity = THREE.MathUtils.lerp(0.34, 0.18, nightBlend);
-      }
-
-      scene.environmentIntensity = THREE.MathUtils.lerp(0.54, 0.26, nightBlend);
-      renderer.toneMappingExposure = THREE.MathUtils.lerp(0.94, 1.08, nightBlend);
-      if (bloomPass) {
-        bloomPass.strength = THREE.MathUtils.lerp(0.07, 0.16, nightBlend);
-      }
-
-      const fog = scene.fog as THREE.Fog;
-      fog.color.copy(_dayFog).lerp(_nightFog, nightBlend);
-      fog.near = THREE.MathUtils.lerp(55, 58, nightBlend);
-      fog.far = THREE.MathUtils.lerp(95, 108, nightBlend);
-
       if (worldHandle) {
-        worldHandle.skyUniforms.uTopColor.value.copy(_dayTop).lerp(_nightTop, nightBlend);
-        worldHandle.skyUniforms.uHorizonColor.value.copy(_dayHor).lerp(_nightHor, nightBlend);
-        worldHandle.skyUniforms.uNightFactor.value = nightBlend;
         worldHandle.skyUniforms.uTime.value = timeSec;
-
-        worldHandle.villaWinMat.emissiveIntensity = 0.05 + nightBlend * 1.65;
-        worldHandle.interiorCoveMat.emissiveIntensity = 0.08 + nightBlend * 1.15;
-        worldHandle.entranceSconceMat.emissiveIntensity = 0.06 + nightBlend * 1.55;
-        worldHandle.facadeSignMat.emissiveIntensity = 0.1 + nightBlend * 1.45;
-        worldHandle.pillarLanternMat.emissiveIntensity = 0.06 + nightBlend * 0.85;
       }
+
+      const blendChanged = Math.abs(nightBlend - lastNightBlend) > 1e-4;
+      if (atmoDirty || blendChanged) {
+        lastNightBlend = nightBlend;
+        const duskFactor = Math.sin(nightBlend * Math.PI);
+
+        sunLight.color.copy(_daySun).lerp(_moonSun, nightBlend).lerp(_duskSun, duskFactor * 0.42);
+        sunLight.intensity = THREE.MathUtils.lerp(1.48, 0.64, nightBlend);
+        sunLight.position.set(
+          THREE.MathUtils.lerp(25, -22, nightBlend),
+          THREE.MathUtils.lerp(32, 26, nightBlend),
+          THREE.MathUtils.lerp(18, -18, nightBlend)
+        );
+
+        hemi.color.copy(_dayHemiSky).lerp(_nightHemiSky, nightBlend);
+        hemi.groundColor.copy(_dayHemiGround).lerp(_nightHemiGround, nightBlend);
+        hemi.intensity = THREE.MathUtils.lerp(0.56, 0.48, nightBlend);
+
+        fillLight.color.copy(_dayFill).lerp(_nightFill, nightBlend);
+        fillLight.intensity = 0.26;
+        if (rimLight) {
+          rimLight.intensity = THREE.MathUtils.lerp(0.34, 0.18, nightBlend);
+        }
+
+        scene.environmentIntensity = THREE.MathUtils.lerp(0.54, 0.26, nightBlend);
+        renderer.toneMappingExposure = THREE.MathUtils.lerp(0.94, 1.08, nightBlend);
+        if (bloomPass) {
+          bloomPass.strength =
+            nightBlend <= 0.015 ? 0 : THREE.MathUtils.lerp(0.0, 0.17, (nightBlend - 0.015) / 0.985);
+        }
+
+        const fog = scene.fog as THREE.Fog;
+        fog.color.copy(_dayFog).lerp(_nightFog, nightBlend).lerp(_duskFog, duskFactor * 0.35);
+        fog.near = THREE.MathUtils.lerp(55, 58, nightBlend);
+        fog.far = THREE.MathUtils.lerp(95, 108, nightBlend);
+
+        if (worldHandle) {
+          worldHandle.skyUniforms.uTopColor.value.copy(_dayTop).lerp(_nightTop, nightBlend);
+          worldHandle.skyUniforms.uHorizonColor.value
+            .copy(_dayHor)
+            .lerp(_nightHor, nightBlend)
+            .lerp(_duskHor, duskFactor * 0.42);
+          worldHandle.skyUniforms.uNightFactor.value = nightBlend;
+
+          worldHandle.villaWinMat.emissiveIntensity = 0.05 + nightBlend * 1.65;
+          worldHandle.interiorCoveMat.emissiveIntensity = 0.08 + nightBlend * 1.15;
+          worldHandle.entranceSconceMat.emissiveIntensity = 0.06 + nightBlend * 1.55;
+          worldHandle.facadeSignMat.emissiveIntensity = 0.1 + nightBlend * 1.45;
+          worldHandle.pillarLanternMat.emissiveIntensity = 0.06 + nightBlend * 0.85;
+        }
+      }
+
+      if (nightBlend <= 0.005) {
+        if (wasNightActive || atmoDirty) {
+          if (worldHandle) {
+            for (const roomMat of worldHandle.roomLightMats.values()) {
+              roomMat.emissiveIntensity = 0.04;
+            }
+            for (const washMat of worldHandle.roomWashMats.values()) {
+              washMat.opacity = 0;
+            }
+            for (const poolMat of worldHandle.roomPoolMats.values()) {
+              poolMat.opacity = 0;
+            }
+          }
+          for (const entry of itemMeshes.values()) {
+            const meta = entry.mesh.userData.smartLight as SmartLightMeta | undefined;
+            if (!meta) continue;
+            const dayGlow =
+              meta.kind === 'street_lamp' || meta.kind === 'garden_lamp'
+                ? 0.08
+                : meta.kind === 'indoor_lamp' || meta.kind === 'wall_lamp'
+                  ? 0.06
+                  : 0.1;
+            for (const mat of meta.emissiveMats) {
+              mat.emissiveIntensity = dayGlow;
+            }
+            if (meta.haloMats) {
+              for (let hi = 0; hi < meta.haloMats.length; hi++) {
+                meta.haloMats[hi].opacity = 0;
+              }
+            }
+          }
+          let anyLightLit = false;
+          for (let i = 0; i < smartLightPool.length; i++) {
+            const pl = smartLightPool[i];
+            if (pl.intensity > 0.002) {
+              pl.intensity = THREE.MathUtils.damp(pl.intensity, 0, 8.5, dt);
+              anyLightLit = true;
+            } else {
+              pl.intensity = 0;
+            }
+          }
+          wasNightActive = anyLightLit;
+        }
+        atmoDirty = false;
+        return;
+      }
+
+      wasNightActive = true;
+      atmoDirty = false;
 
       _roomTargetsScratch.length = 0;
       _lampTargetsScratch.length = 0;
@@ -1705,104 +1787,92 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const camCx = camStateRef.current.curX;
       const camCz = camStateRef.current.curZ;
 
-      if (nightBlend > 0.005) {
-        // 1. Smart side-wall sconce illumination:
-        //    - Occupied rooms illuminate warmly right from their side wall sconces (1 PointLight + additive wall/floor wash)
-        //    - Empty unlocked rooms glow softly via 0-shader-cost wall-wash & floor-spill halos (saves mobile GPU!)
-        //    - Locked rooms stay off
-        for (const room of curRooms) {
-          const roomMat = worldHandle?.roomLightMats.get(room.id);
-          const washMat = worldHandle?.roomWashMats.get(room.id);
-          const poolMat = worldHandle?.roomPoolMats.get(room.id);
-          if (!room.unlocked) {
-            if (roomMat) roomMat.emissiveIntensity = 0;
-            if (washMat) washMat.opacity = 0;
-            if (poolMat) poolMat.opacity = 0;
-            continue;
-          }
-
-          const occupiedByPatient = curPatients.some(
-            (pt) =>
-              pt.state !== 'treated_leaving' &&
-              pt.gridX + 0.5 >= room.minX - 0.3 &&
-              pt.gridX + 0.5 <= room.maxX + 1.3 &&
-              pt.gridY + 0.5 >= room.minY - 0.3 &&
-              pt.gridY + 0.5 <= room.maxY + 1.3
-          );
-          const occupiedByStaff =
-            curStaff.some((st) => {
-              if (!st.hired) return false;
-              const rigEntry = staffRigs.get(st.id);
-              const sx = rigEntry ? rigEntry.gx + 0.5 : st.gridX + 0.5;
-              const sz = rigEntry ? rigEntry.gy + 0.5 : st.gridY + 0.5;
-              return (
-                sx >= room.minX - 0.3 &&
-                sx <= room.maxX + 1.3 &&
-                sz >= room.minY - 0.3 &&
-                sz <= room.maxY + 1.3
-              );
-            }) ||
-            (() => {
-              const pRig = staffRigs.get('player_main');
-              if (!pRig) return false;
-              const sx = pRig.gx + 0.5;
-              const sz = pRig.gy + 0.5;
-              return (
-                sx >= room.minX - 0.3 &&
-                sx <= room.maxX + 1.3 &&
-                sz >= room.minY - 0.3 &&
-                sz <= room.maxY + 1.3
-              );
-            })();
-          const isOccupied = occupiedByPatient || occupiedByStaff;
-
-          if (roomMat) {
-            roomMat.emissiveIntensity = (isOccupied ? 2.05 : 0.72) * nightBlend;
-          }
-          if (washMat) {
-            washMat.color.setHex(isOccupied ? 0xffd79e : 0xbddcff);
-            washMat.opacity = (isOccupied ? 0.48 : 0.3) * nightBlend;
-          }
-          if (poolMat) {
-            poolMat.color.setHex(isOccupied ? 0xffd79e : 0xbddcff);
-            poolMat.opacity = (isOccupied ? 0.34 : 0.22) * nightBlend;
-          }
-
-          if (isOccupied) {
-            const anchor = worldHandle?.roomSconceAnchors.get(room.id);
-            pushRoomTarget(
-              anchor ? anchor.x : room.minX + 1.2,
-              anchor ? anchor.y : 2.1,
-              anchor ? anchor.z : (room.minY + room.maxY + 1) / 2,
-              0xfff2d8,
-              14.5 * nightBlend,
-              16.5,
-              0.95
-            );
-          }
+      // 1. Smart side-wall sconce illumination:
+      //    - Occupied rooms illuminate warmly right from their side wall sconces (1 PointLight + additive wall/floor wash)
+      //    - Empty unlocked rooms glow softly via 0-shader-cost wall-wash & floor-spill halos (saves mobile GPU!)
+      //    - Locked rooms stay off
+      for (const room of curRooms) {
+        const roomMat = worldHandle?.roomLightMats.get(room.id);
+        const washMat = worldHandle?.roomWashMats.get(room.id);
+        const poolMat = worldHandle?.roomPoolMats.get(room.id);
+        if (!room.unlocked) {
+          if (roomMat) roomMat.emissiveIntensity = 0;
+          if (washMat) washMat.opacity = 0;
+          if (poolMat) poolMat.opacity = 0;
+          continue;
         }
 
-        // 2. Architectural entrance canopy sconce illuminating the courtyard steps & facade
-        pushRoomTarget(
-          22.45,
-          2.85 + CLINIC_FLOOR_ELEV,
-          15.0,
-          0xffd796,
-          4.8 * nightBlend,
-          10.0,
-          1.05
+        const occupiedByPatient = curPatients.some(
+          (pt) =>
+            pt.state !== 'treated_leaving' &&
+            pt.gridX + 0.5 >= room.minX - 0.3 &&
+            pt.gridX + 0.5 <= room.maxX + 1.3 &&
+            pt.gridY + 0.5 >= room.minY - 0.3 &&
+            pt.gridY + 0.5 <= room.maxY + 1.3
         );
-      } else if (worldHandle) {
-        for (const roomMat of worldHandle.roomLightMats.values()) {
-          roomMat.emissiveIntensity = 0.04;
+        const occupiedByStaff =
+          curStaff.some((st) => {
+            if (!st.hired) return false;
+            const rigEntry = staffRigs.get(st.id);
+            const sx = rigEntry ? rigEntry.gx + 0.5 : st.gridX + 0.5;
+            const sz = rigEntry ? rigEntry.gy + 0.5 : st.gridY + 0.5;
+            return (
+              sx >= room.minX - 0.3 &&
+              sx <= room.maxX + 1.3 &&
+              sz >= room.minY - 0.3 &&
+              sz <= room.maxY + 1.3
+            );
+          }) ||
+          (() => {
+            const pRig = staffRigs.get('player_main');
+            if (!pRig) return false;
+            const sx = pRig.gx + 0.5;
+            const sz = pRig.gy + 0.5;
+            return (
+              sx >= room.minX - 0.3 &&
+              sx <= room.maxX + 1.3 &&
+              sz >= room.minY - 0.3 &&
+              sz <= room.maxY + 1.3
+            );
+          })();
+        const isOccupied = occupiedByPatient || occupiedByStaff;
+
+        if (roomMat) {
+          roomMat.emissiveIntensity = (isOccupied ? 2.05 : 0.72) * nightBlend;
         }
-        for (const washMat of worldHandle.roomWashMats.values()) {
-          washMat.opacity = 0;
+        if (washMat) {
+          washMat.color.setHex(isOccupied ? 0xffd79e : 0xbddcff);
+          washMat.opacity = (isOccupied ? 0.48 : 0.3) * nightBlend;
         }
-        for (const poolMat of worldHandle.roomPoolMats.values()) {
-          poolMat.opacity = 0;
+        if (poolMat) {
+          poolMat.color.setHex(isOccupied ? 0xffd79e : 0xbddcff);
+          poolMat.opacity = (isOccupied ? 0.34 : 0.22) * nightBlend;
+        }
+
+        if (isOccupied) {
+          const anchor = worldHandle?.roomSconceAnchors.get(room.id);
+          pushRoomTarget(
+            anchor ? anchor.x : room.minX + 1.2,
+            anchor ? anchor.y : 2.1,
+            anchor ? anchor.z : (room.minY + room.maxY + 1) / 2,
+            0xfff2d8,
+            14.5 * nightBlend,
+            16.5,
+            0.95
+          );
         }
       }
+
+      // 2. Architectural entrance canopy sconce illuminating the courtyard steps & facade
+      pushRoomTarget(
+        22.45,
+        2.85 + CLINIC_FLOOR_ELEV,
+        15.0,
+        0xffd796,
+        4.8 * nightBlend,
+        10.0,
+        1.05
+      );
 
       // 3. Player-purchased indoor & outdoor smart lamps (100% get emissive + baked additive floor/wall halos; closest get PBR PointLights)
       for (const entry of itemMeshes.values()) {
@@ -1823,88 +1893,85 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         if (meta.haloMats && meta.haloMaxOpacities) {
           for (let hi = 0; hi < meta.haloMats.length; hi++) {
-            meta.haloMats[hi].opacity =
-              nightBlend > 0.005 ? (meta.haloMaxOpacities[hi] ?? 0.35) * nightBlend : 0;
+            meta.haloMats[hi].opacity = (meta.haloMaxOpacities[hi] ?? 0.35) * nightBlend;
           }
         }
 
-        if (nightBlend > 0.005) {
-          _lightWorldPos
-            .set(meta.localPos[0], meta.localPos[1], meta.localPos[2])
-            .applyQuaternion(entry.mesh.quaternion)
-            .add(entry.mesh.position);
+        _lightWorldPos
+          .set(meta.localPos[0], meta.localPos[1], meta.localPos[2])
+          .applyQuaternion(entry.mesh.quaternion)
+          .add(entry.mesh.position);
 
-          const distSq =
-            (_lightWorldPos.x - camCx) * (_lightWorldPos.x - camCx) +
-            (_lightWorldPos.z - camCz) * (_lightWorldPos.z - camCz);
+        const distSq =
+          (_lightWorldPos.x - camCx) * (_lightWorldPos.x - camCx) +
+          (_lightWorldPos.z - camCz) * (_lightWorldPos.z - camCz);
 
-          if (meta.kind === 'street_lamp') {
-            pushLampTarget(
-              distSq * 0.8,
-              _lightWorldPos.x,
-              _lightWorldPos.y,
-              _lightWorldPos.z,
-              0xffd591,
-              16.0 * nightBlend,
-              19.0,
-              1.0
-            );
-          } else if (meta.kind === 'garden_lamp') {
-            pushLampTarget(
-              distSq + 10,
-              _lightWorldPos.x,
-              _lightWorldPos.y,
-              _lightWorldPos.z,
-              0xffcc78,
-              11.0 * nightBlend,
-              13.5,
-              1.02
-            );
-          } else if (meta.kind === 'indoor_lamp') {
-            pushLampTarget(
-              distSq + 16,
-              _lightWorldPos.x,
-              _lightWorldPos.y,
-              _lightWorldPos.z,
-              0xffe8bf,
-              8.5 * nightBlend,
-              11.5,
-              1.02
-            );
-          } else if (meta.kind === 'wall_lamp') {
-            pushLampTarget(
-              distSq + 18,
-              _lightWorldPos.x,
-              _lightWorldPos.y,
-              _lightWorldPos.z,
-              0xffd79e,
-              7.2 * nightBlend,
-              10.5,
-              1.04
-            );
-          } else if (meta.kind === 'ir_lamp') {
-            pushLampTarget(
-              distSq + 24,
-              _lightWorldPos.x,
-              _lightWorldPos.y,
-              _lightWorldPos.z,
-              0xff6b5a,
-              5.2 * nightBlend,
-              7.5,
-              1.08
-            );
-          } else {
-            pushLampTarget(
-              distSq + 36,
-              _lightWorldPos.x,
-              _lightWorldPos.y,
-              _lightWorldPos.z,
-              0x38bdf8,
-              5.5 * nightBlend,
-              9.0,
-              1.08
-            );
-          }
+        if (meta.kind === 'street_lamp') {
+          pushLampTarget(
+            distSq * 0.8,
+            _lightWorldPos.x,
+            _lightWorldPos.y,
+            _lightWorldPos.z,
+            0xffd591,
+            16.0 * nightBlend,
+            19.0,
+            1.0
+          );
+        } else if (meta.kind === 'garden_lamp') {
+          pushLampTarget(
+            distSq + 10,
+            _lightWorldPos.x,
+            _lightWorldPos.y,
+            _lightWorldPos.z,
+            0xffcc78,
+            11.0 * nightBlend,
+            13.5,
+            1.02
+          );
+        } else if (meta.kind === 'indoor_lamp') {
+          pushLampTarget(
+            distSq + 16,
+            _lightWorldPos.x,
+            _lightWorldPos.y,
+            _lightWorldPos.z,
+            0xffe8bf,
+            8.5 * nightBlend,
+            11.5,
+            1.02
+          );
+        } else if (meta.kind === 'wall_lamp') {
+          pushLampTarget(
+            distSq + 18,
+            _lightWorldPos.x,
+            _lightWorldPos.y,
+            _lightWorldPos.z,
+            0xffd79e,
+            7.2 * nightBlend,
+            10.5,
+            1.04
+          );
+        } else if (meta.kind === 'ir_lamp') {
+          pushLampTarget(
+            distSq + 24,
+            _lightWorldPos.x,
+            _lightWorldPos.y,
+            _lightWorldPos.z,
+            0xff6b5a,
+            5.2 * nightBlend,
+            7.5,
+            1.08
+          );
+        } else {
+          pushLampTarget(
+            distSq + 36,
+            _lightWorldPos.x,
+            _lightWorldPos.y,
+            _lightWorldPos.z,
+            0x38bdf8,
+            5.5 * nightBlend,
+            9.0,
+            1.08
+          );
         }
       }
 
@@ -1953,6 +2020,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
       worldHandle = buildClinicWorld3D(nextRooms, textures, nextRemovedTreeIds);
       worldLayer.add(worldHandle.group);
+      atmoDirty = true;
       updateAtmosphereAndLights(performance.now() * 0.001, 0.05);
     };
 
@@ -1982,6 +2050,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
     let hasPlacedDisplayKiosk = false;
     let hasDraftDisplayKiosk = false;
+    const animatedFountains: FountainRigMeta[] = [];
 
     const isInsideClinicTile = (gx: number, gy: number) =>
       gx >= 1.98 && gx < 22 && gy >= 1.98 && gy < 22;
@@ -2031,7 +2100,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           itemMeshes.delete(id);
         }
       }
+      animatedFountains.length = 0;
+      for (const entry of itemMeshes.values()) {
+        const f = entry.mesh.userData.fountain as FountainRigMeta | undefined;
+        if (f) animatedFountains.push(f);
+      }
       hasPlacedDisplayKiosk = foundKiosk;
+      atmoDirty = true;
     };
 
     const syncDraft = (draft: PlacementDraft | null) => {
@@ -2486,7 +2561,29 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     let disposed = false;
     let rafId = 0;
     let lastMs = performance.now();
+    const doorActorsPool: DoorActorInput[] = [];
     const doorActorsScratch: DoorActorInput[] = [];
+    const activePatientIds = new Set<string>();
+    const activeStaffIds = new Set<string>();
+    const playerStaffSpec: StaffMember = {
+      id: 'player_main',
+      role: 'therapist',
+      nameAr: 'طالب ثيراسون',
+      nameEn: 'Therason Student',
+      hired: true,
+      hireCost: 0,
+      gridX: 7,
+      gridY: 14,
+      targetX: 7,
+      targetY: 14,
+      path: [],
+      skinTone: PLAYER_DEFAULT_SKIN,
+      hairColor: '#18100c',
+      scrubColor: '#0284c7',
+      facing: 1,
+      walkPhase: 0,
+      state: 'idle',
+    };
 
     let cachedUnlockedRoomsSig = '';
     const cachedUnlockedRoomsSet = new Set<string>();
@@ -2635,7 +2732,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         wc.returnedCup.visible = keepReturn !== undefined && timeSec < keepReturn;
       }
 
-      const activePatientIds = new Set<string>();
+      activePatientIds.clear();
       for (const p of curPatients) {
         activePatientIds.add(p.id);
         let entry = patientRigs.get(p.id);
@@ -2662,6 +2759,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             rig,
             visX: p.gridX + 0.5,
             visZ: p.gridY + 0.5,
+            leadX: p.gridX,
+            leadZ: p.gridY,
+            lastLogicalX: p.gridX,
+            lastLogicalZ: p.gridY,
             groundY: getSurfaceElevation(p.gridX + 0.5, p.gridY + 0.5).actorY,
             stairClimb: 0,
             vx: 0,
@@ -2672,14 +2773,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             lieBlend: 0,
             doorPush: 0,
             facingRad: -Math.PI / 2,
+            turnLean: 0,
             actorSeed:
               p.id.split('').reduce((acc, ch) => acc * 31 + ch.charCodeAt(0), 7) & 0xffff,
           };
           patientRigs.set(p.id, entry);
+        } else if (p.gridX !== entry.lastLogicalX || p.gridY !== entry.lastLogicalZ) {
+          entry.leadX = p.gridX;
+          entry.leadZ = p.gridY;
+          entry.lastLogicalX = p.gridX;
+          entry.lastLogicalZ = p.gridY;
         }
 
         const isAtStation =
-          p.state === 'ready_for_exam' || p.state === 'in_exam' || p.state === 'in_treatment';
+          (p.state === 'ready_for_exam' || p.state === 'in_exam' || p.state === 'in_treatment') &&
+          p.path.length === 0;
         const station = p.assignedStationId
           ? curItems.find((it) => it.instanceId === p.assignedStationId)
           : null;
@@ -2705,9 +2813,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 ? 0.45
                 : spr === 'tilt_table'
                   ? 0.6
-                  : glbRegistry.ready
-                    ? 0.365
-                    : 0.575;
+                  : 0.52;
         const lyingHeight =
           spr === 'tilt_table' ? 0.82 : bedMattressTop + 0.145;
         const bedBodyZOffset =
@@ -2722,8 +2828,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const seatItemId = p.waitingSeatKey
           ? p.waitingSeatKey.slice(0, p.waitingSeatKey.lastIndexOf('_'))
           : undefined;
-        const seatWorldX = p.gridX + 0.5 + (p.seatOffsetX || 0);
-        const seatWorldZ = p.gridY + 0.5 + (p.seatOffsetZ || 0);
+        const anchorSeatX =
+          (isSeatedWait || (p.state === 'walking_to_wait' && p.isSeatedWait !== false)) &&
+          p.targetX !== undefined
+            ? p.targetX
+            : p.gridX;
+        const anchorSeatY =
+          (isSeatedWait || (p.state === 'walking_to_wait' && p.isSeatedWait !== false)) &&
+          p.targetY !== undefined
+            ? p.targetY
+            : p.gridY;
+        const seatWorldX = anchorSeatX + 0.5 + (p.seatOffsetX || 0);
+        const seatWorldZ = anchorSeatY + 0.5 + (p.seatOffsetZ || 0);
         let targetX = seatWorldX;
         let targetZ = seatWorldZ;
         let stationFacing: number | null = null;
@@ -2763,13 +2879,29 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const distToApp = Math.hypot(appWorldX - entry.visX, appWorldZ - entry.visZ);
         const inPreSitTurnZone =
           Boolean(headingToChair) &&
+          !isSeatedWait &&
           entry.sitBlend < 0.18 &&
           p.path.length <= 1 &&
           distToApp < 0.78 &&
-          angleDiffAbs(entry.facingRad, p.seatFacingRad!) >= 0.32;
+          angleDiffAbs(entry.facingRad, p.seatFacingRad!) >= 0.35;
         if (inPreSitTurnZone) {
           targetX = appWorldX;
           targetZ = appWorldZ;
+        } else if (!isAtStation && !isSeatedWait && p.path.length > 0) {
+          const wp = p.path[0];
+          const ldx = wp.x - entry.leadX;
+          const ldz = wp.y - entry.leadZ;
+          const ld = Math.hypot(ldx, ldz);
+          if (ld > 0.01) {
+            const pHasAid =
+              Boolean(p.clinicalCase.mobilityAid) && p.clinicalCase.mobilityAid !== 'none';
+            const pSpeed = (pHasAid ? 0.98 : 1.24) * dt;
+            const adv = Math.min(ld, pSpeed);
+            entry.leadX += (ldx / ld) * adv;
+            entry.leadZ += (ldz / ld) * adv;
+          }
+          targetX = entry.leadX + 0.5;
+          targetZ = entry.leadZ + 0.5;
         }
 
         if (isAtStation && station && stationCat) {
@@ -2783,34 +2915,32 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             z: cz - Math.sin(ry) * lx + Math.cos(ry) * lz,
           });
 
-          if (isLyingStation) {
-            stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
-            const bedCenterPt =
-              spr === 'tilt_table'
-                ? rotLocal(0.074, 0)
-                : spr === 'traction_table'
-                  ? rotLocal(-0.066, 0)
-                  : { x: cx, z: cz };
+          if (isLyingStation && spr) {
+            const bedPose = getTreatmentBedPose(
+              station,
+              spr,
+              stationCat.width,
+              stationCat.depth,
+              obstacles,
+              entry.visX,
+              entry.visZ
+            );
+            stationFacing = bedPose.stationFacing;
+            const bedCenterPt = { x: bedPose.bedCenterX, z: bedPose.bedCenterZ };
 
             if (entry.bedStationId !== station.instanceId) {
               entry.bedStationId = station.instanceId;
               entry.bedPhase = 'to_edge';
               entry.bedTimer = 0;
               entry.bedArriveTimer = 0;
-              const frontProbe = rotLocal(0, 0.58);
-              entry.bedEdgeSign = isWorldWalkable(
-                frontProbe.x,
-                frontProbe.z,
-                0.16,
-                obstacles,
-                station.instanceId
-              )
-                ? 1
-                : -1;
+              entry.bedEdgeSign = bedPose.edgeSign;
+            } else if (entry.bedPhase === 'to_edge') {
+              entry.bedEdgeSign = bedPose.edgeSign;
             }
 
-            const edgeSign = entry.bedEdgeSign ?? 1;
-            const edgeOffsetZ = spr === 'exercise_mat' ? 0.22 : 0.30;
+            const edgeSign = entry.bedEdgeSign ?? bedPose.edgeSign;
+            const edgeOffsetZ =
+              spr === 'exercise_mat' ? 0.22 : spr === 'treatment_bed' ? 0.24 : 0.27;
             const edgePt = rotLocal(0, edgeSign * edgeOffsetZ);
             const edgeFacing =
               edgeSign === 1
@@ -2831,11 +2961,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               targetX = edgePt.x;
               targetZ = edgePt.z;
               const dEdge = Math.hypot(edgePt.x - entry.visX, edgePt.z - entry.visZ);
-              if (dEdge < 0.52) {
+              if (dEdge < 0.95) {
                 bedDesiredFacing = edgeFacing;
               }
-              const edgeAngleReady = angleDiffAbs(entry.facingRad, edgeFacing) < 0.34;
-              if ((dEdge <= 0.14 && edgeAngleReady) || entry.bedArriveTimer >= 2.8) {
+              const edgeAngleReady = angleDiffAbs(entry.facingRad, edgeFacing) < 0.52;
+              if ((dEdge <= 0.22 && edgeAngleReady) || entry.bedArriveTimer >= 1.15) {
                 entry.bedPhase = 'sit_edge';
                 entry.bedTimer = 0;
               }
@@ -2846,12 +2976,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               bedDesiredFacing = edgeFacing;
               bedTargetSit = true;
               bedTargetLie = 0;
-              entry.bedTimer = (entry.bedTimer ?? 0) + dt;
-              if ((entry.bedTimer >= 1.05 && entry.sitBlend >= 0.88) || entry.bedTimer >= 1.9) {
-                entry.bedPhase = 'reclining';
+              // Stay comfortably seated on the hospital bed while awaiting/undergoing clinical exam;
+              // smoothly recline ONLY after clinical assessment finishes and treatment begins.
+              if (p.state === 'in_treatment') {
+                entry.bedTimer = (entry.bedTimer ?? 0) + dt;
+                if ((entry.bedTimer >= 0.35 && entry.sitBlend >= 0.88) || entry.bedTimer >= 0.9) {
+                  entry.bedPhase = 'reclining';
+                  entry.bedTimer = 0;
+                  entry.bedStartX = entry.visX;
+                  entry.bedStartZ = entry.visZ;
+                }
+              } else {
                 entry.bedTimer = 0;
-                entry.bedStartX = entry.visX;
-                entry.bedStartZ = entry.visZ;
               }
             } else if (entry.bedPhase === 'reclining') {
               bedAllowsWalk = false;
@@ -2963,10 +3099,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           holdForBedRise || holdForChairStand
             ? 8.5
             : isSeatedWait
-              ? 9.0
-              : p.path.length > 0
-                ? 14.0
-                : 9.5;
+              ? 12.5
+              : isLyingStation && entry.bedPhase === 'to_edge'
+                ? 12.0
+                : p.path.length > 0
+                  ? 14.0
+                  : 9.5;
         let nextVisX = bedDirectPos ? bedDirectX : THREE.MathUtils.damp(entry.visX, targetX, dampRate, dt);
         let nextVisZ = bedDirectPos ? bedDirectZ : THREE.MathUtils.damp(entry.visZ, targetZ, dampRate, dt);
         // Prevent brisk rocket catch-up and sideways sliding on sharp turns
@@ -3003,14 +3141,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               : risingFromBed
                 ? entry.lastBedStationId || p.leavingItemId
                 : risingFromChair
-                  ? entry.lastSeatItemId
+                  ? entry.lastSeatItemId || p.leavingItemId
                   : p.state === 'treated_leaving'
                     ? p.leavingItemId || entry.lastBedStationId
                     : p.state === 'walking_to_station' &&
                         p.path.length <= 1 &&
                         Math.hypot(targetX - prevVisX, targetZ - prevVisZ) < 1.55
                       ? p.assignedStationId || undefined
-                      : undefined;
+                      : p.leavingItemId;
 
         if (!isAtStation && !isSeatedWait && !risingFromBed && !risingFromChair) {
           const clamped = resolveWorldStep(
@@ -3076,8 +3214,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         const distToSeat = Math.hypot(seatWorldX - entry.visX, seatWorldZ - entry.visZ);
         const readySeatPos =
-          (isSeatedWait && distToSeat < 0.28) || Boolean(isBikeStation && distRem < 0.22);
-        const facingReady = angleDiffAbs(entry.facingRad, effSeatTargetFacing) < 0.45;
+          (isSeatedWait && distToSeat < 0.34) || Boolean(isBikeStation && distRem < 0.24);
+        const facingReady = angleDiffAbs(entry.facingRad, effSeatTargetFacing) < 0.55;
         const shouldSit = isLyingStation
           ? bedTargetSit
           : risingFromBed
@@ -3172,6 +3310,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           inStairApproachPt && isMoving ? THREE.MathUtils.clamp(-entry.vx / 1.05, -1, 1) : 0;
         entry.stairClimb = THREE.MathUtils.damp(entry.stairClimb, rawStairClimbPt, 11.0, dt);
 
+        const prevFacingPt = entry.facingRad;
         const nearChairTurnZone =
           Boolean(headingToChair) && Math.hypot(seatWorldX - entry.visX, seatWorldZ - entry.visZ) < 1.05;
         if (stepDist > 0.0005 && (isMoving || entry.walkBlend > 0.04)) {
@@ -3266,6 +3405,20 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           }
         }
 
+        const rawTurnPt = isMoving
+          ? THREE.MathUtils.clamp(
+              (shortestAngleDelta(prevFacingPt, entry.facingRad) / Math.max(0.008, dt)) * 0.022,
+              -0.09,
+              0.09
+            )
+          : 0;
+        entry.turnLean = THREE.MathUtils.damp(entry.turnLean, rawTurnPt, 9.0, dt);
+
+        if (focId === p.id) {
+          camStateRef.current.targetX = entry.visX;
+          camStateRef.current.targetZ = entry.visZ;
+        }
+
         entry.rig.root.position.set(entry.visX, entry.groundY, entry.visZ);
 
         animateHumanoid3D(entry.rig, {
@@ -3281,6 +3434,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           bedBodyZOffset: effectiveBedZOffset,
           tiltPitch: effectiveTiltPitch,
           facingRad: entry.facingRad,
+          turnLean: entry.turnLean,
           timeSec,
           isSelected: focId === p.id,
           inTreatment: p.state === 'in_treatment',
@@ -3302,7 +3456,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
 
       // Sync Staff (60fps local therapist patrol & receptionist workflow — zero React re-render/IndexedDB overhead!)
-      const activeStaffIds = new Set<string>();
+      activeStaffIds.clear();
       const trimLongestLOS = (
         gx: number,
         gy: number,
@@ -3321,33 +3475,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const activeProfile = normalizePlayerProfile(latestRef.current.playerProfile);
       const includePlayer = latestRef.current.showPlayerCharacter !== false;
       const activeOutfitMeta = resolvePlayerOutfitMeta(activeProfile.outfitId);
-      const effectiveStaff: StaffMember[] = includePlayer
-        ? [
-            {
-              id: 'player_main',
-              role: 'therapist',
-              nameAr: 'طالب ثيراسون',
-              nameEn: 'Therason Student',
-              hired: true,
-              hireCost: 0,
-              gridX: 7,
-              gridY: 14,
-              targetX: 7,
-              targetY: 14,
-              path: [],
-              skinTone: PLAYER_DEFAULT_SKIN,
-              hairColor: '#18100c',
-              scrubColor: activeOutfitMeta.shirtColor,
-              facing: 1,
-              walkPhase: 0,
-              state: 'idle',
-            },
-            ...curStaff,
-          ]
-        : curStaff;
+      playerStaffSpec.scrubColor = activeOutfitMeta.shirtColor;
 
-      for (const s of effectiveStaff) {
-        if (!s.hired) continue;
+      const processStaffMember = (s: StaffMember) => {
+        if (!s.hired) return;
         activeStaffIds.add(s.id);
         const isPlayerActor = s.id === 'player_main';
         const outfitMeta = isPlayerActor ? activeOutfitMeta : null;
@@ -3435,6 +3566,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             sitBlend: s.role === 'receptionist' ? 1 : 0,
             doorPush: 0,
             facingRad: initPose ? initPose.seatFacingRad : Math.PI / 2,
+            turnLean: 0,
             actorSeed:
               (s.id.split('').reduce((acc, ch) => acc * 31 + ch.charCodeAt(0), 13) & 0xffff) + 101,
             recMode: s.role === 'receptionist' ? 'desk' : undefined,
@@ -3619,7 +3751,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             } else {
               // Priority 2: Occasional natural hydration break at the water cooler when lobby is calm
               entry.recStateTimer = (entry.recStateTimer ?? 18.0) - dt;
-              if (entry.recStateTimer <= 0 && !checkinPatient && deskItem) {
+              if (
+                entry.recStateTimer <= 0 &&
+                !checkinPatient &&
+                !curPatients.some((pt) => pt.state === 'arriving') &&
+                deskItem
+              ) {
                 const busyCoolers = new Set(
                   curPatients
                     .filter(
@@ -4465,6 +4602,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           surfSt.onStairs && isMoving ? THREE.MathUtils.clamp(-entry.vx / 1.05, -1, 1) : 0;
         entry.stairClimb = THREE.MathUtils.damp(entry.stairClimb, rawStairClimbSt, 11.0, dt);
 
+        const prevFacingSt = entry.facingRad;
         if (stepDist > 0.0005 && (isMoving || entry.walkBlend > 0.04)) {
           entry.walkPhase += stepDist * (surfSt.onStairs ? 8.5 : 7.2);
           if (stepDist > 0.0008 && isMoving) {
@@ -4519,6 +4657,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           }
         }
 
+        const rawTurnSt = isMoving
+          ? THREE.MathUtils.clamp(
+              (shortestAngleDelta(prevFacingSt, entry.facingRad) / Math.max(0.008, dt)) * 0.022,
+              -0.09,
+              0.09
+            )
+          : 0;
+        entry.turnLean = THREE.MathUtils.damp(entry.turnLean, rawTurnSt, 9.0, dt);
+
         entry.rig.root.position.set(entry.visX, entry.groundY, entry.visZ);
         animateHumanoid3D(entry.rig, {
           pose: shouldStaffSit ? 'seated' : 'standing',
@@ -4529,6 +4676,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           doorPush: entry.doorPush,
           seatHeight: recSeatHeight,
           facingRad: entry.facingRad,
+          turnLean: entry.turnLean,
           timeSec,
           isSelected: false,
           isDrinking: recActiveMode === 'drinking',
@@ -4552,6 +4700,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               : 'idle',
           stairClimb: entry.stairClimb,
         });
+      };
+
+      if (includePlayer) {
+        processStaffMember(playerStaffSpec);
+      }
+      for (let si = 0; si < curStaff.length; si++) {
+        processStaffMember(curStaff[si]);
       }
 
       for (const [id, entry] of staffRigs.entries()) {
@@ -4995,6 +5150,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           surfW.onStairs && isMoving ? THREE.MathUtils.clamp(-w.vx / 1.05, -1, 1) : 0;
         w.stairClimb = THREE.MathUtils.damp(w.stairClimb, rawStairClimbW, 11.0, dt);
 
+        const prevFacingW = w.facingRad;
         if (stepDist > 0.0005 && (isMoving || w.walkBlend > 0.04)) {
           w.walkPhase += stepDist * (surfW.onStairs ? 8.5 : 7.2);
           const backingIntoBench = w.seatedMode && w.path.length <= 1;
@@ -5005,6 +5161,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         if ((!isMoving || (w.seatedMode && w.path.length <= 1)) && w.seatedMode && w.seatFacingRad !== undefined) {
           w.facingRad = lerpAngle(w.facingRad, w.seatFacingRad, Math.min(1, dt * 13));
         }
+        const rawTurnW = isMoving
+          ? THREE.MathUtils.clamp(
+              (shortestAngleDelta(prevFacingW, w.facingRad) / Math.max(0.008, dt)) * 0.022,
+              -0.09,
+              0.09
+            )
+          : 0;
+        w.turnLean = THREE.MathUtils.damp(w.turnLean, rawTurnW, 9.0, dt);
 
         w.rig.root.position.set(w.visX, w.groundY, w.visZ);
         animateHumanoid3D(w.rig, {
@@ -5016,6 +5180,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           doorPush: w.doorPush,
           seatHeight: w.seatHeight ?? 0.396,
           facingRad: w.facingRad,
+          turnLean: w.turnLean,
           timeSec,
           isSelected: false,
           actorSeed: wi * 29 + 17,
@@ -5026,6 +5191,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
     let cachedOverlayCanvas: HTMLCanvasElement | null = null;
     let cachedOverlayCtx: CanvasRenderingContext2D | null = null;
+    let overlayWasNonEmpty = true;
     const _sp0 = { x: 0, y: 0 };
     const _sp1 = { x: 0, y: 0 };
     const _sp2 = { x: 0, y: 0 };
@@ -5034,6 +5200,34 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const drawOverlayBadges = () => {
       const overlay = overlayCanvasRef.current;
       if (!overlay) return;
+
+      const {
+        rooms: curRooms,
+        placedItems: curItems,
+        placementDraft: curDraft,
+        editMode: isEdit,
+        floatingFeedbacks: fbs,
+        focusedPatientId: focId,
+        language: lang,
+        selectedTreeId: selTreeId,
+        isPlacementValid: checkValid,
+      } = latestRef.current;
+
+      let hasLockedRooms = false;
+      for (let i = 0; i < curRooms.length; i++) {
+        if (!curRooms[i].unlocked) {
+          hasLockedRooms = true;
+          break;
+        }
+      }
+      const isEmptyOverlay =
+        !sceneAssetsInitialized ||
+        (!curDraft && !isEdit && !selTreeId && fbs.length === 0 && !hasLockedRooms);
+
+      if (isEmptyOverlay && !overlayWasNonEmpty) {
+        return;
+      }
+
       const w = Math.max(1, overlay.clientWidth || containerW);
       const h = Math.max(1, overlay.clientHeight || containerH);
 
@@ -5053,18 +5247,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       if (!ctx) return;
       ctx.setTransform(targetOvW / w, 0, 0, targetOvH / h, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      if (!sceneAssetsInitialized) return;
 
-      const {
-        rooms: curRooms,
-        placedItems: curItems,
-        placementDraft: curDraft,
-        editMode: isEdit,
-        floatingFeedbacks: fbs,
-        focusedPatientId: focId,
-        language: lang,
-        isPlacementValid: checkValid,
-      } = latestRef.current;
+      if (isEmptyOverlay) {
+        overlayWasNonEmpty = false;
+        return;
+      }
+      overlayWasNonEmpty = true;
 
       const projectToScreen = (
         wx: number,
@@ -5281,7 +5469,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
 
       // 3b. Selected Outer Tree Highlight Ring (for removal confirmation)
-      const selTreeId = latestRef.current.selectedTreeId;
       if (selTreeId) {
         const tree = WORLD_TREES.find((t) => t.id === selTreeId);
         if (tree) {
@@ -5333,6 +5520,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
     };
 
+    const pushDoorActor = (x: number, z: number, vx: number, vz: number, isMoving: boolean) => {
+      const idx = doorActorsScratch.length;
+      if (idx >= doorActorsPool.length) {
+        doorActorsPool.push({ x, z, vx, vz, isMoving });
+      } else {
+        const slot = doorActorsPool[idx];
+        slot.x = x;
+        slot.z = z;
+        slot.vx = vx;
+        slot.vz = vz;
+        slot.isMoving = isMoving;
+      }
+      doorActorsScratch.push(doorActorsPool[idx]);
+    };
+
     let lastShowItemMicro = true;
     const tick = () => {
       if (disposed) return;
@@ -5341,9 +5543,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       lastMs = nowMs;
 
       const cs = camStateRef.current;
-      cs.curX = THREE.MathUtils.damp(cs.curX, cs.targetX, 9, dt);
-      cs.curZ = THREE.MathUtils.damp(cs.curZ, cs.targetZ, 9, dt);
-      cs.curZoom = THREE.MathUtils.damp(cs.curZoom, cs.targetZoom, 9, dt);
+      if (!latestRef.current.focusedPatientId && (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005)) {
+        cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + cs.panVelX * dt));
+        cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + cs.panVelZ * dt));
+        cs.panVelX = THREE.MathUtils.damp(cs.panVelX, 0, 6.5, dt);
+        cs.panVelZ = THREE.MathUtils.damp(cs.panVelZ, 0, 6.5, dt);
+      } else {
+        cs.panVelX = 0;
+        cs.panVelZ = 0;
+      }
+      cs.curX = THREE.MathUtils.damp(cs.curX, cs.targetX, 9.5, dt);
+      cs.curZ = THREE.MathUtils.damp(cs.curZ, cs.targetZ, 9.5, dt);
+      cs.curZoom = THREE.MathUtils.damp(cs.curZoom, cs.targetZoom, 10, dt);
       cs.curYaw = THREE.MathUtils.damp(cs.curYaw, cs.targetYaw, 8, dt);
       updateCameraTransform();
 
@@ -5353,6 +5564,23 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         textures.waterNormal.offset.x = (tSec * 0.045) % 1;
         textures.waterNormal.offset.y = (tSec * 0.032) % 1;
         worldHandle.setZoomLod(cs.curZoom);
+      }
+      if (animatedFountains.length > 0 && cs.curZoom >= 0.85) {
+        for (let fi = 0; fi < animatedFountains.length; fi++) {
+          const f = animatedFountains[fi];
+          const shimmer = 0.92 + 0.1 * Math.sin(tSec * 8.5 + fi);
+          for (let ai = 0; ai < f.arcs.length; ai++) {
+            const s = shimmer + 0.06 * Math.sin(tSec * 12 + ai * 1.4);
+            f.arcs[ai].scale.set(s, 1, s);
+          }
+          for (let ri = 0; ri < f.ripples.length; ri++) {
+            const phase = (tSec * 0.56 + ri * 0.5 + fi * 0.17) % 1;
+            const ringScale = 0.72 + phase * 1.9;
+            const rMesh = f.ripples[ri];
+            rMesh.scale.set(ringScale, ringScale, 1);
+            (rMesh.material as THREE.MeshBasicMaterial).opacity = 0.36 * (1 - phase);
+          }
+        }
       }
       updateFoliageWindTime(textures, tSec);
       updateAmbientSongbirds(tSec, dt, cs.curZoom);
@@ -5379,37 +5607,20 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       if (worldHandle) {
         doorActorsScratch.length = 0;
         for (const entry of patientRigs.values()) {
-          doorActorsScratch.push({
-            x: entry.visX,
-            z: entry.visZ,
-            vx: entry.vx,
-            vz: entry.vz,
-            isMoving: entry.walkBlend > 0.15 && entry.sitBlend < 0.4,
-          });
+          pushDoorActor(entry.visX, entry.visZ, entry.vx, entry.vz, entry.walkBlend > 0.15 && entry.sitBlend < 0.4);
         }
         for (const entry of staffRigs.values()) {
-          doorActorsScratch.push({
-            x: entry.visX,
-            z: entry.visZ,
-            vx: entry.vx,
-            vz: entry.vz,
-            isMoving: entry.walkBlend > 0.15 && entry.sitBlend < 0.4,
-          });
+          pushDoorActor(entry.visX, entry.visZ, entry.vx, entry.vz, entry.walkBlend > 0.15 && entry.sitBlend < 0.4);
         }
-        for (const w of walkerRigs) {
-          doorActorsScratch.push({
-            x: w.visX,
-            z: w.visZ,
-            vx: w.vx,
-            vz: w.vz,
-            isMoving: w.walkBlend > 0.15 && w.sitBlend < 0.4,
-          });
+        for (let wi = 0; wi < walkerRigs.length; wi++) {
+          const w = walkerRigs[wi];
+          pushDoorActor(w.visX, w.visZ, w.vx, w.vz, w.walkBlend > 0.15 && w.sitBlend < 0.4);
         }
         const unlockedSet = getUnlockedRoomsSet(latestRef.current.rooms);
         updateDoors3D(worldHandle.doors, doorActorsScratch, unlockedSet, dt);
       }
 
-      if (composer) {
+      if (composer && nightBlend > 0.015) {
         composer.render();
       } else {
         renderer.render(scene, camera);
@@ -5557,6 +5768,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const longPressTimerRef = useRef<number | null>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ dist: number; startZoom: number } | null>(null);
+  const panVelocityRef = useRef({ lastX: 0, lastY: 0, lastT: 0, vx: 0, vz: 0 });
+  const hoverRafRef = useRef<number | null>(null);
+  const pendingHoverRef = useRef<{ x: number; y: number } | null>(null);
 
   const clearLongPress = () => {
     if (longPressTimerRef.current !== null) {
@@ -5564,6 +5778,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       longPressTimerRef.current = null;
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+    };
+  }, []);
 
   const findHitItemAt = (gx: number, gy: number): PlacedItem | undefined =>
     placedItems.find((item) => {
@@ -5729,13 +5952,27 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (focusedPatientId) return;
     clearLongPress();
+    if (hoverRafRef.current !== null) {
+      cancelAnimationFrame(hoverRafRef.current);
+      hoverRafRef.current = null;
+    }
+    pendingHoverRef.current = null;
+    camStateRef.current.panVelX = 0;
+    camStateRef.current.panVelZ = 0;
+    panVelocityRef.current = {
+      lastX: e.clientX,
+      lastY: e.clientY,
+      lastT: performance.now(),
+      vx: 0,
+      vz: 0,
+    };
     liveDragDraftRef.current = null;
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (pointersRef.current.size === 2) {
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      pinchRef.current = { dist: Math.max(10, dist), startZoom: zoomUiRef.current };
+      pinchRef.current = { dist: Math.max(10, dist), startZoom: camStateRef.current.targetZoom };
       dragRef.current.active = false;
       dragRef.current.draggingDraft = false;
       dragRef.current.pendingDragItem = null;
@@ -5816,26 +6053,38 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
       const ratio = dist / pinchRef.current.dist;
-      const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pinchRef.current.startZoom * ratio));
-      setZoomUi(nextZoom);
-      camStateRef.current.targetZoom = nextZoom;
+      camStateRef.current.targetZoom = Math.max(
+        MIN_ZOOM,
+        Math.min(MAX_ZOOM, pinchRef.current.startZoom * ratio)
+      );
       return;
     }
 
     const hooks = sceneHooksRef.current;
 
-    // Hover feedback ONLY when in editMode without an active draft (no mouse-hover teleportation!)
+    // Hover feedback ONLY when in editMode or placing draft — throttled to 1 raycast per rAF
     if (!dragRef.current.active && hooks) {
-      if (editMode && !placementDraft) {
-        const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
-        const hoverHit = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(rawX, rawZ);
-        hoveredEditItemIdRef.current = hoverHit ? hoverHit.instanceId : null;
-        if (pointerSurfaceRef.current) {
-          pointerSurfaceRef.current.style.cursor = hoverHit ? 'grab' : 'default';
+      if (editMode || placementDraft) {
+        pendingHoverRef.current = { x: e.clientX, y: e.clientY };
+        if (hoverRafRef.current === null) {
+          hoverRafRef.current = requestAnimationFrame(() => {
+            hoverRafRef.current = null;
+            const pos = pendingHoverRef.current;
+            const curHooks = sceneHooksRef.current;
+            if (!pos || !curHooks || dragRef.current.active) return;
+            if (editMode && !placementDraft) {
+              const { rawX, rawZ } = curHooks.screenToGrid(pos.x, pos.y);
+              const hoverHit = curHooks.hitTestPlacedItem(pos.x, pos.y) || findHitItemAt(rawX, rawZ);
+              hoveredEditItemIdRef.current = hoverHit ? hoverHit.instanceId : null;
+              if (pointerSurfaceRef.current) {
+                pointerSurfaceRef.current.style.cursor = hoverHit ? 'grab' : 'default';
+              }
+            } else if (placementDraft && pointerSurfaceRef.current) {
+              const hoverGhost = curHooks.hitTestDraftGhost(pos.x, pos.y);
+              pointerSurfaceRef.current.style.cursor = hoverGhost ? 'grab' : 'pointer';
+            }
+          });
         }
-      } else if (placementDraft && pointerSurfaceRef.current) {
-        const hoverGhost = hooks.hitTestDraftGhost(e.clientX, e.clientY);
-        pointerSurfaceRef.current.style.cursor = hoverGhost ? 'grab' : 'pointer';
       }
       return;
     }
@@ -5916,6 +6165,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const moveZ = -dx * scale * right.z + dy * scale * 1.65 * forward.z;
       camStateRef.current.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, dragRef.current.camStartX + moveX));
       camStateRef.current.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, dragRef.current.camStartZ + moveZ));
+
+      const now = performance.now();
+      const dtPan = (now - panVelocityRef.current.lastT) / 1000;
+      if (dtPan > 0.002) {
+        const sDx = e.clientX - panVelocityRef.current.lastX;
+        const sDy = e.clientY - panVelocityRef.current.lastY;
+        const stepX = -sDx * scale * right.x + sDy * scale * 1.65 * forward.x;
+        const stepZ = -sDx * scale * right.z + sDy * scale * 1.65 * forward.z;
+        const instVx = Math.max(-18, Math.min(18, stepX / dtPan));
+        const instVz = Math.max(-18, Math.min(18, stepZ / dtPan));
+        panVelocityRef.current.vx = panVelocityRef.current.vx * 0.45 + instVx * 0.55;
+        panVelocityRef.current.vz = panVelocityRef.current.vz * 0.45 + instVz * 0.55;
+        panVelocityRef.current.lastX = e.clientX;
+        panVelocityRef.current.lastY = e.clientY;
+        panVelocityRef.current.lastT = now;
+      }
     }
   };
 
@@ -5951,14 +6216,27 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       } else {
         onUpdatePlacementHover(activeDraft.hoverX, activeDraft.hoverY, activeDraft.rotation);
       }
+    } else if (performance.now() - panVelocityRef.current.lastT < 90) {
+      camStateRef.current.panVelX = panVelocityRef.current.vx * 0.68;
+      camStateRef.current.panVelZ = panVelocityRef.current.vz * 0.68;
     }
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (focusedPatientId) return;
-    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomUi - e.deltaY * 0.0008));
-    setZoomUi(nextZoom);
-    camStateRef.current.targetZoom = nextZoom;
+    const cs = camStateRef.current;
+    const curZoom = cs.targetZoom;
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZoom - e.deltaY * 0.0008));
+    if (Math.abs(nextZoom - curZoom) > 1e-4) {
+      const hooks = sceneHooksRef.current;
+      if (hooks && nextZoom > curZoom) {
+        const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
+        const pull = (1 - curZoom / nextZoom) * 0.72;
+        cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + (rawX - cs.targetX) * pull));
+        cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + (rawZ - cs.targetZ) * pull));
+      }
+      cs.targetZoom = nextZoom;
+    }
   };
 
   const draftValid = placementDraft
@@ -6016,7 +6294,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           <button
             type="button"
             onClick={() => {
-              setZoomUi(DEFAULT_ZOOM);
+              camStateRef.current.panVelX = 0;
+              camStateRef.current.panVelZ = 0;
               camStateRef.current.targetX = 13.2;
               camStateRef.current.targetZ = 12.8;
               camStateRef.current.targetZoom = DEFAULT_ZOOM;
