@@ -37,7 +37,10 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => onSelectTab('store')}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onSelectTab('store');
+          }}
           className={`pointer-events-auto relative min-w-[138px] h-12 px-5 rounded-2xl flex items-center justify-center gap-2 text-white border transition-transform whitespace-nowrap shrink-0 ${
             isNight
               ? 'border-sky-400/50 bg-gradient-to-b from-sky-600 to-slate-900 shadow-[0_6px_24px_rgba(14,165,233,0.35)]'
@@ -61,7 +64,15 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
         <button
           type="button"
           disabled={disabled}
-          onClick={onToggleEditMode}
+          onKeyDown={(e) => {
+            if (e.key === ' ' || e.code === 'Space') {
+              e.preventDefault();
+            }
+          }}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onToggleEditMode();
+          }}
           className={`pointer-events-auto min-w-[144px] h-12 px-5 rounded-2xl flex items-center justify-center gap-2 border shadow-[0_6px_20px_rgba(180,83,9,0.35)] transition-all whitespace-nowrap shrink-0 ${
             editMode
               ? 'bg-gradient-to-b from-emerald-400 to-emerald-600 text-slate-950 border-emerald-200 ring-2 ring-white font-black'

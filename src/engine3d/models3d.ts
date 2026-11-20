@@ -233,6 +233,56 @@ export function updateDoors3D(
  * Builds the realistic architectural clinic, sky dome, distant horizon,
  * paved avenue, fountain courtyard, rear solar utility zone, and natural multi-species trees.
  */
+function applyFoliageWindShader(
+  mat: THREE.Material,
+  timeUniform: { value: number },
+  amp: number,
+  opts?: { heightBase?: number; heightScale?: number; localGrassHeight?: number; tag?: string }
+) {
+  const heightBase = opts?.heightBase ?? 0.85;
+  const heightScale = opts?.heightScale ?? 0.42;
+  const localGrassH = opts?.localGrassHeight ?? 0;
+  const cacheTag = opts?.tag ?? (localGrassH > 0 ? 'grass' : 'tree');
+
+  mat.customProgramCacheKey = () => `foliage-wind-v1-${cacheTag}`;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = timeUniform;
+    shader.uniforms.uWindAmp = { value: amp };
+    shader.uniforms.uWindBase = { value: heightBase };
+    shader.uniforms.uWindHScale = { value: heightScale };
+    shader.uniforms.uLocalGrassH = { value: localGrassH };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uWindTime;
+        uniform float uWindAmp;
+        uniform float uWindBase;
+        uniform float uWindHScale;
+        uniform float uLocalGrassH;`
+      )
+      .replace(
+        '#include <project_vertex>',
+        `vec4 windWorldPos = vec4( transformed, 1.0 );
+        #ifdef USE_INSTANCING
+          windWorldPos = instanceMatrix * windWorldPos;
+        #endif
+        windWorldPos = modelMatrix * windWorldPos;
+        float windH = uLocalGrassH > 0.0
+          ? clamp(transformed.y / uLocalGrassH, 0.0, 1.0)
+          : clamp((windWorldPos.y - uWindBase) * uWindHScale, 0.0, 1.25);
+        float gustPhase = uWindTime * 1.25 + windWorldPos.x * 0.31 + windWorldPos.z * 0.23;
+        float leafFlutter = sin(uWindTime * 2.85 + windWorldPos.x * 1.85 + windWorldPos.z * 1.65) * 0.34;
+        float sway = (sin(gustPhase) + 0.42 * sin(gustPhase * 1.67 + 1.1) + leafFlutter) * uWindAmp * windH;
+        windWorldPos.x += sway;
+        windWorldPos.z += sway * 0.56;
+        vec4 mvPosition = viewMatrix * windWorldPos;
+        gl_Position = projectionMatrix * mvPosition;`
+      );
+  };
+}
+
 export function buildClinicWorld3D(
   rooms: ClinicRoom[],
   textures: TextureBundle,
@@ -551,6 +601,7 @@ export function buildClinicWorld3D(
   const tuftGeom = trackGeom(new THREE.ConeGeometry(0.055, 0.24, 3));
   tuftGeom.translate(0, 0.12, 0);
   const tuftMat = trackMat(makeMat({ color: 0xffffff, roughness: 0.9, metalness: 0.0 }));
+  applyFoliageWindShader(tuftMat, skyUniforms.uTime, 0.024, { localGrassHeight: 0.24, tag: 'grass' });
   const tuftPositions: Array<[number, number, number, number, number]> = [];
   for (let i = 0; i < 240; i++) {
     const gx = (Math.sin(i * 73.1 + 0.4) * 0.5 + 0.5) * 46 - 8;
@@ -1737,12 +1788,25 @@ export function buildClinicWorld3D(
   wallCert.position.set(12.125, 1.38, 12.0);
   clinicBuildingGroup.add(wallCert);
 
-  const wallChart = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(0.04, 0.96, 0.7)),
-    trackMat(makeMat({ map: textures.anatomyPoster, roughness: 0.42 }))
+  // Direct Architectural Wall Lettering ("Powered by طـــاهـر محمد") flush on the plaster wall (no frame/board)
+  const wallPoweredText = new THREE.Mesh(
+    trackGeom(new THREE.PlaneGeometry(5.6, 1.02)),
+    trackMat(
+      makeMat({
+        map: textures.poweredByWall,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        roughness: 0.72,
+        metalness: 0.05,
+      })
+    )
   );
-  wallChart.position.set(2.175, 1.95, 15.8);
-  clinicBuildingGroup.add(wallChart);
+  wallPoweredText.rotation.y = Math.PI / 2;
+  wallPoweredText.position.set(2.156, 2.08, 15.8);
+  clinicBuildingGroup.add(wallPoweredText);
 
   // Normal Single-Leaf Interior Doors (standard ~0.92m single door opening, matching raised 1.88m partitions)
   const addAnimatedSingleDoor = (
@@ -1982,6 +2046,8 @@ export function buildClinicWorld3D(
       metalness: 0.0,
     })
   );
+  applyFoliageWindShader(leafCardMat, skyUniforms.uTime, 0.036, { heightBase: 0.9, heightScale: 0.42, tag: 'leaf' });
+
   const cypressCardMat = trackMat(
     new THREE.MeshStandardMaterial({
       map: textures.cypressFoliage,
@@ -1991,8 +2057,13 @@ export function buildClinicWorld3D(
       metalness: 0.0,
     })
   );
+  applyFoliageWindShader(cypressCardMat, skyUniforms.uTime, 0.032, { heightBase: 0.9, heightScale: 0.40, tag: 'cypress' });
+
   const innerShadeMat = trackMat(makeMat({ color: 0x1e4016, roughness: 0.94 }));
+  applyFoliageWindShader(innerShadeMat, skyUniforms.uTime, 0.014, { heightBase: 1.05, heightScale: 0.38, tag: 'shade' });
+
   const innerCypressMat = trackMat(makeMat({ color: 0x16321d, roughness: 0.94 }));
+  applyFoliageWindShader(innerCypressMat, skyUniforms.uTime, 0.012, { heightBase: 1.05, heightScale: 0.36, tag: 'cshade' });
   const soilMoundMat = trackMat(makeMat({ color: 0x5c4731, roughness: 0.96, metalness: 0.0 }));
 
   const leafCardGeom = trackGeom(new THREE.PlaneGeometry(1.16, 1.16));
@@ -2640,13 +2711,22 @@ interface SharedCatalogMats {
   cypressCardMat: THREE.MeshStandardMaterial;
   solarCellMat: THREE.MeshPhysicalMaterial;
   receptionScreenMat: THREE.MeshStandardMaterial;
+  windTime: { value: number };
 }
 
 const sharedCatalogPoolByTextures = new WeakMap<TextureBundle, SharedCatalogMats>();
 
+export function updateFoliageWindTime(textures: TextureBundle, timeSec: number) {
+  const pool = sharedCatalogPoolByTextures.get(textures);
+  if (pool) {
+    pool.windTime.value = timeSec;
+  }
+}
+
 function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
   const cached = sharedCatalogPoolByTextures.get(textures);
   if (cached) return cached;
+  const windTime = { value: 0 };
 
   const pool: SharedCatalogMats = {
     whiteBody: new THREE.MeshPhysicalMaterial({
@@ -2795,12 +2875,24 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       roughness: 0.28,
       metalness: 0.04,
     }),
+    windTime,
   };
+
+  // Gentle breeze sway on outdoor catalog trees & flowering shrubs (zero CPU cost)
+  applyFoliageWindShader(pool.blossomCardMat, windTime, 0.022, { heightBase: 0.35, heightScale: 0.55, tag: 'cat-blossom' });
+  applyFoliageWindShader(pool.roseCardMat, windTime, 0.020, { heightBase: 0.25, heightScale: 0.55, tag: 'cat-rose' });
+  applyFoliageWindShader(pool.palmCardMat, windTime, 0.032, { heightBase: 0.9, heightScale: 0.42, tag: 'cat-palm' });
+  applyFoliageWindShader(pool.oliveCardMat, windTime, 0.026, { heightBase: 0.9, heightScale: 0.42, tag: 'cat-olive' });
+  applyFoliageWindShader(pool.cypressCardMat, windTime, 0.022, { heightBase: 0.45, heightScale: 0.48, tag: 'cat-cyp' });
 
   sharedCatalogPoolByTextures.set(textures, pool);
   const origDispose = textures.dispose;
   textures.dispose = () => {
-    Object.values(pool).forEach((m: THREE.Material) => m.dispose());
+    Object.values(pool).forEach((entry) => {
+      if (entry && typeof (entry as THREE.Material).dispose === 'function') {
+        (entry as THREE.Material).dispose();
+      }
+    });
     origDispose();
   };
 

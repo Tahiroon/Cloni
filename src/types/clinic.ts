@@ -241,7 +241,7 @@ export interface PatientEntity {
   hasHijab?: boolean;
   hasBeard?: boolean;
   hasTurban?: boolean;
-  outfitStyle?: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress';
+  outfitStyle?: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe';
   shirtStyle?: 'tshirt' | 'shirt';
   heightScale?: number;
   pose?: CharacterPose;

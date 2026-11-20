@@ -129,6 +129,16 @@ const FEMALE_CASUAL_LOOKS = [
   { shirt: '#0f766e', pants: '#cbb696' },
   { shirt: '#9f1239', pants: '#e2dcd0' },
 ];
+const FEMALE_SUDANESE_THOBE_LOOKS = [
+  { thobe: '#f6f2e7', inner: '#3b262a' }, // Classic Sudanese White/Ivory Thobe + Deep Plum-Brown Inner
+  { thobe: '#6d1d31', inner: '#f3e8d8' }, // Rich Maroon Thobe + Warm Cream Inner
+  { thobe: '#0f5c4a', inner: '#f5efe2' }, // Nile Emerald Thobe + Ivory Inner
+  { thobe: '#1d396b', inner: '#e8eef7' }, // Royal Indigo Thobe + Soft Sky Cream Inner
+  { thobe: '#b4741d', inner: '#f7f1e3' }, // Warm Saffron Gold Thobe + Cream Inner
+  { thobe: '#5b2557', inner: '#f4e6ef' }, // Dignified Plum Thobe + Soft Rose-Cream Inner
+  { thobe: '#157188', inner: '#f0f7fa' }, // Turquoise Teal Thobe + Crisp Mist Inner
+  { thobe: '#9c3b27', inner: '#f5eadf' }, // Henna Terracotta Thobe + Sand Ivory Inner
+];
 
 const EMPTY_REMOVED_TREES: string[] = [];
 
@@ -629,7 +639,7 @@ export default function App() {
         );
 
         const isFemale = chosenCase.gender === 'female';
-        let outfitStyle: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' = 'casual';
+        let outfitStyle: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe' = 'casual';
         let shirtStyle: 'tshirt' | 'shirt' | undefined;
         const heightScale = chosenCase.age < 15 ? 0.78 : undefined;
         let shirtColor = '#ece9e1';
@@ -645,29 +655,40 @@ export default function App() {
         };
 
         if (isFemale) {
-          hasHijab = true; // All women wear a Tarha/Hijab cleanly
-          const roll = Math.random();
-          if (roll < 0.4) {
-            outfitStyle = 'abaya';
-            shirtColor = pickDistinct(FEMALE_ABAYA_COLORS, (c) => `${c}_${c}`);
-            pantsColor = shirtColor;
-          } else if (roll < 0.68) {
-            outfitStyle = 'abaya_open';
-            const openLook = pickDistinct(
-              FEMALE_OPEN_ABAYA_LOOKS,
-              (l) => `${l.outer}_${l.inner}`
+          hasHijab = true; // All women wear a Tarha/Hijab or Sudanese Thobe cleanly
+          const thobeChance = chosenCase.age >= 48 ? 0.75 : chosenCase.age >= 28 ? 0.38 : 0.16;
+          if (Math.random() < thobeChance) {
+            outfitStyle = 'sudanese_thobe';
+            const thobeLook = pickDistinct(
+              FEMALE_SUDANESE_THOBE_LOOKS,
+              (l) => `${l.thobe}_${l.inner}`
             );
-            shirtColor = openLook.outer;
-            pantsColor = openLook.inner;
-          } else if (roll < 0.85) {
-            outfitStyle = 'dress';
-            shirtColor = pickDistinct(FEMALE_DRESS_COLORS, (c) => `${c}_${c}`);
-            pantsColor = shirtColor;
+            shirtColor = thobeLook.thobe;
+            pantsColor = thobeLook.inner;
           } else {
-            outfitStyle = 'casual';
-            const c = pickDistinct(FEMALE_CASUAL_LOOKS, (l) => `${l.shirt}_${l.pants}`);
-            shirtColor = c.shirt;
-            pantsColor = c.pants;
+            const roll = Math.random();
+            if (roll < 0.36) {
+              outfitStyle = 'abaya';
+              shirtColor = pickDistinct(FEMALE_ABAYA_COLORS, (c) => `${c}_${c}`);
+              pantsColor = shirtColor;
+            } else if (roll < 0.65) {
+              outfitStyle = 'abaya_open';
+              const openLook = pickDistinct(
+                FEMALE_OPEN_ABAYA_LOOKS,
+                (l) => `${l.outer}_${l.inner}`
+              );
+              shirtColor = openLook.outer;
+              pantsColor = openLook.inner;
+            } else if (roll < 0.84) {
+              outfitStyle = 'dress';
+              shirtColor = pickDistinct(FEMALE_DRESS_COLORS, (c) => `${c}_${c}`);
+              pantsColor = shirtColor;
+            } else {
+              outfitStyle = 'casual';
+              const c = pickDistinct(FEMALE_CASUAL_LOOKS, (l) => `${l.shirt}_${l.pants}`);
+              shirtColor = c.shirt;
+              pantsColor = c.pants;
+            }
           }
         } else {
           // Older men (>=35): mostly Jalabiya (~82%); youth/kids (<35): mostly trousers + t-shirt/shirt (~85-100%)
@@ -2383,7 +2404,7 @@ export default function App() {
           }
         }}
         onTapPlacedItem={(item) => {
-          if (visitingFriend) return;
+          if (visitingFriend || !editMode) return;
           const cat = catalogById.get(item.catalogId);
           if (!cat) return;
           soundFx.tap();
@@ -2395,21 +2416,9 @@ export default function App() {
             hoverY: item.gridY,
           });
         }}
-        onLongPressPlacedItem={(item) => {
-          if (visitingFriend) return;
-          const cat = catalogById.get(item.catalogId);
-          if (!cat) return;
-          soundFx.tap();
-          setPlacementDraft({
-            catalogItem: cat,
-            movingInstanceId: item.instanceId,
-            rotation: item.rotation,
-            hoverX: item.gridX,
-            hoverY: item.gridY,
-          });
-        }}
+        onLongPressPlacedItem={undefined}
         onStartDragPlacedItem={(item) => {
-          if (visitingFriend) return;
+          if (visitingFriend || !editMode) return;
           const cat = catalogById.get(item.catalogId);
           if (!cat) return;
           setPlacementDraft({
@@ -2421,7 +2430,7 @@ export default function App() {
           });
         }}
         onSwitchEditingItem={(nextItem, commitCurrent = true) => {
-          if (visitingFriend) return;
+          if (visitingFriend || !editMode) return;
           const nextCat = catalogById.get(nextItem.catalogId);
           if (!nextCat) return;
           soundFx.tap();

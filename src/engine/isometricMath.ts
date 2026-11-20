@@ -265,8 +265,8 @@ export function getValidWallRotationsForTile(
 
   // 0 = West wall face (x = gx, facing +X into room)
   if (gx === 2 && gy >= 2 && gy <= 21) {
-    // Built-in anatomy chart sits at x=2.175, z=15.8 (gy=15)
-    if (gy !== 15) rots.push(0);
+    // Built-in architectural signature plaque spans z=13.08..18.52 (gy 13..18)
+    if (gy < 13 || gy > 18) rots.push(0);
   } else if (gx === 12 && gy >= 2 && gy <= 21) {
     // Exclude doors (gy=5, 14) and built-in plaques (cert z=12.0, logo z=18.6)
     const isDoor = gy === 5 || gy === 14;

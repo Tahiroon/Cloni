@@ -35,6 +35,7 @@ export interface TextureBundle {
   rugPattern: THREE.CanvasTexture;
   contactShadow: THREE.CanvasTexture;
   therasonWall: THREE.CanvasTexture;
+  poweredByWall: THREE.CanvasTexture;
   therasonMonument: THREE.CanvasTexture;
   therasonFacadeSign: THREE.CanvasTexture;
   anatomyPoster: THREE.CanvasTexture;
@@ -134,6 +135,7 @@ export function createTextureBundle(
 ): TextureBundle {
   const aniso = Math.min(16, Math.max(1, maxAnisotropy));
   const catalogOnly = Boolean(opts?.catalogOnly);
+  let disposed = false;
   const created: THREE.CanvasTexture[] = [];
   const track = (t: THREE.CanvasTexture) => {
     created.push(t);
@@ -1396,6 +1398,98 @@ export function createTextureBundle(
     return tex;
   })();
 
+  // 11b. West Wall Direct Architectural Lettering ("Powered by طـــاهـر محمد", 2048x368 transparent overlay)
+  const poweredByWall = catalogOnly
+    ? dummyTex
+    : (() => {
+    const W = 2048;
+    const H = 368;
+    const [c, ctx] = makeCanvas(W, H);
+
+    const drawPoweredByWall = () => {
+      ctx.save();
+      ctx.clearRect(0, 0, W, H);
+
+      // Measure both runs cleanly so mixed English + Arabic renders cleanly without BiDi reordering
+      const prefixText = 'Powered by';
+      const nameText = 'ط\u0640\u0640\u0640اه\u0640ر محمد';
+      const gap = 46;
+
+      ctx.font = '700 80px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      const prefixW = ctx.measureText(prefixText).width;
+
+      ctx.font = '800 142px "Cairo", "Tahoma", Arial, sans-serif';
+      const nameW = ctx.measureText(nameText).width;
+
+      const totalW = prefixW + gap + nameW;
+      const startX = (W - totalW) * 0.5;
+      const centerY = H * 0.46;
+
+      // Subtle architectural relief shadow so lettering reads like laser-cut wall typography on light plaster
+      ctx.shadowColor = 'rgba(11, 34, 62, 0.20)';
+      ctx.shadowBlur = 7;
+      ctx.shadowOffsetX = 3;
+      ctx.shadowOffsetY = 5;
+
+      // 1) "Powered by" on the left in crisp medical sky-blue
+      ctx.direction = 'ltr';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = '700 80px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      ctx.fillStyle = '#0369a1';
+      ctx.fillText(prefixText, startX, centerY + 10);
+
+      // 2) "طـــاهـر محمد" on the right in bold high-contrast deep navy
+      ctx.direction = 'rtl';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.font = '800 142px "Cairo", "Tahoma", Arial, sans-serif';
+      ctx.fillStyle = '#0b223e';
+      ctx.fillText(nameText, startX + totalW, centerY - 2);
+
+      // Minimal architectural hairline underline directly on the wall (no box, no frame)
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      const ruleW = Math.min(totalW + 80, W - 260);
+      const ruleX = (W - ruleW) * 0.5;
+      const ruleY = H - 72;
+      const ruleGrad = ctx.createLinearGradient(ruleX, 0, ruleX + ruleW, 0);
+      ruleGrad.addColorStop(0, 'rgba(2, 132, 199, 0)');
+      ruleGrad.addColorStop(0.18, 'rgba(2, 132, 199, 0.72)');
+      ruleGrad.addColorStop(0.5, '#0b223e');
+      ruleGrad.addColorStop(0.82, 'rgba(2, 132, 199, 0.72)');
+      ruleGrad.addColorStop(1, 'rgba(2, 132, 199, 0)');
+      ctx.fillStyle = ruleGrad;
+      ctx.fillRect(ruleX, ruleY, ruleW, 4);
+
+      // Tiny architectural diamond accent centered on the hairline
+      ctx.save();
+      ctx.translate(W * 0.5, ruleY + 2);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = '#0284c7';
+      ctx.fillRect(-6, -6, 12, 12);
+      ctx.restore();
+
+      ctx.restore();
+    };
+
+    drawPoweredByWall();
+    const tex = track(finalizeTexture(c, aniso, 1, 1, true, true));
+    tex.generateMipmaps = true;
+
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (disposed) return;
+        drawPoweredByWall();
+        tex.needsUpdate = true;
+      });
+    }
+
+    return tex;
+  })();
+
   // 12. Illuminated blue-glow outdoor monument sign (1024x520)
   const therasonMonument = (() => {
     const [c, ctx] = makeCanvas(1024, 520);
@@ -2436,6 +2530,7 @@ export function createTextureBundle(
     rugPattern,
     contactShadow,
     therasonWall,
+    poweredByWall,
     therasonMonument,
     therasonFacadeSign,
     anatomyPoster,
@@ -2453,6 +2548,7 @@ export function createTextureBundle(
     receptionScreen,
     updateReceptionScreen,
     dispose: () => {
+      disposed = true;
       created.forEach((t) => t.dispose());
     },
   };

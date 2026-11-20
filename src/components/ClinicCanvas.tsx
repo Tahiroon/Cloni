@@ -47,6 +47,7 @@ import {
   ReceptionDeskRigMeta,
   SmartLightMeta,
   updateDoors3D,
+  updateFoliageWindTime,
   WaterCoolerRigMeta,
   WORLD_TREES,
   WorldTreeDef,
@@ -616,8 +617,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const itemsLayer = new THREE.Group();
     const draftLayer = new THREE.Group();
     const actorsLayer = new THREE.Group();
+    const birdsLayer = new THREE.Group();
     const lightsLayer = new THREE.Group();
-    scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer, lightsLayer);
+    scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer, birdsLayer, lightsLayer);
 
     // Pre-allocated PointLight Pool (capped tightly on mobile GPUs: wall-wash & lamp halos illuminate standby lights at 0 shader cost)
     const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 5 : isMobileGpu ? 7 : 9;
@@ -853,12 +855,29 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         appearance: {
           skinTone: '#522c18',
           hairColor: '#17100c',
-          shirtColor: '#0f766e',
-          pantsColor: '#0f766e',
+          shirtColor: '#6d1d31',
+          pantsColor: '#f3e8d8',
           isFemale: true,
-          outfitStyle: 'dress',
+          outfitStyle: 'sudanese_thobe',
           hasHijab: true,
           variantSeed: 3,
+        },
+      },
+      {
+        id: 'walk_prom_3',
+        kind: 'promenade',
+        gx: 31,
+        gy: 12,
+        speed: 1.02,
+        appearance: {
+          skinTone: '#79472b',
+          hairColor: '#2d2926',
+          shirtColor: '#f6f2e7',
+          pantsColor: '#3b262a',
+          isFemale: true,
+          outfitStyle: 'sudanese_thobe',
+          hasHijab: true,
+          variantSeed: 6,
         },
       },
     ];
@@ -898,6 +917,614 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           turnWaitTimer: 0,
         });
       }
+    };
+
+    // Shared Active Tree Cache (zero per-frame allocations for songbirds & falling leaves)
+    let _cachedTreesKey = '__init__';
+    let _cachedActiveTrees: WorldTreeDef[] = WORLD_TREES;
+    const getActiveTrees = (): WorldTreeDef[] => {
+      const removed = latestRef.current.removedTreeIds;
+      const key = removed && removed.length > 0 ? removed.join(',') : '';
+      if (key !== _cachedTreesKey) {
+        _cachedTreesKey = key;
+        if (!key) {
+          _cachedActiveTrees = WORLD_TREES;
+        } else {
+          const removedSet = new Set(removed);
+          _cachedActiveTrees = WORLD_TREES.filter((t) => !removedSet.has(t.id));
+        }
+      }
+      return _cachedActiveTrees;
+    };
+
+    // Lightweight Pooled Outdoor Songbirds (shared 7 geometries & 6 materials, 0 shadow casting)
+    const birdBodyGeom = new THREE.SphereGeometry(0.034, 8, 6);
+    birdBodyGeom.scale(0.84, 0.88, 1.52);
+    const birdBellyGeom = new THREE.SphereGeometry(0.029, 6, 5);
+    birdBellyGeom.scale(0.86, 0.82, 1.32);
+    const birdHeadGeom = new THREE.SphereGeometry(0.022, 8, 6);
+    const birdBeakGeom = new THREE.ConeGeometry(0.0065, 0.020, 4);
+    birdBeakGeom.rotateX(Math.PI / 2);
+    const birdTailGeom = new THREE.BoxGeometry(0.024, 0.004, 0.056);
+    const birdWingLGeom = new THREE.BoxGeometry(0.105, 0.0038, 0.044);
+    birdWingLGeom.translate(0.052, 0, 0);
+    const birdWingRGeom = new THREE.BoxGeometry(0.105, 0.0038, 0.044);
+    birdWingRGeom.translate(-0.052, 0, 0);
+
+    const birdBellyMat = new THREE.MeshStandardMaterial({ color: 0xeae2d3, roughness: 0.88 });
+    const birdBeakMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.65 });
+    const birdPlumageMats = [
+      new THREE.MeshStandardMaterial({ color: 0x7a563d, roughness: 0.84 }), // House sparrow chestnut
+      new THREE.MeshStandardMaterial({ color: 0x8a7936, roughness: 0.84 }), // Olive-gold weaver
+      new THREE.MeshStandardMaterial({ color: 0x3b5c76, roughness: 0.82 }), // Nile slate-blue sunbird
+      new THREE.MeshStandardMaterial({ color: 0x968271, roughness: 0.86 }), // Warm palm dove sand
+    ];
+
+    interface AmbientSongbird {
+      group: THREE.Group;
+      wingL: THREE.Mesh;
+      wingR: THREE.Mesh;
+      state: 'hidden' | 'fly_in' | 'perched' | 'hop_fly' | 'fly_out';
+      timer: number;
+      dur: number;
+      hopsLeft: number;
+      seed: number;
+      startX: number;
+      startY: number;
+      startZ: number;
+      endX: number;
+      endY: number;
+      endZ: number;
+      arcH: number;
+      baseYaw: number;
+      isGroundPerch: boolean;
+    }
+
+    // Green grass lawn spots ("النجيلة") clear of clinic building, paved terrace & entrance walkway
+    const BIRD_GROUND_SPOTS: ReadonlyArray<{ x: number; y: number; z: number }> = [
+      { x: 24.4, y: 0.015, z: 10.6 }, // East courtyard north grass
+      { x: 24.6, y: 0.015, z: 18.6 }, // East courtyard south grass
+      { x: 24.1, y: 0.015, z: 20.9 }, // East courtyard southeast grass
+      { x: 20.6, y: 0.015, z: 24.6 }, // South garden lawn east
+      { x: 14.0, y: 0.015, z: 24.7 }, // South garden lawn center
+      { x: 7.4, y: 0.015, z: 24.6 },  // South garden lawn west
+      { x: 2.6, y: 0.015, z: 24.4 },  // Southwest corner grass
+      { x: 16.0, y: 0.015, z: -0.4 }, // North rear lawn
+      { x: 20.8, y: 0.015, z: -0.6 }, // Northeast rear lawn
+      { x: 38.7, y: 0.025, z: 10.8 }, // East outer grass verge north
+      { x: 38.7, y: 0.025, z: 20.0 }, // East outer grass verge south
+    ];
+
+    // Strict No-Fly Airspace over the Clinic Building (x: 2..22, z: 2..22 + eaves buffer)
+    const NOFLY_MIN_X = 1.0;
+    const NOFLY_MAX_X = 22.7;
+    const NOFLY_MIN_Z = 1.0;
+    const NOFLY_MAX_Z = 22.7;
+
+    const isInsideClinicNoFly = (x: number, z: number): boolean =>
+      x > NOFLY_MIN_X && x < NOFLY_MAX_X && z > NOFLY_MIN_Z && z < NOFLY_MAX_Z;
+
+    // Slab intersection test: returns true if flight segment A->B crosses clinic roof airspace
+    const segmentCrossesClinic = (ax: number, az: number, bx: number, bz: number): boolean => {
+      if (isInsideClinicNoFly(ax, az) || isInsideClinicNoFly(bx, bz)) return true;
+      const dx = bx - ax;
+      const dz = bz - az;
+      let tmin = 0;
+      let tmax = 1;
+
+      if (Math.abs(dx) < 1e-6) {
+        if (ax <= NOFLY_MIN_X || ax >= NOFLY_MAX_X) return false;
+      } else {
+        const inv = 1 / dx;
+        let t1 = (NOFLY_MIN_X - ax) * inv;
+        let t2 = (NOFLY_MAX_X - ax) * inv;
+        if (t1 > t2) {
+          const tmp = t1;
+          t1 = t2;
+          t2 = tmp;
+        }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) return false;
+      }
+
+      if (Math.abs(dz) < 1e-6) {
+        if (az <= NOFLY_MIN_Z || az >= NOFLY_MAX_Z) return false;
+      } else {
+        const inv = 1 / dz;
+        let t1 = (NOFLY_MIN_Z - az) * inv;
+        let t2 = (NOFLY_MAX_Z - az) * inv;
+        if (t1 > t2) {
+          const tmp = t1;
+          t1 = t2;
+          t2 = tmp;
+        }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) return false;
+      }
+
+      return true;
+    };
+
+    const pickOutwardSkyPoint = (
+      px: number,
+      pz: number,
+      distMin: number,
+      distMax: number,
+      out: { x: number; z: number }
+    ) => {
+      let ox = px - 12;
+      let oz = pz - 12;
+      if (px >= NOFLY_MAX_X) ox = Math.max(ox, 5.5);
+      if (px <= NOFLY_MIN_X) ox = Math.min(ox, -5.5);
+      if (pz >= NOFLY_MAX_Z) oz = Math.max(oz, 5.5);
+      if (pz <= NOFLY_MIN_Z) oz = Math.min(oz, -5.5);
+      const baseAng = Math.atan2(oz, ox);
+
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const spread = attempt < 4 ? 0.55 : 0.22;
+        const ang = baseAng + (Math.random() - 0.5) * 2 * spread;
+        const r = distMin + Math.random() * (distMax - distMin);
+        const sx = px + Math.cos(ang) * r;
+        const sz = pz + Math.sin(ang) * r;
+        if (!segmentCrossesClinic(sx, sz, px, pz)) {
+          out.x = sx;
+          out.z = sz;
+          return;
+        }
+      }
+      const len = Math.hypot(ox, oz) || 1;
+      const r = distMin + Math.random() * (distMax - distMin);
+      out.x = px + (ox / len) * r;
+      out.z = pz + (oz / len) * r;
+    };
+
+    const pickBirdOutdoorSpot = (
+      out: { x: number; y: number; z: number; isGround: boolean },
+      seed: number,
+      curX?: number,
+      curZ?: number,
+      wasGround?: boolean
+    ) => {
+      // Occasional short foraging hop nearby on the green lawn (strictly outside clinic)
+      if (wasGround && curX !== undefined && curZ !== undefined && Math.random() < 0.35) {
+        const ang = Math.random() * Math.PI * 2;
+        const hopDist = 1.0 + Math.random() * 1.4;
+        const nx = THREE.MathUtils.clamp(curX + Math.cos(ang) * hopDist, 1.5, 26.2);
+        const nz =
+          curZ >= NOFLY_MAX_Z
+            ? THREE.MathUtils.clamp(curZ + Math.sin(ang) * hopDist, 23.0, 25.8)
+            : curZ <= NOFLY_MIN_Z
+              ? THREE.MathUtils.clamp(curZ + Math.sin(ang) * hopDist, -1.5, 0.7)
+              : curZ + Math.sin(ang) * 0.7;
+        // Avoid clinic airspace, entrance walkway z=13.5..16.5 and stone terrace z=2.3..7.9
+        if (
+          !segmentCrossesClinic(curX, curZ, nx, nz) &&
+          !(nx > 22 && ((nz >= 13.5 && nz <= 16.5) || (nz >= 2.3 && nz <= 7.9)))
+        ) {
+          out.x = nx;
+          out.y = 0.015;
+          out.z = nz;
+          out.isGround = true;
+          return;
+        }
+      }
+
+      const activeTrees = getActiveTrees();
+      for (let attempt = 0; attempt < 14; attempt++) {
+        const useTree = activeTrees.length > 0 && Math.random() < 0.58;
+        let candX = 24.4;
+        let candY = 0.015;
+        let candZ = 10.6;
+        let candGround = true;
+
+        if (useTree) {
+          let tree = activeTrees[Math.floor(Math.random() * activeTrees.length)];
+          if (curX !== undefined && curZ !== undefined && activeTrees.length > 2 && attempt < 6) {
+            let bestDist = Infinity;
+            for (let k = 0; k < 3; k++) {
+              const cand = activeTrees[Math.floor(Math.random() * activeTrees.length)];
+              const d = Math.hypot(cand.x - curX, cand.z - curZ);
+              if (d > 1.8 && d < bestDist && !segmentCrossesClinic(curX, curZ, cand.x, cand.z)) {
+                bestDist = d;
+                tree = cand;
+              }
+            }
+          }
+          const ang = (seed * 2.17 + Math.random() * 1.8 + attempt * 0.7) % (Math.PI * 2);
+          const branchR = (tree.species === 'cypress' ? 0.36 : 0.78) * tree.scale;
+          candX = tree.x + Math.cos(ang) * branchR;
+          candZ = tree.z + Math.sin(ang) * branchR;
+          candY = (tree.species === 'cypress' ? 2.75 : 2.38) * tree.scale;
+          candGround = false;
+        } else {
+          const spot = BIRD_GROUND_SPOTS[Math.floor(Math.random() * BIRD_GROUND_SPOTS.length)];
+          candX = spot.x + (Math.random() - 0.5) * 1.1;
+          candY = spot.y;
+          candZ = spot.z + (Math.random() - 0.5) * 1.1;
+          candGround = true;
+        }
+
+        if (isInsideClinicNoFly(candX, candZ)) continue;
+        if (curX !== undefined && curZ !== undefined && segmentCrossesClinic(curX, curZ, candX, candZ)) {
+          continue;
+        }
+
+        out.x = candX;
+        out.y = candY;
+        out.z = candZ;
+        out.isGround = candGround;
+        return;
+      }
+
+      // Safe fallback on current garden side if no cross-free random target found
+      if (curX !== undefined && curZ !== undefined) {
+        out.x = curX;
+        out.y = wasGround ? 0.015 : 2.35;
+        out.z = curZ;
+        out.isGround = !!wasGround;
+      } else {
+        out.x = 24.4;
+        out.y = 0.015;
+        out.z = 10.6;
+        out.isGround = true;
+      }
+    };
+
+    const birdCount = isSoftwareGl || isMobileGpu ? 8 : 12;
+    const birdPool: AmbientSongbird[] = Array.from({ length: birdCount }, (_, idx) => {
+      const plumageMat = birdPlumageMats[idx % birdPlumageMats.length];
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(birdBodyGeom, plumageMat);
+      const belly = new THREE.Mesh(birdBellyGeom, birdBellyMat);
+      belly.position.set(0, -0.006, 0.008);
+      const head = new THREE.Mesh(birdHeadGeom, plumageMat);
+      head.position.set(0, 0.025, 0.040);
+      const beak = new THREE.Mesh(birdBeakGeom, birdBeakMat);
+      beak.position.set(0, 0.023, 0.062);
+      const tail = new THREE.Mesh(birdTailGeom, plumageMat);
+      tail.position.set(0, 0.008, -0.056);
+      tail.rotation.x = 0.24;
+
+      const wingL = new THREE.Mesh(birdWingLGeom, plumageMat);
+      wingL.position.set(0.016, 0.008, 0.004);
+      const wingR = new THREE.Mesh(birdWingRGeom, plumageMat);
+      wingR.position.set(-0.016, 0.008, 0.004);
+
+      group.add(body, belly, head, beak, tail, wingL, wingR);
+      group.visible = false;
+      birdsLayer.add(group);
+
+      return {
+        group,
+        wingL,
+        wingR,
+        state: 'hidden',
+        timer: 0.5 + idx * 1.15 + Math.random() * 1.8,
+        dur: 1,
+        hopsLeft: 2,
+        seed: idx * 3.7 + 1.1,
+        startX: 34,
+        startY: 6,
+        startZ: 24,
+        endX: 25,
+        endY: 2.5,
+        endZ: 10,
+        arcH: 0.9,
+        baseYaw: 0,
+        isGroundPerch: false,
+      };
+    });
+
+    const _birdTargetScratch = { x: 0, y: 0, z: 0, isGround: false };
+    const _skyPointScratch = { x: 0, z: 0 };
+    const updateAmbientSongbirds = (timeSec: number, dt: number, curZoom: number) => {
+      const isNight = latestRef.current.lightingMode === 'night';
+      const zoomVisible = curZoom >= 0.70;
+      birdsLayer.visible = zoomVisible;
+      if (!zoomVisible) return;
+
+      for (const b of birdPool) {
+        if (b.state === 'hidden') {
+          if (isNight) continue;
+          b.timer -= dt;
+          if (b.timer <= 0) {
+            pickBirdOutdoorSpot(_birdTargetScratch, b.seed);
+            pickOutwardSkyPoint(_birdTargetScratch.x, _birdTargetScratch.z, 8.5, 13.5, _skyPointScratch);
+            b.startX = _skyPointScratch.x;
+            b.startY = 5.0 + Math.random() * 1.5;
+            b.startZ = _skyPointScratch.z;
+            b.endX = _birdTargetScratch.x;
+            b.endY = _birdTargetScratch.y;
+            b.endZ = _birdTargetScratch.z;
+            b.isGroundPerch = _birdTargetScratch.isGround;
+            const dist = Math.hypot(b.endX - b.startX, b.endZ - b.startZ);
+            b.dur = THREE.MathUtils.clamp(dist / 3.9, 1.9, 4.0);
+            b.timer = 0;
+            b.hopsLeft = 2 + Math.floor(Math.random() * 3);
+            b.arcH = 0.65 + Math.random() * 0.45;
+            b.baseYaw = Math.atan2(b.endX - b.startX, b.endZ - b.startZ);
+            b.state = 'fly_in';
+            b.group.visible = true;
+          }
+          continue;
+        }
+
+        if (b.state === 'perched') {
+          b.timer -= dt;
+          // Fold wings calmly while perched
+          b.wingL.rotation.z = -0.22;
+          b.wingR.rotation.z = 0.22;
+
+          // Subtle curious head/body turn & natural grass foraging hop
+          const stepIdx = Math.floor((timeSec + b.seed) * 0.75);
+          const glanceYaw = Math.sin(stepIdx * 12.7 + b.seed) * 0.78;
+          b.group.rotation.y = lerpAngle(b.group.rotation.y, b.baseYaw + glanceYaw, Math.min(1, dt * 10));
+          const peckPulse = Math.max(0, Math.sin((timeSec + b.seed) * 4.2) - 0.74) * 3.4;
+          b.group.rotation.x = peckPulse * 0.28;
+          b.group.rotation.z = 0;
+
+          if (b.isGroundPerch) {
+            const hopCycle = ((timeSec + b.seed) * 0.95) % 1.9;
+            const hopLift = hopCycle < 0.22 ? Math.sin((hopCycle / 0.22) * Math.PI) * 0.055 : 0;
+            b.group.position.set(b.endX, b.endY + hopLift, b.endZ);
+          } else {
+            // Track gentle branch breeze while perched in tree crown
+            const perchSway = Math.sin(timeSec * 1.25 + b.endX * 0.31 + b.endZ * 0.23) * 0.022;
+            b.group.position.set(b.endX + perchSway, b.endY, b.endZ + perchSway * 0.55);
+          }
+
+          if (isNight || b.timer <= 0) {
+            if (!isNight && b.hopsLeft > 0) {
+              b.hopsLeft -= 1;
+              pickBirdOutdoorSpot(_birdTargetScratch, b.seed + b.hopsLeft * 1.9, b.endX, b.endZ, b.isGroundPerch);
+              const moved =
+                Math.hypot(_birdTargetScratch.x - b.endX, _birdTargetScratch.z - b.endZ) > 0.35;
+              if (moved) {
+                b.startX = b.endX;
+                b.startY = b.endY;
+                b.startZ = b.endZ;
+                b.endX = _birdTargetScratch.x;
+                b.endY = _birdTargetScratch.y;
+                b.endZ = _birdTargetScratch.z;
+                b.isGroundPerch = _birdTargetScratch.isGround;
+                const dist = Math.hypot(b.endX - b.startX, b.endZ - b.startZ);
+                b.dur = THREE.MathUtils.clamp(dist / 3.6, 0.85, 3.2);
+                b.timer = 0;
+                b.arcH = THREE.MathUtils.clamp(0.42 + dist * 0.11, 0.42, 1.35);
+                b.baseYaw = Math.atan2(b.endX - b.startX, b.endZ - b.startZ);
+                b.state = 'hop_fly';
+              } else {
+                b.hopsLeft = 0;
+                b.timer = 0.6;
+              }
+            } else {
+              pickOutwardSkyPoint(b.endX, b.endZ, 10.0, 15.0, _skyPointScratch);
+              b.startX = b.endX;
+              b.startY = b.endY;
+              b.startZ = b.endZ;
+              b.endX = _skyPointScratch.x;
+              b.endY = 5.6 + Math.random() * 1.5;
+              b.endZ = _skyPointScratch.z;
+              b.dur = 2.6 + Math.random() * 1.0;
+              b.timer = 0;
+              b.arcH = 0.9;
+              b.baseYaw = Math.atan2(b.endX - b.startX, b.endZ - b.startZ);
+              b.state = 'fly_out';
+            }
+          }
+          continue;
+        }
+
+        // Flight states: fly_in, hop_fly, fly_out
+        b.timer += dt;
+        const u = THREE.MathUtils.clamp(b.timer / b.dur, 0, 1);
+        const eased = b.state === 'fly_out' ? u * u * 0.55 + u * 0.45 : u * (2 - u);
+        const arcY = b.arcH * Math.sin(u * Math.PI);
+        const curveSide = Math.sin(u * Math.PI) * ((b.seed % 2) - 0.5) * 0.42;
+        const perpX = Math.cos(b.baseYaw);
+        const perpZ = -Math.sin(b.baseYaw);
+
+        let curX = THREE.MathUtils.lerp(b.startX, b.endX, eased) + perpX * curveSide;
+        const curY = THREE.MathUtils.lerp(b.startY, b.endY, eased) + arcY;
+        let curZ = THREE.MathUtils.lerp(b.startZ, b.endZ, eased) + perpZ * curveSide;
+
+        // Hard runtime barrier: never allow any bird coordinate over the clinic footprint
+        if (isInsideClinicNoFly(curX, curZ)) {
+          const dLeft = curX - NOFLY_MIN_X;
+          const dRight = NOFLY_MAX_X - curX;
+          const dTop = curZ - NOFLY_MIN_Z;
+          const dBot = NOFLY_MAX_Z - curZ;
+          const minEdge = Math.min(dLeft, dRight, dTop, dBot);
+          if (minEdge === dRight) curX = NOFLY_MAX_X;
+          else if (minEdge === dBot) curZ = NOFLY_MAX_Z;
+          else if (minEdge === dLeft) curX = NOFLY_MIN_X;
+          else curZ = NOFLY_MIN_Z;
+        }
+        b.group.position.set(curX, curY, curZ);
+
+        const climbSlope = (b.endY - b.startY) / Math.max(1, b.dur) + Math.cos(u * Math.PI) * b.arcH;
+        b.group.rotation.y = b.baseYaw;
+        b.group.rotation.x = THREE.MathUtils.clamp(-climbSlope * 0.14, -0.35, 0.35);
+        b.group.rotation.z = Math.cos(u * Math.PI) * ((b.seed % 2) - 0.5) * 0.28;
+
+        // Alternating natural wingbeats + short wing-tuck glide bursts
+        const isGliding = b.state !== 'fly_out' && u > 0.56 && Math.sin(timeSec * 2.4 + b.seed) > 0.15;
+        const flap = isGliding ? 0.14 : Math.sin(timeSec * 22.0 + b.seed) * 0.72;
+        b.wingL.rotation.z = flap;
+        b.wingR.rotation.z = -flap;
+
+        if (u >= 1) {
+          if (b.state === 'fly_out') {
+            b.state = 'hidden';
+            b.group.visible = false;
+            b.timer = isNight ? 8 : 3.5 + Math.random() * 6.5;
+          } else {
+            b.state = 'perched';
+            b.timer = b.isGroundPerch ? 3.2 + Math.random() * 3.4 : 4.2 + Math.random() * 4.2;
+          }
+        }
+      }
+    };
+
+    // Smart Instanced Falling Tree Leaves (1 single draw call, zero per-frame allocations, mobile-tuned)
+    const LEAF_COUNT = isSoftwareGl || isMobileGpu ? 22 : 36;
+    const leafGeom = new THREE.PlaneGeometry(0.088, 0.052);
+    const leafMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.86,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+    });
+    const fallingLeavesInst = new THREE.InstancedMesh(leafGeom, leafMat, LEAF_COUNT);
+    fallingLeavesInst.castShadow = false;
+    fallingLeavesInst.receiveShadow = false;
+    fallingLeavesInst.frustumCulled = false;
+
+    const leafPalette = [0x6a9d42, 0x7cb34c, 0x99ae47, 0xc79a38, 0xb67b2f];
+    const _leafCol = new THREE.Color();
+    for (let i = 0; i < LEAF_COUNT; i++) {
+      _leafCol.setHex(leafPalette[i % leafPalette.length]);
+      fallingLeavesInst.setColorAt(i, _leafCol);
+    }
+    if (fallingLeavesInst.instanceColor) fallingLeavesInst.instanceColor.needsUpdate = true;
+    scene.add(fallingLeavesInst);
+
+    interface FallingLeafParticle {
+      state: 'wait' | 'falling' | 'resting';
+      x: number;
+      y: number;
+      z: number;
+      vy: number;
+      vxBias: number;
+      vzBias: number;
+      rx: number;
+      ry: number;
+      rz: number;
+      vrx: number;
+      vry: number;
+      vrz: number;
+      swayFreq: number;
+      swayAmp: number;
+      phase: number;
+      timer: number;
+      baseScale: number;
+    }
+
+    const leafParticles: FallingLeafParticle[] = Array.from({ length: LEAF_COUNT }, (_, idx) => ({
+      state: 'wait',
+      x: 10,
+      y: -5,
+      z: 24,
+      vy: 0.36 + (idx % 5) * 0.032,
+      vxBias: 0.08 + ((idx % 3) - 1) * 0.04,
+      vzBias: 0.04 + ((idx % 4) - 1.5) * 0.025,
+      rx: idx * 0.7,
+      ry: idx * 1.1,
+      rz: idx * 0.5,
+      vrx: 1.4 + (idx % 4) * 0.45,
+      vry: 1.1 + (idx % 3) * 0.55,
+      vrz: 1.2 + (idx % 5) * 0.35,
+      swayFreq: 1.9 + (idx % 5) * 0.32,
+      swayAmp: 0.24 + (idx % 3) * 0.07,
+      phase: idx * 1.73,
+      timer: 0.25 + idx * 0.22,
+      baseScale: 0.78 + (idx % 4) * 0.14,
+    }));
+
+    const _leafMat4 = new THREE.Matrix4();
+    const _leafPos = new THREE.Vector3();
+    const _leafScale = new THREE.Vector3();
+    const _leafQuat = new THREE.Quaternion();
+    const _leafEuler = new THREE.Euler();
+
+    const spawnLeafInActiveTree = (leaf: FallingLeafParticle, trees: WorldTreeDef[]) => {
+      const tree = trees[Math.floor(Math.random() * trees.length)];
+      const ang = Math.random() * Math.PI * 2;
+      const maxR =
+        tree.species === 'cypress' ? 0.52 : tree.species === 'acacia' ? 1.32 : 1.02;
+      const r = (0.32 + Math.random() * 0.68) * maxR * tree.scale;
+      leaf.x = tree.x + Math.cos(ang) * r;
+      leaf.z = tree.z + Math.sin(ang) * r;
+      leaf.y = (2.05 + Math.random() * 0.85) * tree.scale;
+      leaf.vy = 0.32 + Math.random() * 0.16;
+      leaf.vxBias = 0.06 + Math.random() * 0.08;
+      leaf.vzBias = (Math.random() - 0.35) * 0.07;
+      leaf.rx = Math.random() * Math.PI;
+      leaf.ry = Math.random() * Math.PI;
+      leaf.rz = Math.random() * Math.PI;
+      leaf.state = 'falling';
+      leaf.timer = 0;
+    };
+
+    const updateFallingLeaves = (timeSec: number, dt: number, curZoom: number) => {
+      const activeTrees = getActiveTrees();
+      const visible = curZoom >= 0.72 && activeTrees.length > 0;
+      fallingLeavesInst.visible = visible;
+      if (!visible) return;
+
+      const gustX = Math.sin(timeSec * 0.62) * 0.11 + 0.07;
+      const gustZ = Math.cos(timeSec * 0.48) * 0.06;
+
+      for (let i = 0; i < LEAF_COUNT; i++) {
+        const p = leafParticles[i];
+        if (p.state === 'wait') {
+          p.timer -= dt;
+          if (p.timer <= 0) {
+            spawnLeafInActiveTree(p, activeTrees);
+          }
+          _leafScale.set(0, 0, 0);
+          _leafPos.set(0, -10, 0);
+          _leafQuat.identity();
+          _leafMat4.compose(_leafPos, _leafQuat, _leafScale);
+          fallingLeavesInst.setMatrixAt(i, _leafMat4);
+          continue;
+        }
+
+        if (p.state === 'falling') {
+          const flutter = Math.sin(timeSec * p.swayFreq + p.phase);
+          p.x += (p.vxBias + gustX + flutter * p.swayAmp) * dt;
+          p.z += (p.vzBias + gustZ + Math.cos(timeSec * (p.swayFreq * 0.82) + p.phase) * p.swayAmp * 0.65) * dt;
+          p.y -= p.vy * dt;
+          p.rx += p.vrx * dt;
+          p.ry += p.vry * dt;
+          p.rz += p.vrz * dt;
+
+          if (p.y <= 0.022) {
+            p.y = 0.022;
+            p.rx = Math.PI * 0.5;
+            p.rz = 0.05 * Math.sin(p.phase);
+            p.state = 'resting';
+            p.timer = 1.4 + (i % 4) * 0.35;
+          }
+
+          _leafPos.set(p.x, p.y, p.z);
+          _leafEuler.set(p.rx, p.ry, p.rz);
+          _leafQuat.setFromEuler(_leafEuler);
+          _leafScale.set(p.baseScale, p.baseScale, p.baseScale);
+          _leafMat4.compose(_leafPos, _leafQuat, _leafScale);
+          fallingLeavesInst.setMatrixAt(i, _leafMat4);
+        } else {
+          p.timer -= dt;
+          if (p.timer <= 0) {
+            p.state = 'wait';
+            p.timer = 0.6 + Math.random() * 2.4;
+            _leafScale.set(0, 0, 0);
+            _leafPos.set(0, -10, 0);
+            _leafMat4.compose(_leafPos, _leafQuat, _leafScale);
+          } else {
+            const fade = Math.min(1, p.timer / 0.65) * p.baseScale;
+            _leafPos.set(p.x, p.y, p.z);
+            _leafEuler.set(p.rx, p.ry, p.rz);
+            _leafQuat.setFromEuler(_leafEuler);
+            _leafScale.set(fade, fade, fade);
+            _leafMat4.compose(_leafPos, _leafQuat, _leafScale);
+          }
+          fallingLeavesInst.setMatrixAt(i, _leafMat4);
+        }
+      }
+      fallingLeavesInst.instanceMatrix.needsUpdate = true;
     };
 
     let draftMeshSig = '';
@@ -4302,16 +4929,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const _sp2 = { x: 0, y: 0 };
     const _sp3 = { x: 0, y: 0 };
 
-    const drawOverlayBadges = (timeMs: number) => {
+    const drawOverlayBadges = () => {
       const overlay = overlayCanvasRef.current;
       if (!overlay) return;
-      const w = containerW;
-      const h = containerH;
-      if (w < 1 || h < 1) return;
+      const w = Math.max(1, overlay.clientWidth || containerW);
+      const h = Math.max(1, overlay.clientHeight || containerH);
 
       const odpr = getTargetDpr(w, h);
-      const targetOvW = Math.floor(w * odpr);
-      const targetOvH = Math.floor(h * odpr);
+      const targetOvW = Math.max(1, Math.round(w * odpr));
+      const targetOvH = Math.max(1, Math.round(h * odpr));
       if (overlay.width !== targetOvW || overlay.height !== targetOvH) {
         overlay.width = targetOvW;
         overlay.height = targetOvH;
@@ -4323,13 +4949,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
       const ctx = cachedOverlayCtx;
       if (!ctx) return;
-      ctx.setTransform(odpr, 0, 0, odpr, 0, 0);
+      ctx.setTransform(targetOvW / w, 0, 0, targetOvH / h, 0, 0);
       ctx.clearRect(0, 0, w, h);
       if (!sceneAssetsInitialized) return;
 
       const {
         rooms: curRooms,
-        patients: curPatients,
         placedItems: curItems,
         placementDraft: curDraft,
         editMode: isEdit,
@@ -4491,7 +5116,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         ctx.restore();
       }
 
-      // 1. Locked Wing Badges
+      // 1. Fixed Compact Locked Wing Badges (small, crisp, constant screen-space dimensions)
       for (const room of curRooms) {
         if (room.unlocked) continue;
         const cx = (room.minX + room.maxX + 1) / 2;
@@ -4499,112 +5124,24 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const sp = projectToScreen(cx, 1.85 + CLINIC_FLOOR_ELEV, cz);
 
         ctx.save();
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
         ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
-        ctx.roundRect(sp.x - 52, sp.y - 20, 104, 40, 12);
+        ctx.roundRect(sp.x - 36, sp.y - 14, 72, 28, 8);
         ctx.fill();
         ctx.stroke();
 
         ctx.fillStyle = '#fbbf24';
-        ctx.font = '800 13px "Plus Jakarta Sans", sans-serif';
+        ctx.font = '800 10px "Plus Jakarta Sans", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`🔒 ${room.unlockCost}`, sp.x, sp.y - 4);
+        ctx.fillText(`🔒 ${room.unlockCost}`, sp.x, sp.y - 4.5);
 
         ctx.fillStyle = '#e2e8f0';
-        ctx.font = '700 10px "Cairo", sans-serif';
-        ctx.fillText(lang === 'ar' ? 'اضغط للفتح' : 'Tap to Open', sp.x, sp.y + 11);
+        ctx.font = '700 8.5px "Cairo", sans-serif';
+        ctx.fillText(lang === 'ar' ? 'اضغط للفتح' : 'Tap to Open', sp.x, sp.y + 6.5);
         ctx.restore();
-      }
-
-      // 2. Patient Floating Status Cards (?, Rx, Active Therapy Progress Ring, ✓)
-      if (!focId) {
-        const pulse = Math.sin(timeMs * 0.0055) * 3;
-        for (const p of curPatients) {
-          const entry = patientRigs.get(p.id);
-          const wx = entry ? entry.rig.root.position.x : p.gridX + 0.5;
-          const wz = entry ? entry.rig.root.position.z : p.gridY + 0.5;
-          const wy = entry
-            ? entry.rig.root.position.y + 1.6
-            : getSurfaceElevation(wx, wz).actorY + 1.6;
-          const sp = projectToScreen(wx, wy, wz);
-
-          if (p.state === 'in_treatment') {
-            const pct = Math.max(0, Math.min(1, p.treatmentProgress || 0));
-            ctx.save();
-            ctx.translate(sp.x, sp.y);
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-            ctx.beginPath();
-            ctx.arc(0, 0, 17, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.arc(0, 0, 13, 0, Math.PI * 2);
-            ctx.stroke();
-
-            ctx.strokeStyle = '#38bdf8';
-            ctx.lineCap = 'round';
-            ctx.beginPath();
-            ctx.arc(0, 0, 13, -Math.PI / 2, -Math.PI / 2 + pct * Math.PI * 2);
-            ctx.stroke();
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '800 9px "Plus Jakarta Sans", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(`${Math.round(pct * 100)}%`, 0, 0.5);
-            ctx.restore();
-            continue;
-          }
-
-          const badgeType =
-            p.state === 'waiting_checkin'
-              ? 'checkin'
-              : p.state === 'ready_for_exam'
-                ? 'ready'
-                : p.state === 'treated_leaving'
-                  ? 'treated'
-                  : null;
-          if (!badgeType) continue;
-
-          ctx.save();
-          ctx.translate(sp.x, sp.y + pulse);
-          if (badgeType === 'checkin') {
-            const vas = p.clinicalCase.vasPain;
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.roundRect(-27, -15, 54, 24, 10);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.fillStyle = '#d97706';
-            ctx.font = '900 11px "Plus Jakarta Sans", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(`? VAS ${vas}`, 0, -3);
-          } else {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
-            ctx.strokeStyle = badgeType === 'ready' ? '#0284c7' : '#10b981';
-            ctx.lineWidth = 2.2;
-            ctx.beginPath();
-            ctx.roundRect(-16, -15, 32, 24, 9);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.fillStyle = ctx.strokeStyle;
-            ctx.font = '900 12px "Plus Jakarta Sans", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(badgeType === 'ready' ? 'Rx' : '✓', 0, -3);
-          }
-          ctx.restore();
-        }
       }
 
       // 3. Minimal Edit-Mode Highlights (hovered item stands out crisply; wall items highlight on wall face)
@@ -4715,6 +5252,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         textures.waterNormal.offset.y = (tSec * 0.032) % 1;
         worldHandle.setZoomLod(cs.curZoom);
       }
+      updateFoliageWindTime(textures, tSec);
+      updateAmbientSongbirds(tSec, dt, cs.curZoom);
+      updateFallingLeaves(tSec, dt, cs.curZoom);
 
       const showItemMicro = cs.curZoom >= 0.98;
       if (showItemMicro !== lastShowItemMicro) {
@@ -4772,7 +5312,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       } else {
         renderer.render(scene, camera);
       }
-      drawOverlayBadges(nowMs);
+      drawOverlayBadges();
 
       if (isSoftwareGl) {
         afterDraw(tick);
@@ -4803,6 +5343,19 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       staffRigs.clear();
       for (const w of walkerRigs) disposeHumanoid3D(w.rig);
       walkerRigs.length = 0;
+      birdBodyGeom.dispose();
+      birdBellyGeom.dispose();
+      birdHeadGeom.dispose();
+      birdBeakGeom.dispose();
+      birdTailGeom.dispose();
+      birdWingLGeom.dispose();
+      birdWingRGeom.dispose();
+      birdBellyMat.dispose();
+      birdBeakMat.dispose();
+      birdPlumageMats.forEach((m) => m.dispose());
+      leafGeom.dispose();
+      leafMat.dispose();
+      fallingLeavesInst.dispose();
 
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       if (composer) composer.dispose();
@@ -4976,7 +5529,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
       // 1-tap switching between placed items while rearranging ONLY when actually tapping another item's tile (not an open valid target tile!)
       const tappedOnActiveGhost = hooks.hitTestDraftGhost(clientX, clientY);
-      if ((editMode || placementDraft.movingInstanceId) && !tappedOnActiveGhost && onSwitchEditingItem) {
+      if (editMode && !tappedOnActiveGhost && onSwitchEditingItem) {
         const footprintHit = findHitItemAt(rawX, rawZ);
         const visualHit = hooks.hitTestPlacedItem(clientX, clientY);
         const otherHit = footprintHit || (!nextValid ? visualHit : undefined);
@@ -5128,19 +5681,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     } else if (!placementDraft && hooks) {
       const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
       const hitItem = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(rawX, rawZ);
-      if (hitItem) {
-        if (editMode) {
-          pendingDragItem = hitItem;
-          hasGrabOffset = true;
-          grabOffX = rawX - hitItem.gridX;
-          grabOffZ = rawZ - hitItem.gridY;
-        } else if (onLongPressPlacedItem) {
-          longPressTimerRef.current = window.setTimeout(() => {
-            dragRef.current.active = false;
-            dragRef.current.moved = true;
-            latestRef.current.onLongPressPlacedItem?.(hitItem);
-          }, 320);
-        }
+      if (hitItem && editMode) {
+        pendingDragItem = hitItem;
+        hasGrabOffset = true;
+        grabOffX = rawX - hitItem.gridX;
+        grabOffZ = rawZ - hitItem.gridY;
       }
     }
 
