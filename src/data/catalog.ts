@@ -6,6 +6,9 @@ import {
   FriendClinic,
   Mission,
   PlacedItem,
+  PlayerCharacterConfig,
+  PlayerGender,
+  PlayerOutfitId,
   RoomSpecialty,
   StaffMember,
 } from '../types/clinic';
@@ -1377,26 +1380,158 @@ export const INITIAL_PLACED_ITEMS: PlacedItem[] = [
   { instanceId: 'init_flower_5', catalogId: 'flower_bed', gridX: 22, gridY: 16, rotation: 0, roomId: 'outdoor' },
 ];
 
-export const INITIAL_STAFF: StaffMember[] = [
+export interface PlayerOutfitDef {
+  id: PlayerOutfitId;
+  nameAr: string;
+  nameEn: string;
+  femaleNameAr?: string;
+  femaleNameEn?: string;
+  descAr: string;
+  descEn: string;
+  femaleDescAr?: string;
+  femaleDescEn?: string;
+  genders: PlayerGender[];
+  medicalWear: 'none' | 'lab_coat' | 'scrubs';
+  outfitStyle: 'casual' | 'abaya' | 'abaya_open';
+  hasStethoscope: boolean;
+  allowsTarhaToggle: boolean;
+  forceTarha?: boolean;
+  hasNiqab?: boolean;
+  shirtColor: string;
+  pantsColor: string;
+}
+
+export const PLAYER_DEFAULT_SKIN = '#8c583a';
+
+export const PLAYER_OUTFITS: PlayerOutfitDef[] = [
   {
-    id: 'staff_therapist_1',
-    role: 'therapist',
-    nameAr: 'د. سارة (أخصائية)',
-    nameEn: 'Dr. Sara (PT)',
-    hired: true,
-    hireCost: 0,
-    gridX: 7,
-    gridY: 14,
-    targetX: 7,
-    targetY: 14,
-    path: [],
-    skinTone: '#79472b',
-    hairColor: '#18100c',
-    scrubColor: '#0284c7',
-    facing: 1,
-    walkPhase: 0,
-    state: 'idle',
+    id: 'lab_coat',
+    nameAr: 'بنطال مع لابكوت',
+    nameEn: 'Full Lab Coat & Trousers',
+    femaleNameAr: 'لابكوت كامل مع بنطلون',
+    femaleNameEn: 'Full Lab Coat & Pants',
+    descAr: 'لابكوت طبي أبيض كامل ومقفل مع بنطال والسماعة',
+    descEn: 'Full crisp white buttoned medical lab coat over trousers with stethoscope',
+    femaleDescAr: 'لابكوت طبي أبيض كامل ومحتشم مع بنطلون والسماعة',
+    femaleDescEn: 'Full modest white medical lab coat over tailored pants with stethoscope',
+    genders: ['male', 'female'],
+    medicalWear: 'lab_coat',
+    outfitStyle: 'casual',
+    hasStethoscope: true,
+    allowsTarhaToggle: true,
+    shirtColor: '#f2f4f7',
+    pantsColor: '#1e293b',
   },
+  {
+    id: 'scrubs',
+    nameAr: 'اسكراب',
+    nameEn: 'Medical Scrubs',
+    descAr: 'طقم اسكراب طبي متكامل مع السماعة وبطاقة العيادة',
+    descEn: 'Complete clinical medical scrubs set with stethoscope & ID badge',
+    genders: ['male', 'female'],
+    medicalWear: 'scrubs',
+    outfitStyle: 'casual',
+    hasStethoscope: true,
+    allowsTarhaToggle: true,
+    shirtColor: '#0284c7',
+    pantsColor: '#0369a1',
+  },
+  {
+    id: 'shirt_pants',
+    nameAr: 'بنطلون وقميص',
+    nameEn: 'Shirt & Trousers',
+    descAr: 'قميص بياقة أنيقة مع حزام وبنطلون رسمي',
+    descEn: 'Crisp collared button shirt with tailored trousers',
+    genders: ['male', 'female'],
+    medicalWear: 'none',
+    outfitStyle: 'casual',
+    hasStethoscope: false,
+    allowsTarhaToggle: true,
+    shirtColor: '#b9d6f2',
+    pantsColor: '#1e293b',
+  },
+  {
+    id: 'female_abaya_closed',
+    nameAr: 'عباية مقفولة',
+    nameEn: 'Closed Abaya',
+    descAr: 'عباية سوداء مقفولة أنيقة مع طرحة متناسقة',
+    descEn: 'Full modest closed black abaya with matching tarha',
+    genders: ['female'],
+    medicalWear: 'none',
+    outfitStyle: 'abaya',
+    hasStethoscope: false,
+    allowsTarhaToggle: false,
+    forceTarha: true,
+    shirtColor: '#16171c',
+    pantsColor: '#18181b',
+  },
+  {
+    id: 'female_abaya_light',
+    nameAr: 'عباية فاتحة',
+    nameEn: 'Light Open Abaya',
+    descAr: 'عباية فاتحة مفتوحة فوق قميص وبنطلون مع طرحة',
+    descEn: 'Light-toned open abaya layered over shirt & trousers',
+    genders: ['female'],
+    medicalWear: 'none',
+    outfitStyle: 'abaya_open',
+    hasStethoscope: false,
+    allowsTarhaToggle: false,
+    forceTarha: true,
+    shirtColor: '#cbbba6',
+    pantsColor: '#f5f2eb',
+  },
+  {
+    id: 'female_abaya_niqab',
+    nameAr: 'عباية ونقاب',
+    nameEn: 'Abaya & Niqab',
+    descAr: 'عباية محتشمة كاملة مع نقاب يغطي الوجه بشكل واقعي',
+    descEn: 'Full modest abaya with authentic layered niqab',
+    genders: ['female'],
+    medicalWear: 'none',
+    outfitStyle: 'abaya',
+    hasStethoscope: false,
+    allowsTarhaToggle: false,
+    forceTarha: true,
+    hasNiqab: true,
+    shirtColor: '#141519',
+    pantsColor: '#141519',
+  },
+];
+
+export const DEFAULT_PLAYER_PROFILE: PlayerCharacterConfig = {
+  gender: 'male',
+  outfitId: 'lab_coat',
+  hasTarha: true,
+};
+
+export function resolvePlayerOutfitMeta(outfitId?: string): PlayerOutfitDef {
+  return PLAYER_OUTFITS.find((o) => o.id === outfitId) || PLAYER_OUTFITS[0];
+}
+
+export function normalizePlayerProfile(raw: unknown): PlayerCharacterConfig {
+  const obj = (raw || {}) as Partial<PlayerCharacterConfig> & { outfitId?: string };
+  const gender: PlayerGender = obj.gender === 'female' ? 'female' : 'male';
+  const legacyMap: Record<string, PlayerOutfitId> = {
+    lab_coat_blue: 'lab_coat',
+    lab_coat_classic: 'lab_coat',
+    scrubs_sky: 'scrubs',
+    scrubs_emerald: 'scrubs',
+    scrubs_navy: 'scrubs',
+    casual_shirt_pants: 'shirt_pants',
+    female_abaya: 'female_abaya_closed',
+    female_abaya_open: 'female_abaya_light',
+  };
+  const mappedId = (obj.outfitId && legacyMap[obj.outfitId]) || (obj.outfitId as PlayerOutfitId);
+  const meta = resolvePlayerOutfitMeta(mappedId);
+  const validOutfitId = meta.genders.includes(gender) ? meta.id : 'lab_coat';
+  return {
+    gender,
+    outfitId: validOutfitId,
+    hasTarha: typeof obj.hasTarha === 'boolean' ? obj.hasTarha : true,
+  };
+}
+
+export const INITIAL_STAFF: StaffMember[] = [
   {
     id: 'staff_receptionist',
     role: 'receptionist',
@@ -2273,6 +2408,7 @@ export function createInitialSaveState(): ClinicSaveState {
     placedItems: INITIAL_PLACED_ITEMS.map((i) => ({ ...i })),
     removedTreeIds: [],
     staff: INITIAL_STAFF.map((s) => ({ ...s })),
+    playerProfile: { ...DEFAULT_PLAYER_PROFILE },
     missions: INITIAL_MISSIONS.map((m) => ({ ...m })),
     lastSyncedAt: null,
   };

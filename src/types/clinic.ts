@@ -311,6 +311,22 @@ export interface FloatingFeedback {
   createdAt: number;
 }
 
+export type PlayerGender = 'male' | 'female';
+
+export type PlayerOutfitId =
+  | 'lab_coat'
+  | 'scrubs'
+  | 'shirt_pants'
+  | 'female_abaya_closed'
+  | 'female_abaya_light'
+  | 'female_abaya_niqab';
+
+export interface PlayerCharacterConfig {
+  gender: PlayerGender;
+  outfitId: PlayerOutfitId;
+  hasTarha: boolean;
+}
+
 export interface ClinicSaveState {
   version: number;
   studentId: string;
@@ -329,6 +345,7 @@ export interface ClinicSaveState {
   placedItems: PlacedItem[];
   removedTreeIds?: string[];
   staff: StaffMember[];
+  playerProfile?: PlayerCharacterConfig;
   missions: Mission[];
   lastSyncedAt: string | null;
 }

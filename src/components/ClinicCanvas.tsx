@@ -5,7 +5,12 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { CATALOG_ITEMS } from '../data/catalog';
+import {
+  CATALOG_ITEMS,
+  normalizePlayerProfile,
+  PLAYER_DEFAULT_SKIN,
+  resolvePlayerOutfitMeta,
+} from '../data/catalog';
 import {
   buildObstacleBoxes,
   buildWaitSeatSlots,
@@ -61,6 +66,7 @@ import {
   LightingMode,
   PatientEntity,
   PlacedItem,
+  PlayerCharacterConfig,
   StaffMember,
 } from '../types/clinic';
 
@@ -77,6 +83,8 @@ interface ClinicCanvasProps {
   placedItems: PlacedItem[];
   patients: PatientEntity[];
   staff: StaffMember[];
+  playerProfile?: PlayerCharacterConfig;
+  showPlayerCharacter?: boolean;
   floatingFeedbacks: FloatingFeedback[];
   focusedPatientId: string | null;
   placementDraft: PlacementDraft | null;
@@ -187,6 +195,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   placedItems,
   patients,
   staff,
+  playerProfile,
+  showPlayerCharacter = true,
   floatingFeedbacks,
   focusedPatientId,
   placementDraft,
@@ -347,6 +357,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     placedItems,
     patients,
     staff,
+    playerProfile,
+    showPlayerCharacter,
     floatingFeedbacks,
     focusedPatientId,
     placementDraft,
@@ -373,6 +385,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     placedItems,
     patients,
     staff,
+    playerProfile,
+    showPlayerCharacter,
     floatingFeedbacks,
     focusedPatientId,
     placementDraft,
@@ -677,6 +691,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       string,
       {
         rig: HumanoidRig;
+        appearanceKey?: string;
         gx: number;
         gy: number;
         visX: number;
@@ -1714,18 +1729,31 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               pt.gridY + 0.5 >= room.minY - 0.3 &&
               pt.gridY + 0.5 <= room.maxY + 1.3
           );
-          const occupiedByStaff = curStaff.some((st) => {
-            if (!st.hired) return false;
-            const rigEntry = staffRigs.get(st.id);
-            const sx = rigEntry ? rigEntry.gx + 0.5 : st.gridX + 0.5;
-            const sz = rigEntry ? rigEntry.gy + 0.5 : st.gridY + 0.5;
-            return (
-              sx >= room.minX - 0.3 &&
-              sx <= room.maxX + 1.3 &&
-              sz >= room.minY - 0.3 &&
-              sz <= room.maxY + 1.3
-            );
-          });
+          const occupiedByStaff =
+            curStaff.some((st) => {
+              if (!st.hired) return false;
+              const rigEntry = staffRigs.get(st.id);
+              const sx = rigEntry ? rigEntry.gx + 0.5 : st.gridX + 0.5;
+              const sz = rigEntry ? rigEntry.gy + 0.5 : st.gridY + 0.5;
+              return (
+                sx >= room.minX - 0.3 &&
+                sx <= room.maxX + 1.3 &&
+                sz >= room.minY - 0.3 &&
+                sz <= room.maxY + 1.3
+              );
+            }) ||
+            (() => {
+              const pRig = staffRigs.get('player_main');
+              if (!pRig) return false;
+              const sx = pRig.gx + 0.5;
+              const sz = pRig.gy + 0.5;
+              return (
+                sx >= room.minX - 0.3 &&
+                sx <= room.maxX + 1.3 &&
+                sz >= room.minY - 0.3 &&
+                sz <= room.maxY + 1.3
+              );
+            })();
           const isOccupied = occupiedByPatient || occupiedByStaff;
 
           if (roomMat) {
@@ -3290,19 +3318,71 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       };
 
-      for (const s of curStaff) {
+      const activeProfile = normalizePlayerProfile(latestRef.current.playerProfile);
+      const includePlayer = latestRef.current.showPlayerCharacter !== false;
+      const activeOutfitMeta = resolvePlayerOutfitMeta(activeProfile.outfitId);
+      const effectiveStaff: StaffMember[] = includePlayer
+        ? [
+            {
+              id: 'player_main',
+              role: 'therapist',
+              nameAr: 'طالب ثيراسون',
+              nameEn: 'Therason Student',
+              hired: true,
+              hireCost: 0,
+              gridX: 7,
+              gridY: 14,
+              targetX: 7,
+              targetY: 14,
+              path: [],
+              skinTone: PLAYER_DEFAULT_SKIN,
+              hairColor: '#18100c',
+              scrubColor: activeOutfitMeta.shirtColor,
+              facing: 1,
+              walkPhase: 0,
+              state: 'idle',
+            },
+            ...curStaff,
+          ]
+        : curStaff;
+
+      for (const s of effectiveStaff) {
         if (!s.hired) continue;
         activeStaffIds.add(s.id);
-        let entry = staffRigs.get(s.id);
-        if (!entry) {
-          const initialDesk =
-            s.role === 'receptionist'
-              ? curItems.find((it) => it.catalogId === 'reception_desk')
-              : undefined;
-          const initPose = initialDesk ? getReceptionDeskPose(initialDesk) : null;
-          const initGx = initPose ? initPose.seatTileX : s.gridX;
-          const initGy = initPose ? initPose.seatTileY : s.gridY;
-          const rig = createHumanoid3D({
+        const isPlayerActor = s.id === 'player_main';
+        const outfitMeta = isPlayerActor ? activeOutfitMeta : null;
+        const isFemalePlayer = activeProfile.gender === 'female';
+        const effectivePlayerTarha = isFemalePlayer
+          ? outfitMeta?.forceTarha
+            ? true
+            : activeProfile.hasTarha
+          : false;
+        const playerHasNiqab = Boolean(isFemalePlayer && outfitMeta?.hasNiqab);
+        const appearanceKey = isPlayerActor
+          ? `${activeProfile.gender}|${activeProfile.outfitId}|${effectivePlayerTarha ? 1 : 0}`
+          : `${s.id}|${s.skinTone}|${s.scrubColor}`;
+
+        const buildActorRig = () => {
+          if (isPlayerActor && outfitMeta) {
+            return createHumanoid3D({
+              skinTone: PLAYER_DEFAULT_SKIN,
+              hairColor: '#18100c',
+              shirtColor: outfitMeta.shirtColor,
+              pantsColor: outfitMeta.pantsColor,
+              hasHijab: effectivePlayerTarha,
+              hasNiqab: playerHasNiqab,
+              isFemale: isFemalePlayer,
+              outfitStyle: outfitMeta.outfitStyle,
+              medicalWear: outfitMeta.medicalWear,
+              hasStethoscope: outfitMeta.hasStethoscope,
+              shirtStyle: outfitMeta.medicalWear === 'none' && !isFemalePlayer ? 'shirt' : undefined,
+              isStaff: false,
+              isPlayer: true,
+              role: 'therapist',
+              ...pbrCharMaps,
+            });
+          }
+          return createHumanoid3D({
             skinTone: s.skinTone,
             hairColor: s.hairColor,
             shirtColor: s.scrubColor,
@@ -3314,9 +3394,31 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             role: s.role,
             ...pbrCharMaps,
           });
+        };
+
+        let entry = staffRigs.get(s.id);
+        if (entry && entry.appearanceKey !== appearanceKey) {
+          actorsLayer.remove(entry.rig.root);
+          disposeHumanoid3D(entry.rig);
+          const nextRig = buildActorRig();
+          nextRig.root.position.set(entry.visX, entry.groundY, entry.visZ);
+          actorsLayer.add(nextRig.root);
+          entry.rig = nextRig;
+          entry.appearanceKey = appearanceKey;
+        }
+        if (!entry) {
+          const initialDesk =
+            s.role === 'receptionist'
+              ? curItems.find((it) => it.catalogId === 'reception_desk')
+              : undefined;
+          const initPose = initialDesk ? getReceptionDeskPose(initialDesk) : null;
+          const initGx = initPose ? initPose.seatTileX : s.gridX;
+          const initGy = initPose ? initPose.seatTileY : s.gridY;
+          const rig = buildActorRig();
           actorsLayer.add(rig.root);
           entry = {
             rig,
+            appearanceKey,
             gx: initGx,
             gy: initGy,
             visX: initGx + 0.5,

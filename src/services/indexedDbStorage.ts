@@ -103,6 +103,7 @@ export function buildLightweightSyncPayload(state: ClinicSaveState) {
       rm: p.roomId,
     })),
     hiredStaffIds: state.staff.filter((s) => s.hired).map((s) => s.id),
+    playerProfile: state.playerProfile,
     updatedAt: new Date().toISOString(),
   };
 }

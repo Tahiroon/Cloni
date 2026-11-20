@@ -6,6 +6,7 @@ import { ClinicCanvas, PlacementDraft } from './components/ClinicCanvas';
 import { ClinicalAssessmentModal } from './components/ClinicalAssessmentModal';
 import { FriendsModal } from './components/FriendsModal';
 import { MissionsModal } from './components/MissionsModal';
+import { PlayerCharacterModal } from './components/PlayerCharacterModal';
 import { RoomUnlockModal } from './components/RoomUnlockModal';
 import { SettingsModal } from './components/SettingsModal';
 import { StoreSheet } from './components/StoreSheet';
@@ -14,8 +15,10 @@ import { WorldTreeDef } from './engine3d/models3d';
 import {
   CATALOG_ITEMS,
   createInitialSaveState,
+  DEFAULT_PLAYER_PROFILE,
   FALLBACK_CLINICAL_CASES,
   FRIEND_CLINICS,
+  normalizePlayerProfile,
   SPECIALTY_META,
 } from './data/catalog';
 import {
@@ -56,6 +59,7 @@ import {
   NavTab,
   PatientEntity,
   PlacedItem,
+  PlayerCharacterConfig,
   RoomSpecialty,
   StaffMember,
 } from './types/clinic';
@@ -162,6 +166,7 @@ export default function App() {
   const [activeNavTab, setActiveNavTab] = useState<NavTab | null>(null);
   const [storeOpen, setStoreOpen] = useState(false);
   const [storeFilter, setStoreFilter] = useState<NavTab | 'staff'>('store');
+  const [characterModalOpen, setCharacterModalOpen] = useState(false);
   const [missionsOpen, setMissionsOpen] = useState(false);
   const [friendsOpen, setFriendsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -356,9 +361,14 @@ export default function App() {
           }
         }
 
+        // Strip legacy Dr. Sara (staff_therapist_1) so the student's own character leads the clinic
+        const migratedStaff = (nextState.staff || []).filter((st) => st.id !== 'staff_therapist_1');
+
         // Keep unlimited coins active on this account
         nextState = {
           ...nextState,
+          staff: migratedStaff,
+          playerProfile: normalizePlayerProfile(nextState.playerProfile),
           placedItems: relocatedItems,
           lightingMode: nextState.lightingMode || 'day',
           removedTreeIds: nextState.removedTreeIds || [],
@@ -2271,6 +2281,14 @@ export default function App() {
     );
   };
 
+  const handleUpdatePlayerProfile = useCallback((nextProfile: PlayerCharacterConfig) => {
+    soundFx.tap();
+    setClinic((prev) => ({
+      ...prev,
+      playerProfile: nextProfile,
+    }));
+  }, []);
+
   const handleClaimMission = (missionId: string) => {
     const m = clinic.missions.find((ms) => ms.id === missionId);
     if (!m || m.claimed || m.progress < m.target) return;
@@ -2379,6 +2397,8 @@ export default function App() {
         placedItems={displayedItems}
         patients={displayedPatients}
         staff={displayedStaff}
+        playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
+        showPlayerCharacter={!visitingFriend}
         floatingFeedbacks={floatingFeedbacks}
         focusedPatientId={focusedPatientId}
         placementDraft={placementDraft}
@@ -2569,6 +2589,7 @@ export default function App() {
         satisfaction={clinic.satisfaction}
         language={clinic.language}
         lightingMode={lightingMode}
+        playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
         visitingFriendName={
           visitingFriend ? (isAr ? visitingFriend.nameAr : visitingFriend.nameEn) : null
         }
@@ -2583,6 +2604,14 @@ export default function App() {
         onOpenSettings={() => {
           soundFx.tap();
           setSettingsOpen(true);
+        }}
+        onOpenPlayerProfile={() => {
+          soundFx.tap();
+          setStoreOpen(false);
+          setCharacterModalOpen(true);
+          setEditMode(false);
+          setPlacementDraft(null);
+          setActiveNavTab(null);
         }}
         onExitFriendVisit={() => {
           soundFx.tap();
@@ -2628,6 +2657,16 @@ export default function App() {
           setUnlockTargetRoom(room);
         }}
         onHireStaff={handleHireStaff}
+      />
+
+      {/* Player Character Customizer (opened from Top-Left HUD Card) */}
+      <PlayerCharacterModal
+        open={characterModalOpen}
+        profile={normalizePlayerProfile(clinic.playerProfile)}
+        language={clinic.language}
+        lightingMode={lightingMode}
+        onClose={() => setCharacterModalOpen(false)}
+        onChange={handleUpdatePlayerProfile}
       />
 
       {/* Room Unlock & Specialty Picker */}

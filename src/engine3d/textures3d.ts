@@ -1230,21 +1230,19 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 4, 4, false));
   })();
 
-  // 9f. Natural human skin micro-pore & tonal variation map (512x512, neutral so rich dark-brown & black tones stay true)
-  const skinMicroMap = catalogOnly
-    ? dummyTex
-    : (() => {
+  // 9f. Natural human skin micro-pore & tonal variation map (512x512, neutral so rich dark-brown & medium tones stay true)
+  const skinMicroMap = (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
-    ctx.fillStyle = '#f8f6f4';
+    ctx.fillStyle = '#fcf9f7';
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 110; i++) {
       const x = (Math.sin(i * 19.1) * 0.5 + 0.5) * 256;
       const y = (Math.cos(i * 37.3) * 0.5 + 0.5) * 256;
       const r = 22 + (i % 5) * 6;
       const g = ctx.createRadialGradient(x, y, 2, x, y, r);
-      g.addColorStop(0, i % 2 === 0 ? 'rgba(255, 250, 246, 0.10)' : 'rgba(222, 214, 208, 0.12)');
-      g.addColorStop(1, 'rgba(248,246,244,0)');
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(255, 251, 248, 0.12)' : 'rgba(232, 220, 212, 0.12)');
+      g.addColorStop(1, 'rgba(252,249,247,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -1253,19 +1251,17 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 2, 2, true));
   })();
 
-  const skinRoughMap = catalogOnly
-    ? dummyTex
-    : (() => {
+  const skinRoughMap = (() => {
     const [c, ctx] = makeCanvas(512, 512);
     ctx.scale(2, 2);
-    ctx.fillStyle = '#929292'; // ~0.57 natural semi-matte skin
+    ctx.fillStyle = '#8e8e8e'; // ~0.55 natural semi-matte skin
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 140; i++) {
       const x = (Math.sin(i * 23.3) * 0.5 + 0.5) * 256;
       const y = (Math.cos(i * 41.9) * 0.5 + 0.5) * 256;
       const g = ctx.createRadialGradient(x, y, 2, x, y, 16);
-      g.addColorStop(0, i % 2 === 0 ? 'rgba(130,130,130,0.28)' : 'rgba(156,156,156,0.28)');
-      g.addColorStop(1, 'rgba(146,146,146,0)');
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(124,124,124,0.26)' : 'rgba(154,154,154,0.26)');
+      g.addColorStop(1, 'rgba(142,142,142,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.arc(x, y, 16, 0, Math.PI * 2);

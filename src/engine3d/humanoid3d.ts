@@ -19,7 +19,11 @@ export interface HumanoidAppearance {
   variantSeed?: number;
   mobilityAid?: 'none' | 'cane' | 'crutches';
   isStaff?: boolean;
+  isPlayer?: boolean;
   role?: StaffRole;
+  medicalWear?: 'none' | 'lab_coat' | 'scrubs';
+  hasStethoscope?: boolean;
+  hasNiqab?: boolean;
   contactShadowTex?: THREE.Texture;
   skinMicroMap?: THREE.Texture;
   skinRoughMap?: THREE.Texture;
@@ -70,19 +74,84 @@ function resolveRichSkinColor(hexStr: string | undefined, seed = 0): THREE.Color
   return c;
 }
 
-function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.56) {
+let cachedHairBump: THREE.CanvasTexture | null = null;
+function getHairStrandBump(): THREE.CanvasTexture {
+  if (cachedHairBump) return cachedHairBump;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, 128, 128);
+  for (let x = 0; x < 128; x++) {
+    const v = 128 + Math.round(Math.sin(x * 0.95) * 26 + Math.cos(x * 2.3) * 14);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(x, 0, 1, 128);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 3);
+  tex.needsUpdate = true;
+  cachedHairBump = tex;
+  return tex;
+}
+
+let cachedIdBadgeTex: THREE.CanvasTexture | null = null;
+function getIdBadgeTexture(): THREE.CanvasTexture {
+  if (cachedIdBadgeTex) return cachedIdBadgeTex;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 160;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, 128, 160);
+  // Top clinical blue lanyard bar
+  ctx.fillStyle = '#0284c7';
+  ctx.fillRect(0, 0, 128, 34);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('THERASON', 64, 23);
+  // Mini clinician avatar frame
+  ctx.fillStyle = '#e0f2fe';
+  ctx.fillRect(14, 46, 44, 54);
+  ctx.fillStyle = '#8c583a';
+  ctx.beginPath();
+  ctx.arc(36, 65, 11, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#0369a1';
+  ctx.fillRect(22, 80, 28, 20);
+  // Lines & barcode
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(68, 52, 46, 8);
+  ctx.fillStyle = '#64748b';
+  ctx.fillRect(68, 68, 38, 6);
+  ctx.fillRect(68, 82, 42, 6);
+  ctx.fillStyle = '#0f172a';
+  for (let bx = 16; bx < 112; bx += 6) {
+    ctx.fillRect(bx, 118, (bx % 12 === 0 ? 3 : 2), 26);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  cachedIdBadgeTex = tex;
+  return tex;
+}
+
+function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.54) {
   const baseCol = new THREE.Color(hex);
-  const sheenCol = baseCol.clone().lerp(new THREE.Color(0x9a4c30), 0.38);
+  const sheenCol = baseCol.clone().lerp(new THREE.Color(0xb85e42), 0.42);
   return new THREE.MeshPhysicalMaterial({
     color: baseCol,
     map: appearance.skinMicroMap ?? null,
     roughnessMap: appearance.skinRoughMap ?? null,
     roughness,
     metalness: 0.0,
-    sheen: 0.16,
-    sheenRoughness: 0.68,
+    sheen: 0.24,
+    sheenRoughness: 0.64,
     sheenColor: sheenCol,
-    envMapIntensity: 0.34,
+    envMapIntensity: 0.36,
   });
 }
 
@@ -159,22 +228,29 @@ function pickGlbKey(appearance: HumanoidAppearance): string {
   const style = resolveOutfitStyle(appearance);
   const idx = Math.abs(appearance.variantSeed || 0);
 
-  // All women & staff use woman_suit.glb (long sleeves, closed ankles, zero bare shoulder/arm/leg skin)
+  // Female characters & receptionist use woman_suit.glb (long sleeves, closed ankles)
   if (
-    appearance.isStaff ||
     appearance.isFemale ||
     appearance.hasHijab ||
     style === 'abaya' ||
     style === 'abaya_open' ||
     style === 'dress' ||
-    style === 'sudanese_thobe'
+    style === 'sudanese_thobe' ||
+    (appearance.isStaff && appearance.isFemale !== false)
   ) {
     return 'char_woman_suit';
   }
 
-  // Men: Jalabiya uses man_suit.glb; casual chooses tshirt (man_casual2) or long-sleeve shirt (man_suit)
-  if (style === 'jalabiya') {
+  // Male player: Lab Coat & Shirt+Pants use man_suit.glb (long sleeves & collared neckline); Scrubs use man_casual2.glb (short sleeves)
+  if (
+    style === 'jalabiya' ||
+    appearance.medicalWear === 'lab_coat' ||
+    (appearance.isPlayer && appearance.medicalWear !== 'scrubs')
+  ) {
     return 'char_suit';
+  }
+  if (appearance.medicalWear === 'scrubs') {
+    return 'char_man2';
   }
   if (appearance.shirtStyle === 'tshirt') return 'char_man2';
   if (appearance.shirtStyle === 'shirt') return 'char_suit';
@@ -203,6 +279,10 @@ function createSkinnedGarmentMesh(
     zBot: number;
     topRx: number;
     topRy: number;
+    chestZ?: number;
+    chestRx?: number;
+    chestRy?: number;
+    chestCy?: number;
     midRx: number;
     midRy: number;
     botRx: number;
@@ -212,6 +292,7 @@ function createSkinnedGarmentMesh(
     openFrontGapRad?: number;
     closeBottomCap?: boolean;
     accentHemHex?: number;
+    pleated?: boolean;
   }
 ): THREE.SkinnedMesh {
   const skeleton = legMesh.skeleton;
@@ -219,13 +300,16 @@ function createSkinnedGarmentMesh(
 
   const idxHips = findBoneIdx(bones, ['Hips']);
   const idxAbdomen = findBoneIdx(bones, ['Abdomen', 'Hips']);
+  const idxTorso = findBoneIdx(bones, ['Torso', 'Abdomen', 'Hips']);
+  const idxChest = findBoneIdx(bones, ['Chest', 'Torso', 'Abdomen', 'Hips']);
+  const idxNeck = findBoneIdx(bones, ['Neck', 'Chest', 'Torso', 'Hips']);
   const idxUL = findBoneIdx(bones, ['UpperLegL', 'UpperLeg.L']);
   const idxLL = findBoneIdx(bones, ['LowerLegL', 'LowerLeg.L']);
   const idxUR = findBoneIdx(bones, ['UpperLegR', 'UpperLeg.R']);
   const idxLR = findBoneIdx(bones, ['LowerLegR', 'LowerLeg.R']);
 
-  const rings = 24;
-  const radialSegs = 44;
+  const rings = 30;
+  const radialSegs = 48;
   const gap = opts.openFrontGapRad || 0;
   const thetaStart = gap;
   const thetaSpan = Math.PI * 2 - gap * 2;
@@ -247,30 +331,65 @@ function createSkinnedGarmentMesh(
   const hemRatioG = baseCol.g > 0.02 ? hemCol.g / baseCol.g : 0.72;
   const hemRatioB = baseCol.b > 0.02 ? hemCol.b / baseCol.b : 0.72;
 
-  for (let r = 0; r <= rings; r++) {
-    const v = r / rings; // 0 = top waist/chest, 1 = bottom hem
-    const z = THREE.MathUtils.lerp(opts.zTop, opts.zBot, v);
-    const cy = THREE.MathUtils.lerp(opts.topCy, opts.botCy, v);
+  const hasChestRing =
+    opts.chestZ !== undefined &&
+    opts.chestRx !== undefined &&
+    opts.chestRy !== undefined;
+  const chestV = hasChestRing
+    ? THREE.MathUtils.clamp((opts.zTop - opts.chestZ!) / Math.max(0.0005, opts.zTop - opts.zBot), 0.08, 0.45)
+    : 0;
+  const midV = hasChestRing ? Math.max(chestV + 0.18, 0.48) : 0.36;
 
+  for (let r = 0; r <= rings; r++) {
+    const v = r / rings; // 0 = top neck/chest, 1 = bottom hem
+    const z = THREE.MathUtils.lerp(opts.zTop, opts.zBot, v);
+    let cy: number;
     let rx: number;
     let ry: number;
-    if (v < 0.36) {
-      const t = v / 0.36;
-      const smooth = t * t * (3 - 2 * t);
-      rx = THREE.MathUtils.lerp(opts.topRx, opts.midRx, smooth);
-      ry = THREE.MathUtils.lerp(opts.topRy, opts.midRy, smooth);
+
+    if (hasChestRing) {
+      const cRx = opts.chestRx!;
+      const cRy = opts.chestRy!;
+      const cCy = opts.chestCy ?? opts.topCy;
+      if (v < chestV) {
+        const t = v / chestV;
+        const smooth = t * t * (3 - 2 * t);
+        rx = THREE.MathUtils.lerp(opts.topRx, cRx, smooth);
+        ry = THREE.MathUtils.lerp(opts.topRy, cRy, smooth);
+        cy = THREE.MathUtils.lerp(opts.topCy, cCy, smooth);
+      } else if (v < midV) {
+        const t = (v - chestV) / Math.max(0.01, midV - chestV);
+        const smooth = t * t * (3 - 2 * t);
+        rx = THREE.MathUtils.lerp(cRx, opts.midRx, smooth);
+        ry = THREE.MathUtils.lerp(cRy, opts.midRy, smooth);
+        cy = THREE.MathUtils.lerp(cCy, opts.botCy, t * 0.55);
+      } else {
+        const t = (v - midV) / Math.max(0.01, 1 - midV);
+        rx = THREE.MathUtils.lerp(opts.midRx, opts.botRx, t);
+        ry = THREE.MathUtils.lerp(opts.midRy, opts.botRy, t);
+        cy = THREE.MathUtils.lerp(cCy, opts.botCy, 0.55 + t * 0.45);
+      }
     } else {
-      const t = (v - 0.36) / 0.64;
-      rx = THREE.MathUtils.lerp(opts.midRx, opts.botRx, t);
-      ry = THREE.MathUtils.lerp(opts.midRy, opts.botRy, t);
+      cy = THREE.MathUtils.lerp(opts.topCy, opts.botCy, v);
+      if (v < 0.36) {
+        const t = v / 0.36;
+        const smooth = t * t * (3 - 2 * t);
+        rx = THREE.MathUtils.lerp(opts.topRx, opts.midRx, smooth);
+        ry = THREE.MathUtils.lerp(opts.topRy, opts.midRy, smooth);
+      } else {
+        const t = (v - 0.36) / 0.64;
+        rx = THREE.MathUtils.lerp(opts.midRx, opts.botRx, t);
+        ry = THREE.MathUtils.lerp(opts.midRy, opts.botRy, t);
+      }
     }
 
     for (let c = 0; c <= radialSegs; c++) {
       const u = c / radialSegs;
       const theta = thetaStart + u * thetaSpan;
-      // Subtle organic vertical pleats widening toward the lower hem
+      // Subtle organic vertical pleats widening toward lower hem (suppressed for tailored scrubs/coats)
       const pleatWave = Math.sin(theta * 7 + v * 1.4);
-      const pleatAmp = 0.042 * Math.max(0, v - 0.06);
+      const basePleatAmp = opts.pleated === false ? 0.008 : 0.042;
+      const pleatAmp = basePleatAmp * Math.max(0, v - 0.06);
       const pleatMul = 1 + pleatWave * pleatAmp;
       // In CharacterArmature space: +X is left, -Y is world front (+Z), +Y is world back (-Z)
       const x = rx * pleatMul * Math.sin(theta);
@@ -303,9 +422,42 @@ function createSkinnedGarmentMesh(
       let b3 = idxAbdomen;
       let w3 = 0;
 
-      if (z >= 0.0108) {
+      if (z >= 0.0144) {
+        // Neck-base collar ring blends Chest <-> Neck seamlessly
+        const neckT = THREE.MathUtils.clamp((z - 0.0144) / Math.max(0.0005, opts.zTop - 0.0144), 0, 1);
+        b0 = idxChest;
+        w0 = 1 - neckT * 0.28;
+        b1 = idxNeck;
+        w1 = neckT * 0.28;
+        b2 = idxTorso;
+        w2 = 0;
+        b3 = idxHips;
+        w3 = 0;
+      } else if (z >= 0.0128) {
+        // Upper chest tracks Torso <-> Chest seamlessly
+        const chestT = THREE.MathUtils.clamp((z - 0.0128) / 0.0016, 0, 1);
+        b0 = idxTorso;
+        w0 = 0.72 * (1 - chestT);
+        b1 = idxChest;
+        w1 = 0.28 + 0.72 * chestT;
+        b2 = idxAbdomen;
+        w2 = 0;
+        b3 = idxHips;
+        w3 = 0;
+      } else if (z >= 0.0118) {
+        // Mid-torso / ribcage shares cleanly between Abdomen & Torso
+        const topT = THREE.MathUtils.clamp((z - 0.0118) / 0.0010, 0, 1);
+        b0 = idxAbdomen;
+        w0 = 0.72 * (1 - topT) + 0.16 * topT;
+        b1 = idxTorso;
+        w1 = 0.20 * (1 - topT) + 0.84 * topT;
+        b2 = idxHips;
+        w2 = 0.08 * (1 - topT);
+        b3 = idxHips;
+        w3 = 0;
+      } else if (z >= 0.0108) {
         // Upper waist/hips smoothly shared between Abdomen/Hips & UpperLegs
-        const waistT = THREE.MathUtils.clamp((z - 0.0108) / Math.max(0.0005, opts.zTop - 0.0108), 0, 1);
+        const waistT = THREE.MathUtils.clamp((z - 0.0108) / 0.0010, 0, 1);
         const legShare = 0.25 * (1 - waistT);
         w0 = 0.45 * (1 - waistT) + 0.35 * waistT;
         w3 = 0.30 + 0.35 * waistT;
@@ -466,25 +618,45 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       outfitStyle === 'abaya_open' ||
       outfitStyle === 'dress' ||
       outfitStyle === 'sudanese_thobe' ||
-      appearance.isStaff
+      (appearance.isStaff && appearance.isFemale !== false)
+  );
+  const medicalWear: 'none' | 'lab_coat' | 'scrubs' =
+    appearance.medicalWear ??
+    (appearance.isStaff && appearance.role === 'therapist' ? 'lab_coat' : 'none');
+  const showStethoscope = Boolean(
+    appearance.hasStethoscope ??
+      (medicalWear !== 'none' || (appearance.isStaff && appearance.role === 'therapist'))
   );
   const thobeKenarHex =
     shirtLum >= 0.65
       ? (seedIdx % 2 === 0 ? 0xb8893c : 0x7a2338)
       : shirtCol.clone().lerp(new THREE.Color(0xf3dfc1), 0.56).getHex();
   const tarhaCol =
-    appearance.role === 'therapist'
-      ? new THREE.Color('#e2e8f0')
-      : appearance.role === 'receptionist'
-        ? new THREE.Color('#cbd5e1')
-        : outfitStyle === 'sudanese_thobe'
-          ? shirtCol.clone()
-          : outfitStyle === 'abaya'
-            ? shirtCol.clone().offsetHSL(0, -0.05, 0.14)
-            : outfitStyle === 'abaya_open'
-              ? pantsCol.clone().offsetHSL(0, -0.04, 0.04)
-              : shirtCol.clone().offsetHSL(0, -0.06, 0.08);
+    appearance.hasNiqab
+      ? new THREE.Color('#141519')
+      : medicalWear !== 'none'
+        ? new THREE.Color('#e2e8f0')
+        : appearance.role === 'receptionist'
+          ? new THREE.Color('#cbd5e1')
+          : outfitStyle === 'sudanese_thobe'
+            ? shirtCol.clone()
+            : outfitStyle === 'abaya'
+              ? new THREE.Color('#1a1b20')
+              : outfitStyle === 'abaya_open'
+                ? shirtCol.clone().offsetHSL(0, -0.04, 0.12)
+                : new THREE.Color('#334155');
   const tarhaUnderCapCol = tarhaCol.clone().multiplyScalar(0.78);
+
+  const effectiveHijab =
+    isFemaleLook &&
+    (appearance.hasHijab !== undefined
+      ? appearance.hasHijab
+      : Boolean(
+          appearance.role === 'receptionist' ||
+            outfitStyle === 'abaya' ||
+            outfitStyle === 'abaya_open' ||
+            outfitStyle === 'sudanese_thobe'
+        ));
 
   const targetH = 1.34 * (appearance.heightScale || 1);
   const glbKey = pickGlbKey(appearance);
@@ -493,9 +665,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     bodyPivot.add(skinnedModel);
 
     let legSkinnedMesh: THREE.SkinnedMesh | null = null;
-    const isTherapist = Boolean(appearance.isStaff && appearance.role === 'therapist');
     const hideSuitLegs =
-      !isTherapist &&
+      medicalWear === 'none' &&
       (outfitStyle === 'abaya' ||
         outfitStyle === 'dress' ||
         outfitStyle === 'jalabiya' ||
@@ -508,7 +679,19 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         mesh.receiveShadow = true;
 
         const meshName = mesh.name || '';
-        if (meshName === 'Suit_Legs' && (mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+        const parentName = mesh.parent?.name || '';
+        const isSuitBody = meshName.startsWith('Suit_Body') || parentName === 'Suit_Body';
+        const isCasualBody = meshName.startsWith('Casual2_Body') || parentName === 'Casual2_Body';
+        const isBodyMesh = isSuitBody || isCasualBody;
+        const isSuitLegs = meshName.startsWith('Suit_Legs') || parentName === 'Suit_Legs';
+        const isCasualLegs = meshName.startsWith('Casual2_Legs') || parentName === 'Casual2_Legs';
+        const isSuitFeet = meshName.startsWith('Suit_Feet') || parentName === 'Suit_Feet';
+        const isCasualFeet = meshName.startsWith('Casual2_Feet') || parentName === 'Casual2_Feet';
+
+        if (
+          (isSuitLegs || isCasualLegs) &&
+          (mesh as THREE.SkinnedMesh).isSkinnedMesh
+        ) {
           legSkinnedMesh = mesh as THREE.SkinnedMesh;
           if (hideSuitLegs) {
             mesh.visible = false;
@@ -516,6 +699,42 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         }
 
         const origMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const hasSkinOnly =
+          origMats.length === 1 && (origMats[0] as THREE.Material | undefined)?.name === 'Skin';
+
+        if (
+          (medicalWear === 'scrubs' || medicalWear === 'lab_coat') &&
+          isBodyMesh &&
+          !hasSkinOnly
+        ) {
+          // Tuck central chest, V-lapels & dress-shirt collar smoothly inside while keeping shoulders/sleeves & neck Skin untouched
+          const clonedGeom = mesh.geometry.clone();
+          const posAttr = clonedGeom.getAttribute('position') as THREE.BufferAttribute;
+          if (posAttr) {
+            for (let vi = 0; vi < posAttr.count; vi++) {
+              const vx = posAttr.getX(vi);
+              const vy = posAttr.getY(vi);
+              let vz = posAttr.getZ(vi);
+              const xBound = vz >= 0.0140 ? 0.00105 : 0.00162;
+              const maxZ = isSuitBody ? (isFemaleLook ? 0.01518 : 0.01555) : 0.0140;
+              if (vz < maxZ && Math.abs(vx) < xBound) {
+                const tuckT = THREE.MathUtils.clamp((maxZ - vz) / 0.0007, 0.35, 1);
+                const shrink = 1 - (isSuitBody ? 0.30 : 0.26) * tuckT;
+                const cy = isFemaleLook ? -0.00066 : -0.00046;
+                if (isSuitBody && !isFemaleLook && vz >= 0.0148 && Math.abs(vx) < 0.00086) {
+                  // Pull tall male suit shirt collar tips slightly below z=0.01515 lab-coat neck ring
+                  vz -= 0.00042;
+                }
+                posAttr.setXYZ(vi, vx * shrink, cy + (vy - cy) * shrink, vz);
+              }
+            }
+            posAttr.needsUpdate = true;
+            clonedGeom.computeVertexNormals();
+          }
+          mesh.geometry = clonedGeom;
+          mesh.userData.sharedGlbGeom = false;
+        }
+
         const clonedMats = origMats.map((m) => {
           const orig = m as THREE.MeshStandardMaterial;
           const mName = orig.name || '';
@@ -524,42 +743,91 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
           if (mName === 'Skin') {
             if (meshName.includes('Feet') && isFemaleLook) {
-              mat = makeLeatherMat(0x1f1916, appearance, 0.62);
+              mat = makeLeatherMat(0x1f1916, appearance, 0.56);
             } else {
-              mat = makeSkinMat(skinCol.getHex(), appearance, 0.62);
+              mat = makeSkinMat(skinCol.getHex(), appearance, 0.55);
             }
           } else if (mName === 'Skin_Darker') {
-            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.66);
-          } else if (
-            mName === 'Hair' ||
-            mName === 'Hair_Blond' ||
-            mName === 'Hair_Brown' ||
-            mName === 'Eyebrows'
-          ) {
-            if (isFemaleLook && appearance.hasHijab && mName === 'Hair_Blond') {
-              mat = makeClothMat(tarhaUnderCapCol.getHex(), appearance, 0.86, 0.45);
+            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.60);
+          } else if (mName === 'Eye' || (mName === 'Brown' && (meshName.includes('Head') || parentName.includes('Head')))) {
+            // Hide flat low-poly GLB eye cube; replaced by anatomically sculpted 3D sclera/iris/eyelid eyes
+            mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
+            mat.visible = false;
+          } else if (mName === 'Eyebrows' || (mName === 'Hair_Brown' && (meshName.includes('Head') || parentName.includes('Head')))) {
+            // Hide boxy GLB eyebrow rectangles; replaced by sculpted curved 3D eyebrows
+            mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
+            mat.visible = false;
+          } else if (mName === 'Hair' || mName === 'Hair_Blond' || mName === 'Hair_Brown') {
+            if (isFemaleLook && effectiveHijab && mName === 'Hair_Blond') {
+              // Completely hide hair mesh under Tarha so zero stray tufts clip out
+              mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
+              mat.visible = false;
             } else {
               mat = new THREE.MeshPhysicalMaterial({
                 color: hairCol.getHex(),
-                roughness: 0.78,
+                bumpMap: getHairStrandBump(),
+                bumpScale: 0.0028,
+                roughness: 0.54,
                 metalness: 0.02,
-                sheen: 0.28,
-                sheenRoughness: 0.45,
-                sheenColor: new THREE.Color(0x6b5344),
-                envMapIntensity: 0.45,
+                sheen: 0.44,
+                sheenRoughness: 0.42,
+                sheenColor: new THREE.Color(0x6e5140),
+                envMapIntensity: 0.48,
               });
             }
-          } else if (isTherapist) {
-            if (mName === 'Black' && meshName === 'Suit_Body') {
-              mat = makeClothMat(0xedf2f7, appearance, 0.72, 0.38);
-            } else if (mName === 'White' && meshName === 'Suit_Body') {
-              mat = makeClothMat(0x0284c7, appearance, 0.78, 0.48);
-            } else if (mName === 'Black' && meshName === 'Suit_Legs') {
-              mat = makeClothMat(0x0f3a5c, appearance, 0.82, 0.42);
-            } else if (meshName === 'Suit_Feet') {
-              mat = makeLeatherMat(0x1e293b, appearance, 0.48);
+          } else if (medicalWear === 'lab_coat') {
+            if (isFemaleLook) {
+              if ((mName === 'Black' || mName === 'White') && isSuitBody) {
+                // Full pure white medical lab coat sleeves/shoulders/neck with zero inner shirt showing
+                mat = makeClothMat(0xf2f4f7, appearance, 0.72, 0.36);
+              } else if (mName === 'Black' && isSuitLegs) {
+                mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.38);
+              } else if (isSuitFeet) {
+                mat = makeLeatherMat(0x1b1918, appearance, 0.40);
+              } else {
+                mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.75, 0.35);
+              }
             } else {
-              mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.75, 0.35);
+              if ((mName === 'Suit' || mName === 'White') && isSuitBody) {
+                // Full pure white medical lab coat sleeves/shoulders/neck with zero inner shirt showing
+                mat = makeClothMat(0xf2f4f7, appearance, 0.72, 0.36);
+              } else if (mName === 'Tie') {
+                mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
+                mat.visible = false;
+              } else if (mName === 'Suit' && isSuitLegs) {
+                mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.38);
+              } else if (mName === 'Red_Dark' || mName === 'Black') {
+                mat = makeLeatherMat(0x1b1918, appearance, 0.40);
+              } else {
+                mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.75, 0.35);
+              }
+            }
+          } else if (medicalWear === 'scrubs') {
+            if (isFemaleLook) {
+              if ((mName === 'Black' || mName === 'White') && isSuitBody) {
+                // Unified cohesive scrub top across shoulders, chest, sleeves & collar (no blazer cutaway)
+                mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.46);
+              } else if (mName === 'Black' && isSuitLegs) {
+                mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.40);
+              } else if (isSuitFeet) {
+                mat = makeLeatherMat(0x1e293b, appearance, 0.42);
+              } else {
+                mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.76, 0.35);
+              }
+            } else {
+              if (mName === 'LightBrown' || (mName === 'Suit' && isSuitBody)) {
+                mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.46);
+              } else if (mName === 'White' && isBodyMesh) {
+                mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.45);
+              } else if (mName === 'LightBlue' || (mName === 'Suit' && isSuitLegs)) {
+                mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.40);
+              } else if (mName === 'White' && isCasualFeet) {
+                mat = makeLeatherMat(0xedf1f5, appearance, 0.48);
+              } else if (mName === 'Red_Dark' || mName === 'Black') {
+                mat = makeLeatherMat(0x1e293b, appearance, 0.44);
+              } else {
+                mat = orig.clone();
+              }
             }
           } else if (outfitStyle === 'jalabiya') {
             if (mName === 'Suit' || mName === 'White' || mName === 'Tie') {
@@ -570,91 +838,81 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.78, 0.35);
             }
           } else if (outfitStyle === 'abaya') {
-            if ((mName === 'Black' || mName === 'White') && meshName === 'Suit_Body') {
-              mat = makeClothMat(shirtCol.getHex(), appearance, 0.86, 0.62);
-            } else if (meshName === 'Suit_Feet') {
-              mat = makeLeatherMat(0x181615, appearance, 0.52);
+            if ((mName === 'Black' || mName === 'White') && isSuitBody) {
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.82, 0.58);
+            } else if (isSuitFeet) {
+              mat = makeLeatherMat(0x181615, appearance, 0.48);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.82, 0.4);
             }
           } else if (outfitStyle === 'abaya_open') {
-            if (mName === 'Black' && meshName === 'Suit_Body') {
-              mat = makeClothMat(shirtCol.getHex(), appearance, 0.86, 0.6);
-            } else if (
-              (mName === 'White' && meshName === 'Suit_Body') ||
-              (mName === 'Black' && meshName === 'Suit_Legs')
-            ) {
-              mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.5);
-            } else if (meshName === 'Suit_Feet') {
-              mat = makeLeatherMat(0x1f1916, appearance, 0.5);
+            if (mName === 'Black' && isSuitBody) {
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.82, 0.58);
+            } else if (mName === 'White' && isSuitBody) {
+              mat = makeClothMat(pantsCol.getHex(), appearance, 0.76, 0.46);
+            } else if (mName === 'Black' && isSuitLegs) {
+              mat = makeClothMat(0x1e293b, appearance, 0.82, 0.36);
+            } else if (isSuitFeet) {
+              mat = makeLeatherMat(0x1f1916, appearance, 0.46);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.82, 0.4);
             }
           } else if (outfitStyle === 'dress') {
-            if ((mName === 'Black' || mName === 'White') && meshName === 'Suit_Body') {
+            if ((mName === 'Black' || mName === 'White') && isSuitBody) {
               mat = makeClothMat(shirtCol.getHex(), appearance, 0.82, 0.58);
-            } else if (meshName === 'Suit_Feet') {
+            } else if (isSuitFeet) {
               mat = makeLeatherMat(0x27201c, appearance, 0.48);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.8, 0.4);
             }
           } else if (outfitStyle === 'sudanese_thobe') {
-            if (mName === 'Black' && meshName === 'Suit_Body') {
+            if (mName === 'Black' && isSuitBody) {
               mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.48);
-            } else if (mName === 'White' && meshName === 'Suit_Body') {
+            } else if (mName === 'White' && isSuitBody) {
               const innerNeckHex = pantsCol.clone().lerp(new THREE.Color(0xffffff), 0.14).getHex();
               mat = makeClothMat(innerNeckHex, appearance, 0.82, 0.48);
-            } else if (meshName === 'Suit_Feet') {
+            } else if (isSuitFeet) {
               mat = makeLeatherMat(shoeLeatherHex, appearance, 0.5);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.82, 0.45);
             }
           } else if (isFemaleLook) {
-            if (mName === 'Black' && meshName === 'Suit_Body') {
-              mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.48);
-            } else if (mName === 'White' && meshName === 'Suit_Body') {
-              mat = makeClothMat(contrastInnerHex, appearance, 0.78, 0.48);
-            } else if (mName === 'Black' && meshName === 'Suit_Legs') {
-              mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.36);
-            } else if (meshName === 'Suit_Feet') {
-              mat = makeLeatherMat(shoeLeatherHex, appearance, 0.48);
+            if (mName === 'Black' && isSuitBody) {
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.76, 0.46);
+            } else if (mName === 'White' && isSuitBody) {
+              const collarTint = appearance.isPlayer
+                ? shirtCol.clone().lerp(new THREE.Color(0xffffff), 0.24).getHex()
+                : contrastInnerHex;
+              mat = makeClothMat(collarTint, appearance, 0.76, 0.46);
+            } else if (mName === 'Black' && isSuitLegs) {
+              mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.36);
+            } else if (isSuitFeet) {
+              mat = makeLeatherMat(shoeLeatherHex, appearance, 0.42);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.8, 0.35);
             }
           } else {
-            if (mName === 'LightBrown' || (mName === 'Suit' && meshName === 'Suit_Body')) {
-              mat = makeClothMat(shirtCol.getHex(), appearance, 0.8, 0.45);
+            if (mName === 'LightBrown' || (mName === 'Suit' && isSuitBody)) {
+              mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.45);
             } else if (mName === 'Tie') {
-              mat = makeClothMat(tieColorHex, appearance, 0.74, 0.52);
-            } else if (mName === 'White' && meshName === 'Suit_Body') {
-              mat = makeClothMat(contrastInnerHex, appearance, 0.78, 0.45);
-            } else if (mName === 'LightBlue' || (mName === 'Suit' && meshName === 'Suit_Legs')) {
-              mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.34);
+              if (appearance.isPlayer) {
+                mat = new THREE.MeshBasicMaterial({ visible: false }) as unknown as THREE.MeshStandardMaterial;
+                mat.visible = false;
+              } else {
+                mat = makeClothMat(tieColorHex, appearance, 0.74, 0.52);
+              }
+            } else if (mName === 'White' && isSuitBody) {
+              const innerTint = appearance.isPlayer
+                ? shirtCol.clone().lerp(new THREE.Color(0xffffff), 0.24).getHex()
+                : contrastInnerHex;
+              mat = makeClothMat(innerTint, appearance, 0.76, 0.45);
+            } else if (mName === 'LightBlue' || (mName === 'Suit' && isSuitLegs)) {
+              mat = makeClothMat(pantsCol.getHex(), appearance, 0.82, 0.34);
             } else if (mName === 'Red_Dark' || mName === 'Black') {
-              mat = makeLeatherMat(shoeLeatherHex, appearance, 0.48);
-            } else if (mName === 'Eye') {
-              mat = new THREE.MeshPhysicalMaterial({
-                color: targetHex,
-                roughness: 0.14,
-                metalness: 0.0,
-                clearcoat: 0.85,
-                clearcoatRoughness: 0.08,
-                envMapIntensity: 0.65,
-              });
+              mat = makeLeatherMat(shoeLeatherHex, appearance, 0.42);
             } else {
               mat = orig.clone();
             }
-          }
-
-          if (mName === 'Eye' && !(mat instanceof THREE.MeshPhysicalMaterial)) {
-            mat = new THREE.MeshPhysicalMaterial({
-              color: targetHex,
-              roughness: 0.14,
-              metalness: 0.0,
-              clearcoat: 0.85,
-              clearcoatRoughness: 0.08,
-              envMapIntensity: 0.65,
-            });
           }
 
           mat.name = mName;
@@ -666,84 +924,164 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     });
 
-    // Build SkinnedMesh garments directly on the character's skeleton (zero leg/body clipping!)
-    if (legSkinnedMesh && !isTherapist) {
+    // Build SkinnedMesh garments directly on the character's skeleton (zero leg/hip clipping!)
+    if (legSkinnedMesh && medicalWear === 'lab_coat') {
+      // Full closed buttoned white medical lab coat from neck collar cleanly down to mid-thigh (zero inner shirt!)
+      createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
+        colorHex: 0xf2f4f7,
+        zTop: 0.01515,
+        zBot: 0.0054,
+        topRx: isFemaleLook ? 0.00098 : 0.00108,
+        topRy: isFemaleLook ? 0.00074 : 0.00088,
+        topCy: isFemaleLook ? -0.00054 : -0.00035,
+        chestZ: 0.0136,
+        chestRx: isFemaleLook ? 0.00126 : 0.00150,
+        chestRy: isFemaleLook ? 0.00112 : 0.00118,
+        chestCy: isFemaleLook ? -0.00086 : -0.00062,
+        midRx: isFemaleLook ? 0.00172 : 0.00180,
+        midRy: isFemaleLook ? 0.00132 : 0.00136,
+        botRx: isFemaleLook ? 0.00210 : 0.00214,
+        botRy: isFemaleLook ? 0.00146 : 0.00150,
+        botCy: -0.00054,
+        openFrontGapRad: 0,
+        pleated: false,
+      });
+    } else if (legSkinnedMesh && medicalWear === 'scrubs') {
+      if (isFemaleLook) {
+        // Female full seamless clinical scrub top from neck collar down cleanly over scrub pants (zero blazer/shirt!)
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
+          colorHex: shirtCol.getHex(),
+          zTop: 0.01515,
+          zBot: 0.0080,
+          topRx: 0.00096,
+          topRy: 0.00072,
+          topCy: -0.00054,
+          chestZ: 0.0136,
+          chestRx: 0.00124,
+          chestRy: 0.00110,
+          chestCy: -0.00086,
+          midRx: 0.00162,
+          midRy: 0.00128,
+          botRx: 0.00190,
+          botRy: 0.00126,
+          botCy: -0.00052,
+          pleated: false,
+        });
+      } else {
+        // Male scrubs over Casual2 pullover base
+        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
+          colorHex: shirtCol.getHex(),
+          zTop: 0.0138,
+          zBot: 0.0080,
+          topRx: 0.00144,
+          topRy: 0.00112,
+          midRx: 0.00162,
+          midRy: 0.00128,
+          botRx: 0.00184,
+          botRy: 0.00120,
+          topCy: -0.00064,
+          botCy: -0.00056,
+          pleated: false,
+        });
+      }
+    } else if (legSkinnedMesh && medicalWear === 'none') {
       if (outfitStyle === 'abaya') {
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
-          zTop: 0.0124,
+          zTop: 0.0134,
           zBot: 0.0012,
-          topRx: 0.00156,
-          topRy: 0.00126,
-          midRx: 0.00208,
-          midRy: 0.00150,
-          botRx: 0.00258,
-          botRy: 0.00172,
-          topCy: -0.00072,
-          botCy: -0.00058,
+          topRx: 0.00126,
+          topRy: 0.00096,
+          midRx: 0.00186,
+          midRy: 0.00138,
+          botRx: 0.00246,
+          botRy: 0.00168,
+          topCy: -0.00084,
+          botCy: -0.00056,
           closeBottomCap: true,
-          accentHemHex: (appearance.variantSeed || 0) % 2 === 0 ? 0xc59b57 : undefined,
+          accentHemHex:
+            !appearance.hasNiqab && !appearance.isPlayer && (appearance.variantSeed || 0) % 2 === 0
+              ? 0xc59b57
+              : undefined,
         });
       } else if (outfitStyle === 'abaya_open') {
+        // Soft ivory/light inner tunic tucked over trousers + flowing open-front Abaya outer coat
+        if (appearance.isPlayer) {
+          createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
+            colorHex: pantsCol.getHex(),
+            zTop: 0.0128,
+            zBot: 0.0082,
+            topRx: 0.00120,
+            topRy: 0.00090,
+            midRx: 0.00158,
+            midRy: 0.00122,
+            botRx: 0.00188,
+            botRy: 0.00120,
+            topCy: -0.00082,
+            botCy: -0.00054,
+            pleated: false,
+          });
+        }
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
-          zTop: 0.0124,
+          zTop: 0.0134,
           zBot: 0.0013,
-          topRx: 0.00166,
-          topRy: 0.00134,
-          midRx: 0.00222,
-          midRy: 0.00158,
-          botRx: 0.00270,
-          botRy: 0.00180,
-          topCy: -0.00070,
+          topRx: 0.00130,
+          topRy: 0.00100,
+          midRx: 0.00196,
+          midRy: 0.00144,
+          botRx: 0.00258,
+          botRy: 0.00174,
+          topCy: -0.00084,
           botCy: -0.00056,
-          openFrontGapRad: 0.28,
+          openFrontGapRad: 0.36,
         });
       } else if (outfitStyle === 'dress') {
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
-          zTop: 0.0116,
+          zTop: 0.0128,
           zBot: 0.0016,
-          topRx: 0.00150,
-          topRy: 0.00120,
-          midRx: 0.00206,
-          midRy: 0.00148,
-          botRx: 0.00254,
-          botRy: 0.00168,
-          topCy: -0.00072,
-          botCy: -0.00058,
+          topRx: 0.00124,
+          topRy: 0.00094,
+          midRx: 0.00184,
+          midRy: 0.00138,
+          botRx: 0.00246,
+          botRy: 0.00166,
+          topCy: -0.00082,
+          botCy: -0.00055,
           closeBottomCap: true,
         });
       } else if (outfitStyle === 'sudanese_thobe') {
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
-          zTop: 0.0124,
+          zTop: 0.0128,
           zBot: 0.0014,
-          topRx: 0.00155,
-          topRy: 0.00126,
-          midRx: 0.00202,
-          midRy: 0.00146,
-          botRx: 0.00234,
+          topRx: 0.00124,
+          topRy: 0.00094,
+          midRx: 0.00184,
+          midRy: 0.00138,
+          botRx: 0.00232,
           botRy: 0.00162,
-          topCy: -0.00072,
-          botCy: -0.00058,
+          topCy: -0.00082,
+          botCy: -0.00056,
           closeBottomCap: true,
           accentHemHex: thobeKenarHex,
         });
       } else if (outfitStyle === 'casual' && isFemaleLook) {
-        // Neat modest hip-length tunic / blouse extension over full trousers
+        // Full modest hip-length blouse contoured seamlessly over trousers
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
           colorHex: shirtCol.getHex(),
-          zTop: 0.0117,
-          zBot: 0.0086,
-          topRx: 0.00150,
-          topRy: 0.00120,
-          midRx: 0.00174,
-          midRy: 0.00134,
-          botRx: 0.00192,
-          botRy: 0.00144,
-          topCy: -0.00072,
-          botCy: -0.00062,
+          zTop: 0.0128,
+          zBot: 0.0082,
+          topRx: 0.00118,
+          topRy: 0.00088,
+          midRx: 0.00160,
+          midRy: 0.00124,
+          botRx: 0.00188,
+          botRy: 0.00122,
+          topCy: -0.00082,
+          botCy: -0.00052,
+          pleated: false,
         });
       } else if (outfitStyle === 'jalabiya') {
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
@@ -840,47 +1178,265 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     });
 
-    // Subtle Chest Accents (Jalabiya collar/placket, Embroidered Abaya placket, Dress sash, Therapist Stethoscope & ID badge)
+    // Anatomical Chest & Waist Accents keyed accurately to measured GLB + full garment chest contours
+    const bustFrontZ =
+      medicalWear === 'lab_coat' || medicalWear === 'scrubs'
+        ? isFemaleLook
+          ? 0.197
+          : 0.184
+        : isFemaleLook
+          ? 0.189
+          : 0.176;
+    const upperChestZ =
+      medicalWear === 'lab_coat' || medicalWear === 'scrubs'
+        ? isFemaleLook
+          ? 0.160
+          : 0.156
+        : isFemaleLook
+          ? 0.148
+          : 0.146;
+    const lowerChestZ =
+      medicalWear === 'lab_coat' || medicalWear === 'scrubs'
+        ? isFemaleLook
+          ? 0.182
+          : 0.178
+        : isFemaleLook
+          ? 0.168
+          : 0.169;
+    const collarZ =
+      medicalWear === 'lab_coat' || medicalWear === 'scrubs'
+        ? isFemaleLook
+          ? 0.136
+          : 0.132
+        : isFemaleLook
+          ? 0.120
+          : 0.124;
     if (bones['Chest']) {
-      if (isTherapist) {
+      if (showStethoscope) {
         const medAcc = new THREE.Group();
         medAcc.scale.setScalar(0.01);
-        const tubeMat = makeLeatherMat(0x1e293b, appearance, 0.44);
-        const chromeMat = makeMetalMat(0xdbe2ea, appearance, 0.22, 0.88);
-        const badgeMat = colorMat(0xf8fafc, 0.35, 0.04);
+        const tubeMat = makeLeatherMat(0x1b2536, appearance, 0.40);
+        const chromeMat = makeMetalMat(0xdbe2ea, appearance, 0.20, 0.88);
+        const badgeMat = new THREE.MeshPhysicalMaterial({
+          map: getIdBadgeTexture(),
+          roughness: 0.32,
+          metalness: 0.04,
+          clearcoat: 0.35,
+        });
         const lanyardBlue = colorMat(0x0284c7, 0.55, 0.05);
 
-        // Stethoscope draped smoothly around the collar and down the chest coat
+        // Stethoscope draped smoothly around the neck and resting flush outside the chest contour
         const stethCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(-0.088, 0.025, 0.118),
-          new THREE.Vector3(-0.072, 0.12, 0.085),
-          new THREE.Vector3(-0.062, 0.165, -0.025),
-          new THREE.Vector3(0, 0.175, -0.068),
-          new THREE.Vector3(0.062, 0.165, -0.025),
-          new THREE.Vector3(0.072, 0.115, 0.085),
-          new THREE.Vector3(0.068, 0.01, 0.125),
+          new THREE.Vector3(-0.070, -0.055, lowerChestZ + 0.014),
+          new THREE.Vector3(-0.068, 0.005, bustFrontZ + 0.004),
+          new THREE.Vector3(-0.062, 0.080, upperChestZ + 0.004),
+          new THREE.Vector3(-0.054, 0.132, 0.088),
+          new THREE.Vector3(0, 0.146, -0.018),
+          new THREE.Vector3(0.054, 0.132, 0.088),
+          new THREE.Vector3(0.062, 0.080, upperChestZ + 0.004),
+          new THREE.Vector3(0.068, 0.005, bustFrontZ + 0.004),
+          new THREE.Vector3(0.062, -0.066, lowerChestZ + 0.014),
         ]);
         const stethTube = new THREE.Mesh(
-          new THREE.TubeGeometry(stethCurve, 32, 0.009, 12, false),
+          new THREE.TubeGeometry(stethCurve, 38, 0.0080, 12, false),
           tubeMat
         );
         const chestDiaphragm = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.024, 0.026, 0.014, 22),
+          new THREE.CylinderGeometry(0.023, 0.025, 0.012, 22),
           chromeMat
         );
-        chestDiaphragm.rotation.x = Math.PI / 2;
-        chestDiaphragm.position.set(0.068, 0.008, 0.132);
-        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.011, 12, 10), chromeMat);
-        earTipL.position.set(-0.088, 0.025, 0.118);
+        chestDiaphragm.rotation.x = Math.PI / 2 - 0.15;
+        chestDiaphragm.position.set(0.062, -0.070, lowerChestZ + 0.019);
+        const earTipL = new THREE.Mesh(new THREE.SphereGeometry(0.0095, 12, 10), chromeMat);
+        earTipL.position.set(-0.070, -0.055, lowerChestZ + 0.014);
 
-        // Clinic ID Badge clipped on left coat lapel
-        const badgeCard = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.062, 0.006), badgeMat);
-        badgeCard.position.set(-0.078, 0.048, 0.125);
-        const badgeStripe = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.014, 0.007), lanyardBlue);
-        badgeStripe.position.set(-0.078, 0.072, 0.125);
+        // Printed THERASON ID Badge resting flush on upper-left pocket
+        const badgeCard = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.054, 0.006), badgeMat);
+        badgeCard.position.set(-0.082, -0.025, bustFrontZ + 0.002);
+        badgeCard.rotation.set(isFemaleLook ? -0.10 : 0.0, -0.18, 0);
+        const badgeClip = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.010, 0.009), lanyardBlue);
+        badgeClip.position.set(-0.082, 0.004, bustFrontZ + 0.002);
+        badgeClip.rotation.y = -0.18;
 
-        medAcc.add(stethTube, chestDiaphragm, earTipL, badgeCard, badgeStripe);
+        // Clipped stainless clinical pen in opposite chest pocket
+        const pocketPen = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0042, 0.0042, 0.046, 10),
+          chromeMat
+        );
+        pocketPen.position.set(0.078, -0.012, bustFrontZ + 0.003);
+        pocketPen.rotation.z = -0.08;
+
+        if (medicalWear === 'lab_coat') {
+          const coatMat = makeClothMat(0xe7ecf2, appearance, 0.72, 0.36);
+          const coatButtonMat = makeMetalMat(0xf8fafc, appearance, 0.20, 0.12);
+          // Crisp buttoned medical lab coat collar, central closure placket, pockets & buttons
+          const coatCollarCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(-0.048, 0.118, collarZ),
+            new THREE.Vector3(-0.022, 0.068, upperChestZ + 0.010),
+            new THREE.Vector3(0, 0.036, bustFrontZ + 0.006),
+            new THREE.Vector3(0.022, 0.068, upperChestZ + 0.010),
+            new THREE.Vector3(0.048, 0.118, collarZ),
+          ]);
+          const coatCollar = new THREE.Mesh(
+            new THREE.TubeGeometry(coatCollarCurve, 18, 0.011, 8, false),
+            coatMat
+          );
+          const placketCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(0, 0.036, bustFrontZ + 0.006),
+            new THREE.Vector3(0, -0.030, bustFrontZ + 0.008),
+            new THREE.Vector3(0, -0.140, lowerChestZ + 0.010),
+          ]);
+          const placket = new THREE.Mesh(
+            new THREE.TubeGeometry(placketCurve, 14, 0.009, 6, false),
+            coatMat
+          );
+          placket.scale.set(1.3, 1.0, 0.35);
+          const pocketPatch = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.048, 0.007), coatMat);
+          pocketPatch.position.set(0.078, -0.038, bustFrontZ + 0.004);
+          pocketPatch.rotation.y = 0.16;
+          medAcc.add(coatCollar, placket, pocketPatch);
+
+          for (const [by, bz] of [
+            [0.018, bustFrontZ + 0.009],
+            [-0.045, bustFrontZ + 0.007],
+            [-0.110, lowerChestZ + 0.012],
+          ] as Array<[number, number]>) {
+            const btn = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.0056, 0.0056, 0.005, 12),
+              coatButtonMat
+            );
+            btn.rotation.x = Math.PI / 2;
+            btn.position.set(0, by, bz);
+            medAcc.add(btn);
+          }
+
+          if (bones['Hips']) {
+            const coatPockets = new THREE.Group();
+            coatPockets.scale.setScalar(0.01);
+            for (const side of [-1, 1]) {
+              const cp = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.074, 0.007), coatMat);
+              cp.position.set(side * 0.094, -0.045, isFemaleLook ? 0.168 : 0.164);
+              cp.rotation.y = side * 0.36;
+              coatPockets.add(cp);
+            }
+            bones['Hips'].bone.add(coatPockets);
+          }
+        } else if (medicalWear === 'scrubs') {
+          const trimHex = shirtCol.clone().lerp(new THREE.Color(0xffffff), 0.16).getHex();
+          const trimMat = makeClothMat(trimHex, appearance, 0.76, 0.45);
+          const vTrimCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(-0.046, 0.116, collarZ + 0.004),
+            new THREE.Vector3(-0.024, 0.062, upperChestZ + 0.008),
+            new THREE.Vector3(0, 0.026, bustFrontZ + 0.006),
+            new THREE.Vector3(0.024, 0.062, upperChestZ + 0.008),
+            new THREE.Vector3(0.046, 0.116, collarZ + 0.004),
+          ]);
+          const vNeckTrim = new THREE.Mesh(
+            new THREE.TubeGeometry(vTrimCurve, 18, 0.009, 8, false),
+            trimMat
+          );
+          const scrubPocket = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.046, 0.007), trimMat);
+          scrubPocket.position.set(0.078, -0.036, bustFrontZ + 0.004);
+          scrubPocket.rotation.y = 0.16;
+          medAcc.add(vNeckTrim, scrubPocket);
+
+          if (bones['Hips']) {
+            // Double tailored lower hip scrub pockets seated flush on the contoured tunic
+            const hipPockets = new THREE.Group();
+            hipPockets.scale.setScalar(0.01);
+            const hpMat = makeClothMat(trimHex, appearance, 0.76, 0.45);
+            for (const side of [-1, 1]) {
+              const hp = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.068, 0.007), hpMat);
+              hp.position.set(side * 0.088, -0.025, isFemaleLook ? 0.164 : 0.160);
+              hp.rotation.y = side * 0.36;
+              hipPockets.add(hp);
+            }
+            bones['Hips'].bone.add(hipPockets);
+          }
+        }
+
+        medAcc.add(stethTube, chestDiaphragm, earTipL, badgeCard, badgeClip, pocketPen);
         bones['Chest'].bone.add(medAcc);
+      } else if (appearance.isPlayer && outfitStyle === 'casual') {
+        // Tailored contoured shirt collar + central button placket flush outside male/female chest
+        const shirtGrp = new THREE.Group();
+        shirtGrp.scale.setScalar(0.01);
+        const collarMat = makeClothMat(
+          shirtCol.clone().lerp(new THREE.Color(0xffffff), 0.16).getHex(),
+          appearance,
+          0.74,
+          0.45
+        );
+        const buttonMat = makeMetalMat(0xf8fafc, appearance, 0.22, 0.15);
+        const collarCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(-0.046, 0.125, collarZ - 0.004),
+          new THREE.Vector3(-0.024, 0.090, upperChestZ + 0.002),
+          new THREE.Vector3(0, 0.068, upperChestZ + 0.012),
+          new THREE.Vector3(0.024, 0.090, upperChestZ + 0.002),
+          new THREE.Vector3(0.046, 0.125, collarZ - 0.004),
+        ]);
+        const collarMesh = new THREE.Mesh(new THREE.TubeGeometry(collarCurve, 18, 0.011, 8, false), collarMat);
+        const placketCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(0, 0.068, upperChestZ + 0.012),
+          new THREE.Vector3(0, -0.018, bustFrontZ - 0.004),
+          new THREE.Vector3(0, -0.145, lowerChestZ + 0.002),
+        ]);
+        const placket = new THREE.Mesh(new THREE.TubeGeometry(placketCurve, 14, 0.0095, 6, false), collarMat);
+        placket.scale.set(1.25, 1.0, 0.35);
+        shirtGrp.add(collarMesh, placket);
+        for (const [by, bz] of [
+          [0.052, upperChestZ + 0.016],
+          [0.002, bustFrontZ - 0.001],
+          [-0.055, lowerChestZ + 0.006],
+          [-0.115, lowerChestZ + 0.004],
+        ] as Array<[number, number]>) {
+          const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.0052, 0.0052, 0.005, 12), buttonMat);
+          btn.rotation.x = Math.PI / 2;
+          btn.position.set(0, by, bz);
+          shirtGrp.add(btn);
+        }
+        bones['Chest'].bone.add(shirtGrp);
+
+        if (bones['Hips']) {
+          const beltGrp = new THREE.Group();
+          beltGrp.scale.setScalar(0.01);
+          const beltLeather = makeLeatherMat(0x221b17, appearance, 0.38);
+          const buckleMetal = makeMetalMat(0xd4d4d8, appearance, 0.22, 0.88);
+          const beltBand = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.154, 0.156, 0.030, 28),
+            beltLeather
+          );
+          beltBand.scale.set(1.02, 1.0, 0.80);
+          beltBand.position.set(0, 0.072, 0.062);
+          const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.034, 0.010), buckleMetal);
+          buckle.position.set(0, 0.072, 0.184);
+          beltGrp.add(beltBand, buckle);
+          bones['Hips'].bone.add(beltGrp);
+        }
+      } else if (appearance.isPlayer && outfitStyle === 'abaya_open') {
+        // Contoured draped open-abaya front panels framing the ivory inner blouse
+        const openTrimGrp = new THREE.Group();
+        openTrimGrp.scale.setScalar(0.01);
+        const trimMat = makeClothMat(
+          shirtCol.clone().multiplyScalar(0.86).getHex(),
+          appearance,
+          0.80,
+          0.55
+        );
+        for (const side of [-1, 1]) {
+          const panelCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(side * 0.044, 0.114, collarZ + 0.004),
+            new THREE.Vector3(side * 0.050, 0.015, bustFrontZ + 0.004),
+            new THREE.Vector3(side * 0.046, -0.120, lowerChestZ + 0.006),
+          ]);
+          const panelMesh = new THREE.Mesh(
+            new THREE.TubeGeometry(panelCurve, 16, 0.015, 8, false),
+            trimMat
+          );
+          panelMesh.scale.set(1.3, 1.0, 0.42);
+          openTrimGrp.add(panelMesh);
+        }
+        bones['Chest'].bone.add(openTrimGrp);
       } else if (!appearance.isStaff) {
         if (outfitStyle === 'jalabiya') {
           const collarGrp = new THREE.Group();
@@ -896,11 +1452,11 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           placket.position.set(0, 0.038, 0.122);
           collarGrp.add(bandCollar, placket);
           bones['Chest'].bone.add(collarGrp);
-        } else if (outfitStyle === 'abaya' && (appearance.variantSeed || 0) % 2 === 0) {
+        } else if (outfitStyle === 'abaya' && !appearance.hasNiqab && (appearance.variantSeed || 0) % 2 === 0) {
           const abayaTrimGrp = new THREE.Group();
           abayaTrimGrp.scale.setScalar(0.01);
           const embMat = makeMetalMat(0xc59b57, appearance, 0.42, 0.55);
-          const trimStrip = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.24, 0.018), embMat);
+          const trimStrip = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.24, 0.016), embMat);
           trimStrip.position.set(0, 0.01, 0.124);
           abayaTrimGrp.add(trimStrip);
           bones['Chest'].bone.add(abayaTrimGrp);
@@ -991,13 +1547,16 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     }
 
-    // Subtle wristwatch on therapists and select adult patients
-    if (bones['LowerArmL'] && (isTherapist || (!isFemaleLook && (Math.abs(appearance.variantSeed || 0) % 3 === 1)))) {
+    // Subtle wristwatch on clinicians and select adult patients
+    if (
+      bones['LowerArmL'] &&
+      (showStethoscope || appearance.isStaff || (!isFemaleLook && Math.abs(appearance.variantSeed || 0) % 3 === 1))
+    ) {
       const watchGrp = new THREE.Group();
       watchGrp.scale.setScalar(0.01);
       const strap = new THREE.Mesh(
         new THREE.TorusGeometry(0.036, 0.007, 12, 24),
-        makeLeatherMat(isTherapist ? 0x1e293b : 0x3a2618, appearance, 0.44)
+        makeLeatherMat(showStethoscope || appearance.isStaff ? 0x1e293b : 0x3a2618, appearance, 0.44)
       );
       strap.rotation.x = Math.PI / 2;
       strap.position.set(0, 0.215, 0);
@@ -1025,8 +1584,155 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       bones['Hips'].bone.add(sashGrp);
     }
 
-    // Authentic Sudanese Headwear, Beards & Eyeglasses
+    // Realistic Human Facial Anatomy + Authentic Headwear, Tarha & Contoured 3D Niqab
     if (bones['Head']) {
+      // 1) Lifelike 3D Human Facial Features aligned to exact GLB face-surface Z (~0.150..0.177)
+      {
+        const faceGrp = new THREE.Group();
+        faceGrp.scale.setScalar(0.01);
+        const eyeX = isFemaleLook ? 0.0462 : 0.0443;
+        const eyeY = isFemaleLook ? 0.1004 : 0.1082;
+        const eyeZ = isFemaleLook ? 0.1465 : 0.1450;
+        const browY = isFemaleLook ? 0.1165 : 0.1205;
+        const browZ = isFemaleLook ? 0.1615 : 0.1605;
+
+        const scleraMat = new THREE.MeshPhysicalMaterial({
+          color: 0xf4efe9,
+          roughness: 0.18,
+          metalness: 0.0,
+          clearcoat: 0.65,
+          clearcoatRoughness: 0.1,
+        });
+        const irisMat = new THREE.MeshPhysicalMaterial({
+          color: 0x351e12,
+          roughness: 0.10,
+          metalness: 0.0,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.05,
+        });
+        const pupilMat = new THREE.MeshBasicMaterial({ color: 0x090808 });
+        const catchlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const browMat = new THREE.MeshPhysicalMaterial({
+          color: hairCol.getHex(),
+          roughness: 0.65,
+          sheen: 0.25,
+        });
+        const lidMat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.56);
+        const lashMat = colorMat(0x16100c, 0.55, 0.0);
+
+        for (const side of [-1, 1]) {
+          // Sclera orb fitted directly into exact GLB eye socket
+          const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.0138, 18, 14), scleraMat);
+          sclera.scale.set(1.08, 0.80, 0.82);
+          sclera.position.set(side * eyeX, eyeY, eyeZ);
+
+          // Warm dark brown Iris + black Pupil + tiny specular catchlight
+          const iris = new THREE.Mesh(new THREE.SphereGeometry(0.0078, 16, 12), irisMat);
+          iris.scale.set(1.0, 1.0, 0.45);
+          iris.position.set(side * eyeX, eyeY, eyeZ + 0.0096);
+
+          const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0042, 12, 10), pupilMat);
+          pupil.scale.set(1.0, 1.0, 0.38);
+          pupil.position.set(side * eyeX, eyeY, eyeZ + 0.0124);
+
+          const catchlight = new THREE.Mesh(new THREE.SphereGeometry(0.0017, 8, 8), catchlightMat);
+          catchlight.position.set(side * eyeX + 0.0024, eyeY + 0.0024, eyeZ + 0.0135);
+
+          // Upper eyelid contour + natural lash line
+          const upperLid = new THREE.Mesh(
+            new THREE.TorusGeometry(0.0136, 0.0034, 8, 16, Math.PI * 0.92),
+            lidMat
+          );
+          upperLid.position.set(side * eyeX, eyeY + 0.0022, eyeZ + 0.0068);
+          upperLid.rotation.set(0.22, 0, Math.PI * 0.04);
+
+          const lashRim = new THREE.Mesh(
+            new THREE.TorusGeometry(0.0132, isFemaleLook ? 0.0022 : 0.0015, 8, 16, Math.PI * 0.88),
+            lashMat
+          );
+          lashRim.position.set(side * eyeX, eyeY + 0.0008, eyeZ + 0.0092);
+          lashRim.rotation.set(0.18, 0, Math.PI * 0.06);
+
+          // Tapered curved human eyebrow hugging brow bone
+          const browCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(side * (eyeX - 0.017), browY - 0.001, browZ + 0.002),
+            new THREE.Vector3(side * eyeX, browY + (isFemaleLook ? 0.0042 : 0.0022), browZ + 0.003),
+            new THREE.Vector3(side * (eyeX + 0.018), browY - 0.002, browZ - 0.005),
+          ]);
+          const browMesh = new THREE.Mesh(
+            new THREE.TubeGeometry(browCurve, 10, isFemaleLook ? 0.0032 : 0.0044, 8, false),
+            browMat
+          );
+          browMesh.scale.set(1.0, 0.82, 0.72);
+
+          faceGrp.add(sclera, iris, pupil, catchlight, upperLid, lashRim, browMesh);
+        }
+
+        // Subtle nostril shadows under nose tip (nose tip is at z=0.177)
+        const nostrilMat = makeSkinMat(skinCol.clone().multiplyScalar(0.56).getHex(), appearance, 0.72);
+        const nostrilY = isFemaleLook ? 0.0425 : 0.0470;
+        const nostrilZ = isFemaleLook ? 0.1635 : 0.1625;
+        for (const side of [-1, 1]) {
+          const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.0034, 8, 8), nostrilMat);
+          nostril.scale.set(1.1, 0.65, 0.75);
+          nostril.position.set(side * 0.0086, nostrilY, nostrilZ);
+          faceGrp.add(nostril);
+        }
+
+        // Sculpted natural lips aligned flush on mouthFaceZ (z=0.1545..0.1560)
+        const lipHex = skinCol
+          .clone()
+          .lerp(new THREE.Color(isFemaleLook ? 0x7d3f36 : 0x6b3b30), isFemaleLook ? 0.56 : 0.44)
+          .getHex();
+        const lipMat = new THREE.MeshPhysicalMaterial({
+          color: lipHex,
+          roughness: isFemaleLook ? 0.38 : 0.48,
+          metalness: 0.0,
+          sheen: 0.24,
+          sheenColor: new THREE.Color(0xb86d5e),
+        });
+        const mouthY = isFemaleLook ? 0.0172 : 0.0252;
+        const mouthZ = isFemaleLook ? 0.1552 : 0.1566;
+        const upperLipCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(-0.018, mouthY + 0.001, mouthZ - 0.006),
+          new THREE.Vector3(-0.007, mouthY + 0.0044, mouthZ + 0.0020),
+          new THREE.Vector3(0, mouthY + 0.0028, mouthZ + 0.0026),
+          new THREE.Vector3(0.007, mouthY + 0.0044, mouthZ + 0.0020),
+          new THREE.Vector3(0.018, mouthY + 0.001, mouthZ - 0.006),
+        ]);
+        const upperLip = new THREE.Mesh(new THREE.TubeGeometry(upperLipCurve, 14, 0.0038, 8, false), lipMat);
+        upperLip.scale.set(1.0, 0.78, 0.82);
+
+        const lowerLipCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(-0.015, mouthY - 0.0005, mouthZ - 0.005),
+          new THREE.Vector3(0, mouthY - 0.0044, mouthZ + 0.0028),
+          new THREE.Vector3(0.015, mouthY - 0.0005, mouthZ - 0.005),
+        ]);
+        const lowerLip = new THREE.Mesh(
+          new THREE.TubeGeometry(lowerLipCurve, 12, isFemaleLook ? 0.0046 : 0.0042, 8, false),
+          lipMat
+        );
+        lowerLip.scale.set(1.0, 0.80, 0.85);
+
+        const mouthSeam = new THREE.Mesh(
+          new THREE.TubeGeometry(
+            new THREE.CatmullRomCurve3([
+              new THREE.Vector3(-0.017, mouthY + 0.0004, mouthZ - 0.005),
+              new THREE.Vector3(0, mouthY - 0.0004, mouthZ + 0.0034),
+              new THREE.Vector3(0.017, mouthY + 0.0004, mouthZ - 0.005),
+            ]),
+            12,
+            0.0012,
+            6,
+            false
+          ),
+          nostrilMat
+        );
+
+        faceGrp.add(upperLip, lowerLip, mouthSeam);
+        bones['Head'].bone.add(faceGrp);
+      }
+
       if (outfitStyle === 'jalabiya' && !isFemaleLook && !appearance.isStaff) {
         const headAcc = new THREE.Group();
         headAcc.scale.setScalar(0.01);
@@ -1034,29 +1740,29 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
         if (appearance.hasTurban) {
           for (const [ty, rad, tubeR, tiltX, tiltY] of [
-            [0.188, 0.128, 0.030, 0.08, 0.09],
-            [0.214, 0.125, 0.029, -0.06, -0.08],
-            [0.238, 0.121, 0.028, 0.06, 0.06],
-            [0.260, 0.114, 0.026, -0.05, -0.05],
-            [0.279, 0.102, 0.022, 0.03, 0.04],
+            [0.190, 0.132, 0.030, 0.08, 0.09],
+            [0.216, 0.128, 0.029, -0.06, -0.08],
+            [0.240, 0.124, 0.028, 0.06, 0.06],
+            [0.262, 0.116, 0.026, -0.05, -0.05],
+            [0.281, 0.104, 0.022, 0.03, 0.04],
           ] as Array<[number, number, number, number, number]>) {
             const wrap = new THREE.Mesh(new THREE.TorusGeometry(rad, tubeR, 18, 36), whiteCloth);
             wrap.rotation.x = Math.PI / 2 + tiltX;
             wrap.rotation.y = tiltY;
-            wrap.position.set(0, ty, -0.006);
+            wrap.position.set(0, ty, 0.042);
             wrap.castShadow = true;
             headAcc.add(wrap);
           }
           const crown = new THREE.Mesh(
-            new THREE.SphereGeometry(0.118, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
+            new THREE.SphereGeometry(0.120, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
             whiteCloth
           );
-          crown.position.set(0, 0.242, -0.006);
+          crown.position.set(0, 0.244, 0.042);
           const emmaTail = new THREE.Mesh(
             new THREE.CylinderGeometry(0.026, 0.038, 0.13, 16),
             whiteCloth
           );
-          emmaTail.position.set(-0.075, 0.125, -0.092);
+          emmaTail.position.set(-0.075, 0.125, -0.048);
           emmaTail.rotation.z = -0.18;
           emmaTail.rotation.x = 0.22;
           headAcc.add(crown, emmaTail);
@@ -1064,123 +1770,306 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           const taqMat = makeClothMat(0xede9df, appearance, 0.82, 0.35);
           const brimStitchMat = makeClothMat(0xcabfa8, appearance, 0.78, 0.2);
           const capSide = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.118, 0.122, 0.062, 28),
+            new THREE.CylinderGeometry(0.120, 0.124, 0.062, 28),
             taqMat
           );
-          capSide.position.set(0, 0.21, -0.006);
-          const capRim = new THREE.Mesh(new THREE.TorusGeometry(0.121, 0.007, 12, 32), brimStitchMat);
+          capSide.position.set(0, 0.212, 0.042);
+          const capRim = new THREE.Mesh(new THREE.TorusGeometry(0.123, 0.007, 12, 32), brimStitchMat);
           capRim.rotation.x = Math.PI / 2;
-          capRim.position.set(0, 0.182, -0.006);
+          capRim.position.set(0, 0.184, 0.042);
           const capTop = new THREE.Mesh(
-            new THREE.SphereGeometry(0.118, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.5),
+            new THREE.SphereGeometry(0.120, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.5),
             taqMat
           );
-          capTop.position.set(0, 0.24, -0.006);
+          capTop.position.set(0, 0.242, 0.042);
           headAcc.add(capSide, capRim, capTop);
         }
         bones['Head'].bone.add(headAcc);
-      } else if (isFemaleLook && (appearance.hasHijab || appearance.role === 'receptionist' || appearance.role === 'therapist')) {
+      } else if (isFemaleLook && effectiveHijab) {
         if (outfitStyle === 'sudanese_thobe') {
-          // Continuous soft Sudanese Thobe head drape with delicate Kenar brow trim flowing into left-shoulder wrap
           const thobeHeadMat = makeClothMat(tarhaCol.getHex(), appearance, 0.78, 0.74, true);
           const kenarHeadMat = makeClothMat(thobeKenarHex, appearance, 0.72, 0.55, true);
           const thobeHeadGrp = new THREE.Group();
           thobeHeadGrp.scale.setScalar(0.01);
 
-          // Softer, slightly fuller draped crown cover
-          const thobeHood = new THREE.Mesh(new THREE.SphereGeometry(0.132, 28, 20), thobeHeadMat);
-          thobeHood.scale.set(1.14, 1.24, 1.26);
-          thobeHood.position.set(0, 0.165, -0.024);
+          // Upper/back head wrap staying behind eye plane (max Z ~ 0.136) while covering crown & temples
+          const thobeHood = new THREE.Mesh(new THREE.SphereGeometry(0.118, 28, 20), thobeHeadMat);
+          thobeHood.scale.set(1.04, 1.06, 1.04);
+          thobeHood.position.set(0, 0.122, 0.014);
           thobeHood.castShadow = true;
 
-          // Soft brow wrap + delicate woven Kenar border framing the face
           const browCloth = new THREE.Mesh(
-            new THREE.TorusGeometry(0.122, 0.017, 14, 28, Math.PI * 1.15),
+            new THREE.TorusGeometry(0.106, 0.016, 14, 28, Math.PI * 1.15),
             thobeHeadMat
           );
-          browCloth.rotation.set(0.28, 0, -Math.PI * 0.075);
-          browCloth.position.set(0, 0.168, 0.014);
+          browCloth.rotation.set(0.32, 0, -Math.PI * 0.075);
+          browCloth.position.set(0, 0.146, 0.056);
 
           const browKenar = new THREE.Mesh(
-            new THREE.TorusGeometry(0.120, 0.0085, 12, 28, Math.PI * 1.12),
+            new THREE.TorusGeometry(0.104, 0.0085, 12, 28, Math.PI * 1.12),
             kenarHeadMat
           );
-          browKenar.rotation.set(0.31, 0, -Math.PI * 0.06);
-          browKenar.position.set(0, 0.163, 0.024);
+          browKenar.rotation.set(0.34, 0, -Math.PI * 0.06);
+          browKenar.position.set(0, 0.142, 0.064);
 
-          // Loose draped chin & neck veil
           const neckVeil = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.104, 0.154, 0.175, 26),
+            new THREE.CylinderGeometry(0.094, 0.138, 0.165, 26),
             thobeHeadMat
           );
-          neckVeil.position.set(0, 0.010, -0.010);
+          neckVeil.position.set(0, -0.012, 0.036);
 
-          // Flowing left-side drape connecting head cloth smoothly onto left shoulder (+X)
           const leftSideDrape = new THREE.Mesh(
             new THREE.CylinderGeometry(0.056, 0.088, 0.24, 18),
             thobeHeadMat
           );
           leftSideDrape.scale.set(0.95, 1.0, 0.72);
-          leftSideDrape.position.set(0.066, 0.005, 0.004);
+          leftSideDrape.position.set(0.068, 0.005, 0.044);
           leftSideDrape.rotation.z = 0.22;
 
-          // Soft rear drape down the neck & back
           const rearDrape = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.112, 0.152, 0.24, 22, 1, false, Math.PI * 0.52, Math.PI * 0.96),
+            new THREE.CylinderGeometry(0.108, 0.146, 0.24, 22, 1, false, Math.PI * 0.52, Math.PI * 0.96),
             thobeHeadMat
           );
-          rearDrape.position.set(0, -0.044, -0.034);
+          rearDrape.position.set(0, -0.044, -0.008);
 
           thobeHeadGrp.add(thobeHood, browCloth, browKenar, neckVeil, leftSideDrape, rearDrape);
           bones['Head'].bone.add(thobeHeadGrp);
         } else {
-          const tarhaMat = makeClothMat(tarhaCol.getHex(), appearance, 0.84, 0.62, true);
+          // 1) Tailored Modest Tarha (Hijab) with U-shaped Open Face Window:
+          // Forehead (below y=0.148), eyebrows (0.117), eyes (0.100), nose, cheeks, and lips (0.017) stay 100% visible & framed cleanly!
+          const tarhaMat = makeClothMat(tarhaCol.getHex(), appearance, 0.84, 0.60, true);
+          const undercapMat = makeClothMat(tarhaUnderCapCol.getHex(), appearance, 0.86, 0.42, true);
           const scarfGrp = new THREE.Group();
           scarfGrp.scale.setScalar(0.01);
 
-          // Outer draped hood framing forehead and covering crown & back bun completely
-          const hood = new THREE.Mesh(new THREE.SphereGeometry(0.126, 28, 20), tarhaMat);
-          hood.scale.set(1.10, 1.22, 1.24);
-          hood.position.set(0, 0.165, -0.022);
-          hood.castShadow = true;
+          // Custom lofted U-framed outer Tarha wrap covering crown, back, bun, temples, cheeks outer edge, chin bottom, & neck
+          const tRows = 22;
+          const tCols = 32;
+          const tPos: number[] = [];
+          const tUvs: number[] = [];
+          const tIdx: number[] = [];
+          const headCz = 0.048;
 
-          // Draped brow/temple fold framing face cleanly
-          const browFold = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.016, 14, 28, Math.PI * 1.15), tarhaMat);
-          browFold.rotation.set(0.28, 0, -Math.PI * 0.075);
-          browFold.position.set(0, 0.165, 0.018);
+          const tarhaOpenAng = (y: number) => {
+            if (y >= 0.148 || y <= -0.028) return 0;
+            if (y > 0.122) {
+              const t = (0.148 - y) / 0.026;
+              return 0.88 * Math.sin(t * Math.PI * 0.5);
+            }
+            if (y < 0.004) {
+              const t = (y + 0.028) / 0.032;
+              return 0.88 * Math.sin(t * Math.PI * 0.5);
+            }
+            return 0.88;
+          };
 
-          // Soft neck & chin wrap
-          const neckWrap = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.098, 0.146, 0.17, 26),
-            tarhaMat
-          );
-          neckWrap.position.set(0, 0.010, -0.008);
+          for (let r = 0; r <= tRows; r++) {
+            const v = r / tRows; // 0 = crown apex (y=0.236), 1 = lower neck base (y=-0.105)
+            const y = THREE.MathUtils.lerp(0.236, -0.105, v);
+            let rx: number;
+            let rz: number;
+            let zShift = 0;
+            if (y >= 0.148) {
+              // Smooth cranial dome rounding cleanly from closed apex to top forehead hairline
+              const capT = THREE.MathUtils.clamp((0.236 - y) / (0.236 - 0.148), 0, 1);
+              const domeSin = Math.sin(capT * Math.PI * 0.5);
+              rx = THREE.MathUtils.lerp(0.002, 0.114, domeSin);
+              rz = THREE.MathUtils.lerp(0.002, 0.122, domeSin);
+            } else if (y >= -0.028) {
+              // Temple/cheek/jaw frame
+              const faceT = (0.148 - y) / (0.148 + 0.028);
+              rx = THREE.MathUtils.lerp(0.114, 0.100, faceT);
+              rz = THREE.MathUtils.lerp(0.122, 0.104, faceT);
+              zShift = -0.004 * faceT;
+            } else {
+              // Draped neck collar widening smoothly to upper shoulders
+              const neckT = (y + 0.028) / (-0.105 + 0.028);
+              rx = THREE.MathUtils.lerp(0.096, 0.126, neckT);
+              rz = THREE.MathUtils.lerp(0.098, 0.112, neckT);
+              zShift = -0.008;
+            }
 
-          // Flowing rear Tarha tail down the back of shoulders
+            const openA = tarhaOpenAng(y);
+            const thetaStart = openA; // +X cheek rim (right front edge)
+            const thetaSpan = (Math.PI - openA) * 2; // wraps smoothly around +X -> back -> -X cheek rim
+
+            for (let c = 0; c <= tCols; c++) {
+              const u = c / tCols;
+              const theta = thetaStart + u * thetaSpan;
+              // Soft hijab bun fullness at back center (theta ~ PI, y ~ 0.06..0.15)
+              const backFactor = Math.max(0, -Math.cos(theta));
+              const bunHFactor = Math.exp(-Math.pow((y - 0.10) / 0.075, 2));
+              const bunBulge = 0.028 * backFactor * bunHFactor;
+              const foldWave = Math.sin(u * Math.PI * 8 + v * 2.2) * 0.0022 * (y < 0.0 ? 1.4 : 0.6);
+
+              const x = (rx + foldWave) * Math.sin(theta);
+              const z = headCz + zShift + (rz + bunBulge + foldWave) * Math.cos(theta);
+              tPos.push(x, y, z);
+              tUvs.push(u, 1 - v);
+            }
+          }
+          for (let r = 0; r < tRows; r++) {
+            for (let c = 0; c < tCols; c++) {
+              const a = r * (tCols + 1) + c;
+              const b = a + (tCols + 1);
+              tIdx.push(a, b, a + 1, b, b + 1, a + 1);
+            }
+          }
+          const tarhaGeom = new THREE.BufferGeometry();
+          tarhaGeom.setAttribute('position', new THREE.Float32BufferAttribute(tPos, 3));
+          tarhaGeom.setAttribute('uv', new THREE.Float32BufferAttribute(tUvs, 2));
+          tarhaGeom.setIndex(tIdx);
+          tarhaGeom.computeVertexNormals();
+          const tarhaWrapMesh = new THREE.Mesh(tarhaGeom, tarhaMat);
+          tarhaWrapMesh.castShadow = true;
+
+          // Flowing rear Tarha veil down the back behind shoulders
           const backTail = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.105, 0.142, 0.23, 20, 1, false, Math.PI * 0.55, Math.PI * 0.9),
+            new THREE.CylinderGeometry(0.098, 0.132, 0.21, 20, 1, true, Math.PI * 0.56, Math.PI * 0.88),
             tarhaMat
           );
-          backTail.position.set(0, -0.042, -0.032);
-          scarfGrp.add(hood, browFold, neckWrap, backTail);
+          backTail.position.set(0, -0.056, -0.004);
+          scarfGrp.add(tarhaWrapMesh, backTail);
+
+          if (!appearance.hasNiqab) {
+            // Sleek matte inner undercap band visible only along the top forehead rim (y=0.138..0.166)
+            const underCapRim = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.104, 0.110, 0.028, 28, 1, true, -Math.PI * 0.36, Math.PI * 0.72),
+              undercapMat
+            );
+            underCapRim.scale.set(0.98, 1.0, 1.06);
+            underCapRim.position.set(0, 0.154, headCz + 0.006);
+            scarfGrp.add(underCapRim);
+          }
+
+          // 2) Contoured 3-Part 3D Niqab (ONLY when appearance.hasNiqab === true):
+          // Wraps forehead down to just above eyes (y=0.118), leaves crisp horizontal eye-slit, and drapes face veil from y=0.086 down to chest
+          if (appearance.hasNiqab) {
+            const niqabMat = makeClothMat(0x131418, appearance, 0.86, 0.52, true);
+
+            // Forehead Niqab Band hugging forehead & temples cleanly above upper eyelids (y=0.118..0.168, front z~0.174)
+            const fbRows = 5;
+            const fbCols = 22;
+            const fbPos: number[] = [];
+            const fbUvs: number[] = [];
+            const fbIdx: number[] = [];
+            for (let r = 0; r <= fbRows; r++) {
+              const v = r / fbRows;
+              const y = THREE.MathUtils.lerp(0.168, 0.118, v);
+              for (let c = 0; c <= fbCols; c++) {
+                const u = c / fbCols;
+                const ang = THREE.MathUtils.lerp(-Math.PI * 0.56, Math.PI * 0.56, u);
+                fbPos.push(0.116 * Math.sin(ang), y, headCz + 0.125 * Math.cos(ang));
+                fbUvs.push(u, 1 - v);
+              }
+            }
+            for (let r = 0; r < fbRows; r++) {
+              for (let c = 0; c < fbCols; c++) {
+                const a = r * (fbCols + 1) + c;
+                const b = a + (fbCols + 1);
+                fbIdx.push(a, b, a + 1, b, b + 1, a + 1);
+              }
+            }
+            const fbGeom = new THREE.BufferGeometry();
+            fbGeom.setAttribute('position', new THREE.Float32BufferAttribute(fbPos, 3));
+            fbGeom.setAttribute('uv', new THREE.Float32BufferAttribute(fbUvs, 2));
+            fbGeom.setIndex(fbIdx);
+            fbGeom.computeVertexNormals();
+            const foreheadBand = new THREE.Mesh(fbGeom, niqabMat);
+            foreheadBand.castShadow = true;
+
+            // Contoured Lower Face Veil (y=-0.075..0.088) curving smoothly over nose tip (z=0.186) & chin down to chest
+            const veilRows = 12;
+            const veilCols = 24;
+            const vPos: number[] = [];
+            const vUvs: number[] = [];
+            const vIdx: number[] = [];
+            for (let r = 0; r <= veilRows; r++) {
+              const v = r / veilRows;
+              const vy = THREE.MathUtils.lerp(0.088, -0.075, v);
+              const noseBulge = Math.exp(-Math.pow((v - 0.22) / 0.20, 2)) * 0.016;
+              const rx = THREE.MathUtils.lerp(0.108, 0.128, v);
+              const rz = THREE.MathUtils.lerp(0.118, 0.124, v) + noseBulge;
+              for (let c = 0; c <= veilCols; c++) {
+                const u = c / veilCols;
+                const ang = THREE.MathUtils.lerp(-Math.PI * 0.52, Math.PI * 0.52, u);
+                const centerPin = Math.cos(ang * 2.0) * 0.005 * (1 - v);
+                const drapeWave = Math.sin(u * Math.PI * 7) * 0.0022 * v;
+                const vx = rx * Math.sin(ang);
+                const vz = headCz + (rz + centerPin + drapeWave) * Math.cos(ang * 0.85);
+                vPos.push(vx, vy, vz);
+                vUvs.push(u, 1 - v);
+              }
+            }
+            for (let r = 0; r < veilRows; r++) {
+              for (let c = 0; c < veilCols; c++) {
+                const a = r * (veilCols + 1) + c;
+                const b = a + (veilCols + 1);
+                vIdx.push(a, b, a + 1, b, b + 1, a + 1);
+              }
+            }
+            const veilGeom = new THREE.BufferGeometry();
+            veilGeom.setAttribute('position', new THREE.Float32BufferAttribute(vPos, 3));
+            veilGeom.setAttribute('uv', new THREE.Float32BufferAttribute(vUvs, 2));
+            veilGeom.setIndex(vIdx);
+            veilGeom.computeVertexNormals();
+            const faceVeil = new THREE.Mesh(veilGeom, niqabMat);
+            faceVeil.castShadow = true;
+
+            // Slim nose-bridge divider between left and right eye openings
+            const bridgeCurve = new THREE.CatmullRomCurve3([
+              new THREE.Vector3(0, 0.122, 0.172),
+              new THREE.Vector3(0, 0.102, 0.168),
+              new THREE.Vector3(0, 0.086, 0.173),
+            ]);
+            const noseBridgeStrap = new THREE.Mesh(
+              new THREE.TubeGeometry(bridgeCurve, 8, 0.0065, 6, false),
+              niqabMat
+            );
+            noseBridgeStrap.scale.set(1.0, 1.0, 0.42);
+
+            scarfGrp.add(foreheadBand, faceVeil, noseBridgeStrap);
+          }
+
           bones['Head'].bone.add(scarfGrp);
 
           if (bones['Chest']) {
             const chestDrape = new THREE.Group();
             chestDrape.scale.setScalar(0.01);
-            const shawl = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.136, 0.194, 0.22, 26),
-              tarhaMat
-            );
-            shawl.scale.set(1.06, 1.0, 0.78);
-            shawl.position.set(0, 0.056, 0.018);
-            const shoulderThrow = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.045, 0.068, 0.24, 18),
-              tarhaMat
-            );
-            shoulderThrow.position.set(-0.088, 0.04, 0.072);
-            shoulderThrow.rotation.z = -0.22;
-            chestDrape.add(shawl, shoulderThrow);
+
+            if (appearance.hasNiqab) {
+              // Continuous flowing black Khimar / Niqab front drape over collarbones & upper chest
+              const niqabChestMat = makeClothMat(0x131418, appearance, 0.86, 0.52, true);
+              const khimarShawl = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.112, 0.168, 0.24, 28, 1, false),
+                niqabChestMat
+              );
+              khimarShawl.scale.set(1.02, 1.0, 0.94);
+              khimarShawl.position.set(0, 0.020, 0.056);
+              chestDrape.add(khimarShawl);
+            } else {
+              // Clean low collarbone collar + graceful side shoulder drape (stays tight to shoulders so outfit & stethoscope show clearly!)
+              const collarBase = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.092, 0.122, 0.090, 24),
+                tarhaMat
+              );
+              collarBase.scale.set(1.02, 1.0, 0.86);
+              collarBase.position.set(0, 0.105, 0.044);
+
+              const throwCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(-0.072, 0.128, 0.082),
+                new THREE.Vector3(-0.084, 0.068, 0.138),
+                new THREE.Vector3(-0.088, -0.015, 0.186),
+                new THREE.Vector3(-0.072, -0.095, 0.168),
+              ]);
+              const shoulderThrow = new THREE.Mesh(
+                new THREE.TubeGeometry(throwCurve, 18, 0.028, 10, false),
+                tarhaMat
+              );
+              shoulderThrow.scale.set(1.25, 1.0, 0.48);
+              chestDrape.add(collarBase, shoulderThrow);
+            }
+
             bones['Chest'].bone.add(chestDrape);
           }
         }
@@ -1192,25 +2081,25 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         beardGrp.scale.setScalar(0.01);
         const beardMat = new THREE.MeshPhysicalMaterial({
           color: hairCol.getHex(),
-          roughness: 0.9,
+          roughness: 0.86,
           metalness: 0.0,
-          sheen: 0.2,
-          sheenRoughness: 0.7,
+          sheen: 0.24,
+          sheenRoughness: 0.65,
         });
-        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.058, 18, 14), beardMat);
-        chinBeard.scale.set(1.02, 0.92, 0.85);
-        chinBeard.position.set(0, 0.056, 0.058);
+        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.056, 18, 14), beardMat);
+        chinBeard.scale.set(1.0, 0.90, 0.84);
+        chinBeard.position.set(0, 0.008, 0.116);
         const jawBeard = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.084, 0.068, 0.052, 20, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+          new THREE.CylinderGeometry(0.084, 0.068, 0.048, 20, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
           beardMat
         );
-        jawBeard.position.set(0, 0.078, 0.025);
+        jawBeard.position.set(0, 0.032, 0.078);
         beardGrp.add(chinBeard, jawBeard);
         bones['Head'].bone.add(beardGrp);
       }
 
       // Slim optical eyeglasses on ~25% of patients for crisp life-like variety
-      if (!appearance.isStaff && Math.abs(appearance.variantSeed || 0) % 4 === 0) {
+      if (!appearance.isStaff && !appearance.isPlayer && Math.abs(appearance.variantSeed || 0) % 4 === 0) {
         const glassGrp = new THREE.Group();
         glassGrp.scale.setScalar(0.01);
         const frameMat = makeMetalMat(0x27272a, appearance, 0.3, 0.75);
@@ -1221,17 +2110,20 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           roughness: 0.08,
           clearcoat: 1.0,
         });
+        const gEyeX = isFemaleLook ? 0.0462 : 0.0443;
+        const gEyeY = isFemaleLook ? 0.1004 : 0.1082;
+        const gEyeZ = isFemaleLook ? 0.167 : 0.165;
         for (const side of [-1, 1]) {
-          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.0032, 10, 24), frameMat);
-          rim.position.set(side * 0.032, 0.132, 0.105);
-          const lens = new THREE.Mesh(new THREE.CircleGeometry(0.021, 20), lensMat);
-          lens.position.set(side * 0.032, 0.132, 0.105);
-          const arm = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.095), frameMat);
-          arm.position.set(side * 0.056, 0.132, 0.058);
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.020, 0.0030, 10, 24), frameMat);
+          rim.position.set(side * gEyeX, gEyeY, gEyeZ);
+          const lens = new THREE.Mesh(new THREE.CircleGeometry(0.019, 20), lensMat);
+          lens.position.set(side * gEyeX, gEyeY, gEyeZ);
+          const arm = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.004, 0.105), frameMat);
+          arm.position.set(side * (gEyeX + 0.022), gEyeY, gEyeZ - 0.052);
           glassGrp.add(rim, lens, arm);
         }
         const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.004, 0.004), frameMat);
-        bridge.position.set(0, 0.134, 0.106);
+        bridge.position.set(0, gEyeY + 0.002, gEyeZ + 0.001);
         glassGrp.add(bridge);
         bones['Head'].bone.add(glassGrp);
       }

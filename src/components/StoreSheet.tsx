@@ -123,7 +123,9 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
 
   const filteredItems = useMemo(() => {
     return CATALOG_ITEMS.filter((item) => {
-      if (filter !== 'all' && filter !== 'staff' && item.category !== filter) return false;
+      if (filter !== 'all' && filter !== 'staff' && item.category !== filter) {
+        return false;
+      }
       if (!search.trim()) return true;
       const q = search.toLowerCase();
       return (
@@ -452,3 +454,4 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
     </div>
   );
 };
+
