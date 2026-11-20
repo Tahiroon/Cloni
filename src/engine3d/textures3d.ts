@@ -14,7 +14,11 @@ export interface TextureBundle {
   sidewalk: THREE.CanvasTexture;
   wood: THREE.CanvasTexture;
   bark: THREE.CanvasTexture;
+  barkBump: THREE.CanvasTexture;
+  birchBark: THREE.CanvasTexture;
   leafFoliage: THREE.CanvasTexture;
+  cypressFoliage: THREE.CanvasTexture;
+  oliveFoliage: THREE.CanvasTexture;
   roofShingle: THREE.CanvasTexture;
   stuccoBump: THREE.CanvasTexture;
   contactShadow: THREE.CanvasTexture;
@@ -33,6 +37,8 @@ export interface TextureBundle {
   palmFrond: THREE.CanvasTexture;
   roseFoliage: THREE.CanvasTexture;
   blossomFoliage: THREE.CanvasTexture;
+  receptionScreen: THREE.CanvasTexture;
+  updateReceptionScreen: (tSec: number) => void;
   dispose: () => void;
 }
 
@@ -461,59 +467,215 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 12, true));
   })();
 
-  // 8. Rich architectural oak/cedar wood grain
+  // 8. Rich architectural oak/teak wood grain with plank seams & knots
   const wood = (() => {
     const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#925f38';
+    ctx.fillStyle = '#97633b';
     ctx.fillRect(0, 0, 256, 256);
-    for (let y = 0; y < 256; y += 5) {
-      ctx.fillStyle = y % 10 === 0 ? 'rgba(72, 38, 15, 0.28)' : 'rgba(186, 138, 92, 0.14)';
-      ctx.fillRect(0, y, 256, 2.5);
+    for (let y = 0; y < 256; y += 3) {
+      const wave = Math.sin(y * 0.14) * 6;
+      ctx.fillStyle = y % 6 === 0 ? 'rgba(64, 32, 12, 0.24)' : 'rgba(198, 150, 102, 0.14)';
+      ctx.fillRect(0, y, 256, 2);
+      if (y % 48 === 0) {
+        ctx.fillStyle = 'rgba(42, 20, 8, 0.34)';
+        ctx.fillRect(0, y, 256, 2.2);
+      }
+      if (y % 29 === 0) {
+        ctx.strokeStyle = 'rgba(58, 28, 10, 0.2)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.quadraticCurveTo(128, y + wave, 256, y);
+        ctx.stroke();
+      }
     }
     return track(finalizeTexture(c, aniso, 1, 1, true));
   })();
 
-  // 8a. Furrowed natural tree bark texture
+  // 8a. Deeply furrowed organic tree bark texture + companion normal-feel bump map
   const bark = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#533824';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 240; i++) {
-      const x = (Math.sin(i * 23.1) * 0.5 + 0.5) * 256;
-      const y = (Math.cos(i * 11.7) * 0.5 + 0.5) * 256;
-      const h = 24 + (i % 5) * 14;
-      const w = 3 + (i % 3) * 2;
-      ctx.fillStyle = i % 3 === 0 ? 'rgba(34, 20, 11, 0.52)' : i % 3 === 1 ? 'rgba(110, 82, 56, 0.36)' : 'rgba(66, 56, 38, 0.3)';
-      ctx.fillRect(x, y, w, h);
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.fillStyle = '#4e3523';
+    ctx.fillRect(0, 0, 512, 512);
+    // Vertical fibrous grain gradient streaks
+    for (let i = 0; i < 420; i++) {
+      const x = (Math.sin(i * 19.7 + 0.3) * 0.5 + 0.5) * 512;
+      const y = (Math.cos(i * 31.1 + 0.9) * 0.5 + 0.5) * 512;
+      const h = 42 + (i % 6) * 24;
+      const w = 4 + (i % 4) * 2.5;
+      ctx.fillStyle =
+        i % 4 === 0
+          ? 'rgba(28, 16, 9, 0.58)'
+          : i % 4 === 1
+            ? 'rgba(112, 84, 58, 0.42)'
+            : i % 4 === 2
+              ? 'rgba(72, 74, 46, 0.34)'
+              : 'rgba(138, 110, 82, 0.24)';
+      ctx.beginPath();
+      ctx.ellipse(x, y, w * 0.6, h * 0.5, ((i % 3) - 1) * 0.04, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Fine horizontal bark lenticels & lichen flecks
+    for (let i = 0; i < 90; i++) {
+      const lx = (Math.sin(i * 53.3) * 0.5 + 0.5) * 512;
+      const ly = (Math.cos(i * 17.9) * 0.5 + 0.5) * 512;
+      ctx.fillStyle = i % 3 === 0 ? 'rgba(98, 122, 74, 0.28)' : 'rgba(24, 14, 8, 0.45)';
+      ctx.fillRect(lx, ly, 8 + (i % 5) * 3, 2);
     }
     return track(finalizeTexture(c, aniso, 2, 3, true));
   })();
 
-  // 8ab. Alpha-cutout realistic botanical leaf spray texture
-  const leafFoliage = (() => {
+  const barkBump = (() => {
     const [c, ctx] = makeCanvas(256, 256);
-    ctx.clearRect(0, 0, 256, 256);
-    const leafColors = ['#2d5e22', '#3a742b', '#4b8a36', '#5e9b40', '#244d1b'];
-    for (let i = 0; i < 68; i++) {
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 320; i++) {
+      const x = (Math.sin(i * 19.7 + 0.3) * 0.5 + 0.5) * 256;
+      const y = (Math.cos(i * 31.1 + 0.9) * 0.5 + 0.5) * 256;
+      const h = 22 + (i % 5) * 14;
+      const w = 2 + (i % 3) * 1.6;
+      ctx.fillStyle = i % 2 === 0 ? '#303030' : '#c8c8c8';
+      ctx.fillRect(x, y, w, h);
+    }
+    return track(finalizeTexture(c, aniso, 2, 3, false));
+  })();
+
+  // 8a-bis. Paper birch silver-white bark with dark horizontal lenticel markings
+  const birchBark = (() => {
+    const [c, ctx] = makeCanvas(256, 256);
+    ctx.fillStyle = '#ddd7ce';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 60; i++) {
+      const y = (i * 13.7) % 256;
+      const x = (Math.sin(i * 29.1) * 0.5 + 0.5) * 240;
+      const len = 18 + (i % 5) * 12;
+      ctx.fillStyle = i % 4 === 0 ? 'rgba(40, 34, 30, 0.78)' : 'rgba(72, 62, 54, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(x, y, len * 0.5, 2 + (i % 2), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return track(finalizeTexture(c, aniso, 1, 3, true));
+  })();
+
+  // Helper to paint realistic pointed leaf with central midrib & lateral veins
+  const paintBotanicalLeaf = (
+    ctx: CanvasRenderingContext2D,
+    len: number,
+    wid: number,
+    baseCol: string,
+    tipCol: string,
+    veinCol: string
+  ) => {
+    const grad = ctx.createLinearGradient(-len, 0, len, 0);
+    grad.addColorStop(0, baseCol);
+    grad.addColorStop(1, tipCol);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(-len, 0);
+    ctx.quadraticCurveTo(0, -wid, len, 0);
+    ctx.quadraticCurveTo(0, wid, -len, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = veinCol;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.85, 0);
+    ctx.lineTo(len * 0.82, 0);
+    for (let v = -2; v <= 2; v++) {
+      const vx = v * len * 0.24;
+      ctx.moveTo(vx, 0);
+      ctx.lineTo(vx + len * 0.14, -wid * 0.52);
+      ctx.moveTo(vx, 0);
+      ctx.lineTo(vx + len * 0.14, wid * 0.52);
+    }
+    ctx.stroke();
+  };
+
+  // 8ab. High-resolution alpha-cutout botanical oak/broadleaf spray texture (512x512 crisp pointed veined leaves)
+  const leafFoliage = (() => {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.clearRect(0, 0, 512, 512);
+    const tones: Array<[string, string]> = [
+      ['#224c1a', '#3a7229'],
+      ['#2b5d20', '#4d8a35'],
+      ['#366e28', '#63a342'],
+      ['#1b3d14', '#2e5d21'],
+      ['#41792c', '#74b349'],
+    ];
+    // Subtle twig stems inside the leaf spray cluster
+    ctx.strokeStyle = 'rgba(72, 50, 32, 0.55)';
+    ctx.lineWidth = 3;
+    for (let b = 0; b < 5; b++) {
+      const ba = (b / 5) * Math.PI * 2 + 0.3;
+      ctx.beginPath();
+      ctx.moveTo(256, 256);
+      ctx.lineTo(256 + Math.cos(ba) * 145, 256 + Math.sin(ba) * 145);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 120; i++) {
       const a = i * 2.39996;
-      const rad = Math.sqrt((i + 1) / 68) * 98;
-      const lx = 128 + Math.cos(a) * rad;
-      const ly = 128 + Math.sin(a) * rad;
-      const lw = 18 + (i % 4) * 5;
-      const lh = 9 + (i % 3) * 3;
+      const rad = Math.sqrt((i + 1) / 120) * 196;
+      const lx = 256 + Math.cos(a) * rad;
+      const ly = 256 + Math.sin(a) * rad;
+      const lw = 24 + (i % 5) * 6;
+      const lh = 13 + (i % 3) * 4;
+      const [baseC, tipC] = tones[i % tones.length];
       ctx.save();
       ctx.translate(lx, ly);
-      ctx.rotate(a + (i % 5) * 0.25);
-      ctx.fillStyle = leafColors[i % leafColors.length];
+      ctx.rotate(a + (i % 5) * 0.28);
+      paintBotanicalLeaf(ctx, lw, lh, baseC, tipC, 'rgba(20, 44, 14, 0.35)');
+      ctx.restore();
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 8ac. Deep-green columnar cypress/pine needle scale spray texture (512x512)
+  const cypressFoliage = (() => {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.clearRect(0, 0, 512, 512);
+    const tones = ['#1a3c24', '#214d2c', '#2a5f35', '#15311d', '#34713f'];
+    for (let i = 0; i < 165; i++) {
+      const a = i * 2.39996;
+      const rad = Math.sqrt((i + 1) / 165) * 204;
+      const lx = 256 + Math.cos(a) * rad;
+      const ly = 256 + Math.sin(a) * rad;
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(-Math.PI / 2 + ((i % 7) - 3) * 0.18);
+      ctx.fillStyle = tones[i % tones.length];
       ctx.beginPath();
-      ctx.ellipse(0, 0, lw, lh, 0, 0, Math.PI * 2);
+      ctx.moveTo(0, -28 - (i % 3) * 6);
+      ctx.quadraticCurveTo(10, 0, 3, 22);
+      ctx.lineTo(-3, 22);
+      ctx.quadraticCurveTo(-10, 0, 0, -28 - (i % 3) * 6);
+      ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = 'rgba(20, 42, 14, 0.35)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(-lw * 0.75, 0);
-      ctx.lineTo(lw * 0.75, 0);
-      ctx.stroke();
+      ctx.restore();
+    }
+    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+  })();
+
+  // 8ad. Silvery Mediterranean olive-tree slender lanceolate leaf spray texture
+  const oliveFoliage = (() => {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.clearRect(0, 0, 512, 512);
+    const tones: Array<[string, string]> = [
+      ['#465c42', '#7d9375'],
+      ['#556c50', '#96ab8e'],
+      ['#3b4e38', '#687f62'],
+      ['#637a5d', '#aec0a5'],
+    ];
+    for (let i = 0; i < 140; i++) {
+      const a = i * 2.39996;
+      const rad = Math.sqrt((i + 1) / 140) * 195;
+      const lx = 256 + Math.cos(a) * rad;
+      const ly = 256 + Math.sin(a) * rad;
+      const [baseC, tipC] = tones[i % tones.length];
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(a + (i % 4) * 0.4);
+      paintBotanicalLeaf(ctx, 28 + (i % 4) * 5, 7 + (i % 2) * 2.5, baseC, tipC, 'rgba(218, 228, 212, 0.35)');
       ctx.restore();
     }
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
@@ -995,91 +1157,292 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor
+  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor (512x512 crisp petals & veined foliage)
   const roseFoliage = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.clearRect(0, 0, 256, 256);
-    const leafColors = ['#264f21', '#356c2a', '#488435', '#2e5d24'];
-    for (let i = 0; i < 42; i++) {
-      const lx = 128 + Math.cos(i * 2.4) * (20 + (i % 5) * 16);
-      const ly = 128 + Math.sin(i * 1.9) * (20 + (i % 4) * 17);
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.clearRect(0, 0, 512, 512);
+    const leafTones: Array<[string, string]> = [
+      ['#1f481b', '#38742c'],
+      ['#2a5f22', '#4a8b38'],
+      ['#36722a', '#5ca244'],
+    ];
+    for (let i = 0; i < 82; i++) {
+      const a = i * 2.399;
+      const rad = Math.sqrt((i + 1) / 82) * 190;
+      const lx = 256 + Math.cos(a) * rad;
+      const ly = 256 + Math.sin(a) * rad;
+      const [bCol, tCol] = leafTones[i % leafTones.length];
       ctx.save();
       ctx.translate(lx, ly);
-      ctx.rotate(i * 1.15);
-      ctx.fillStyle = leafColors[i % leafColors.length];
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 22, 11, 0, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.rotate(a + 0.45);
+      paintBotanicalLeaf(ctx, 26, 14, bCol, tCol, 'rgba(18, 42, 12, 0.38)');
       ctx.restore();
     }
     const roseShades = [
+      ['#9f1239', '#e11d48', '#fda4af'],
       ['#be123c', '#fb7185', '#ffe4e6'],
-      ['#e11d48', '#fda4af', '#fff1f2'],
-      ['#d97706', '#fcd34d', '#fef9c3'],
-      ['#c026d3', '#f0abfc', '#fdf4ff'],
+      ['#b45309', '#f59e0b', '#fef3c7'],
+      ['#a21caf', '#e879f9', '#fdf4ff'],
     ];
-    for (let b = 0; b < 9; b++) {
-      const bx = 64 + ((b * 47) % 128);
-      const by = 58 + ((b * 61) % 136);
+    for (let b = 0; b < 14; b++) {
+      const ang = b * 2.399 + 0.4;
+      const rad = 42 + Math.sqrt(b / 14) * 145;
+      const bx = 256 + Math.cos(ang) * rad;
+      const by = 256 + Math.sin(ang) * rad;
       const [outerCol, midCol, coreCol] = roseShades[b % roseShades.length];
-      for (let p = 0; p < 5; p++) {
-        const pa = (p / 5) * Math.PI * 2 + b;
+      for (let p = 0; p < 6; p++) {
+        const pa = (p / 6) * Math.PI * 2 + b;
         ctx.fillStyle = outerCol;
         ctx.beginPath();
-        ctx.arc(bx + Math.cos(pa) * 9, by + Math.sin(pa) * 9, 9, 0, Math.PI * 2);
+        ctx.arc(bx + Math.cos(pa) * 15, by + Math.sin(pa) * 15, 14, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.fillStyle = midCol;
       ctx.beginPath();
-      ctx.arc(bx, by, 9, 0, Math.PI * 2);
+      ctx.arc(bx, by, 14, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = coreCol;
       ctx.beginPath();
-      ctx.arc(bx - 1.5, by - 1.5, 4, 0, Math.PI * 2);
+      ctx.arc(bx - 2, by - 2, 6.5, 0, Math.PI * 2);
       ctx.fill();
     }
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 23. Alpha-cutout rich flowering courtyard tree foliage card
+  // 23. Alpha-cutout rich flowering courtyard & world blossom tree foliage card (512x512 veined leaves + delicate 5-petal blossoms)
   const blossomFoliage = (() => {
-    const [c, ctx] = makeCanvas(256, 256);
-    ctx.clearRect(0, 0, 256, 256);
-    const leafTones = ['#234f20', '#2f6828', '#428336', '#569c41', '#69ab4b'];
-    for (let i = 0; i < 64; i++) {
+    const [c, ctx] = makeCanvas(512, 512);
+    ctx.clearRect(0, 0, 512, 512);
+    const leafTones: Array<[string, string]> = [
+      ['#214b1e', '#37732c'],
+      ['#2c6226', '#4c8e3a'],
+      ['#3b7831', '#64a64a'],
+      ['#468838', '#78ba57'],
+    ];
+    for (let i = 0; i < 110; i++) {
       const ang = i * 2.399;
-      const rad = Math.sqrt(i / 64) * 92;
-      const lx = 128 + Math.cos(ang) * rad;
-      const ly = 128 + Math.sin(ang) * rad;
+      const rad = Math.sqrt(i / 110) * 194;
+      const lx = 256 + Math.cos(ang) * rad;
+      const ly = 256 + Math.sin(ang) * rad;
+      const [bCol, tCol] = leafTones[i % leafTones.length];
       ctx.save();
       ctx.translate(lx, ly);
       ctx.rotate(ang + 0.6);
-      ctx.fillStyle = leafTones[i % leafTones.length];
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 21, 12, 0, 0, Math.PI * 2);
-      ctx.fill();
+      paintBotanicalLeaf(ctx, 25, 13, bCol, tCol, 'rgba(18, 42, 12, 0.34)');
       ctx.restore();
     }
-    // Delicate ivory-cream & warm gold tree blossoms nestled in outer canopy
-    for (let k = 0; k < 12; k++) {
-      const ang = k * 2.1 + 0.4;
-      const rad = 36 + (k % 3) * 24;
-      const bx = 128 + Math.cos(ang) * rad;
-      const by = 128 + Math.sin(ang) * rad;
-      ctx.fillStyle = k % 3 === 0 ? '#fef3c7' : '#ffffff';
+    // Delicate ivory-cream & blush blossoms with golden stamens nestled in outer canopy
+    for (let k = 0; k < 20; k++) {
+      const ang = k * 2.399 + 0.25;
+      const rad = 52 + Math.sqrt(k / 20) * 145;
+      const bx = 256 + Math.cos(ang) * rad;
+      const by = 256 + Math.sin(ang) * rad;
+      ctx.fillStyle = k % 3 === 0 ? '#fef3c7' : k % 3 === 1 ? '#ffe4e6' : '#ffffff';
       for (let p = 0; p < 5; p++) {
-        const pa = (p / 5) * Math.PI * 2;
+        const pa = (p / 5) * Math.PI * 2 + k;
         ctx.beginPath();
-        ctx.arc(bx + Math.cos(pa) * 5.5, by + Math.sin(pa) * 5.5, 4.5, 0, Math.PI * 2);
+        ctx.arc(bx + Math.cos(pa) * 9.5, by + Math.sin(pa) * 9.5, 8, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.fillStyle = '#f59e0b';
       ctx.beginPath();
-      ctx.arc(bx, by, 3, 0, Math.PI * 2);
+      ctx.arc(bx, by, 5, 0, Math.PI * 2);
       ctx.fill();
     }
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
+
+  // 24. Ultra-lightweight scenic display screen texture (256x128, cycling 3 relaxing landscapes at <=10Hz only when visible)
+  const [screenCanvas, screenCtx] = makeCanvas(256, 128);
+  const drawReceptionScreenFrame = (tSec: number) => {
+    const w = 256;
+    const h = 128;
+    const sceneLen = 7.0;
+    const totalCycle = sceneLen * 3;
+    const cyc = ((tSec % totalCycle) + totalCycle) % totalCycle;
+    const sceneIdx = Math.floor(cyc / sceneLen);
+    const localT = cyc - sceneIdx * sceneLen;
+    const phase = localT / sceneLen;
+
+    if (sceneIdx === 0) {
+      // Scene 0: Serene Coastal Cove & Gentle Waves
+      const sky = screenCtx.createLinearGradient(0, 0, 0, 74);
+      sky.addColorStop(0, '#0ea5e9');
+      sky.addColorStop(0.55, '#7dd3fc');
+      sky.addColorStop(1, '#fef3c7');
+      screenCtx.fillStyle = sky;
+      screenCtx.fillRect(0, 0, w, 74);
+
+      // Soft sun glow
+      const sunX = 192 + Math.sin(tSec * 0.25) * 14;
+      const sunGlow = screenCtx.createRadialGradient(sunX, 34, 4, sunX, 34, 28);
+      sunGlow.addColorStop(0, '#fffbeb');
+      sunGlow.addColorStop(0.45, 'rgba(253,224,71,0.55)');
+      sunGlow.addColorStop(1, 'rgba(253,224,71,0)');
+      screenCtx.fillStyle = sunGlow;
+      screenCtx.beginPath();
+      screenCtx.arc(sunX, 34, 28, 0, Math.PI * 2);
+      screenCtx.fill();
+
+      // Drifting wispy clouds
+      screenCtx.fillStyle = 'rgba(255,255,255,0.72)';
+      const c1 = ((tSec * 9) % 290) - 30;
+      const c2 = ((tSec * 6 + 130) % 290) - 30;
+      screenCtx.beginPath();
+      screenCtx.ellipse(c1, 24, 24, 8, 0, 0, Math.PI * 2);
+      screenCtx.ellipse(c2, 42, 18, 6, 0, 0, Math.PI * 2);
+      screenCtx.fill();
+
+      // Ocean
+      const sea = screenCtx.createLinearGradient(0, 72, 0, h);
+      sea.addColorStop(0, '#0284c7');
+      sea.addColorStop(1, '#0f766e');
+      screenCtx.fillStyle = sea;
+      screenCtx.fillRect(0, 72, w, h - 72);
+
+      // Animated wave shimmer lines
+      screenCtx.strokeStyle = 'rgba(186,230,253,0.45)';
+      screenCtx.lineWidth = 2;
+      for (let r = 0; r < 4; r++) {
+        const y = 82 + r * 11;
+        const shift = Math.sin(tSec * 1.8 + r * 1.4) * 12;
+        screenCtx.beginPath();
+        screenCtx.moveTo(0, y);
+        screenCtx.quadraticCurveTo(64 + shift, y - 3, 128, y);
+        screenCtx.quadraticCurveTo(192 - shift, y + 3, 256, y);
+        screenCtx.stroke();
+      }
+    } else if (sceneIdx === 1) {
+      // Scene 1: Emerald Alpine Valley & Misty Peaks
+      const sky = screenCtx.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, '#1e3a8a');
+      sky.addColorStop(0.55, '#38bdf8');
+      sky.addColorStop(1, '#bae6fd');
+      screenCtx.fillStyle = sky;
+      screenCtx.fillRect(0, 0, w, h);
+
+      // Distant mountains
+      screenCtx.fillStyle = '#3b6d8c';
+      screenCtx.beginPath();
+      screenCtx.moveTo(0, 82);
+      screenCtx.lineTo(48, 38);
+      screenCtx.lineTo(96, 70);
+      screenCtx.lineTo(156, 28);
+      screenCtx.lineTo(212, 66);
+      screenCtx.lineTo(256, 44);
+      screenCtx.lineTo(256, 128);
+      screenCtx.lineTo(0, 128);
+      screenCtx.closePath();
+      screenCtx.fill();
+
+      // Mid green hills
+      screenCtx.fillStyle = '#15803d';
+      screenCtx.beginPath();
+      screenCtx.moveTo(0, 92);
+      screenCtx.quadraticCurveTo(72, 66, 138, 86);
+      screenCtx.quadraticCurveTo(198, 70, 256, 88);
+      screenCtx.lineTo(256, 128);
+      screenCtx.lineTo(0, 128);
+      screenCtx.closePath();
+      screenCtx.fill();
+
+      // Shimmering river
+      screenCtx.fillStyle = '#38bdf8';
+      screenCtx.beginPath();
+      screenCtx.moveTo(118, 86);
+      screenCtx.quadraticCurveTo(148 + Math.sin(tSec * 1.4) * 6, 102, 86, 128);
+      screenCtx.lineTo(136, 128);
+      screenCtx.quadraticCurveTo(168, 102, 130, 86);
+      screenCtx.closePath();
+      screenCtx.fill();
+
+      // Drifting mist ribbon
+      const mistX = ((tSec * 11) % 280) - 40;
+      screenCtx.fillStyle = 'rgba(255,255,255,0.34)';
+      screenCtx.beginPath();
+      screenCtx.ellipse(mistX, 68, 42, 7, 0, 0, Math.PI * 2);
+      screenCtx.fill();
+    } else {
+      // Scene 2: Calm Sunset Oasis & Palms
+      const sky = screenCtx.createLinearGradient(0, 0, 0, 84);
+      sky.addColorStop(0, '#312e81');
+      sky.addColorStop(0.5, '#db2777');
+      sky.addColorStop(1, '#fbbf24');
+      screenCtx.fillStyle = sky;
+      screenCtx.fillRect(0, 0, w, 84);
+
+      screenCtx.fillStyle = '#fde68a';
+      screenCtx.beginPath();
+      screenCtx.arc(128, 68, 18, 0, Math.PI * 2);
+      screenCtx.fill();
+
+      // Water reflection
+      const water = screenCtx.createLinearGradient(0, 84, 0, h);
+      water.addColorStop(0, '#9d174d');
+      water.addColorStop(1, '#1e1b4b');
+      screenCtx.fillStyle = water;
+      screenCtx.fillRect(0, 84, w, h - 84);
+
+      screenCtx.fillStyle = 'rgba(253,224,71,0.5)';
+      for (let i = 0; i < 4; i++) {
+        const wLen = 28 - i * 5 + Math.sin(tSec * 2.5 + i) * 4;
+        screenCtx.fillRect(128 - wLen / 2, 89 + i * 8, wLen, 2.5);
+      }
+
+      // Silhouette hill + swaying palm fronds
+      screenCtx.fillStyle = '#0f172a';
+      screenCtx.beginPath();
+      screenCtx.moveTo(0, 96);
+      screenCtx.quadraticCurveTo(44, 78, 86, 94);
+      screenCtx.lineTo(86, 128);
+      screenCtx.lineTo(0, 128);
+      screenCtx.closePath();
+      screenCtx.fill();
+
+      const sway = Math.sin(tSec * 1.4) * 3;
+      screenCtx.strokeStyle = '#0f172a';
+      screenCtx.lineWidth = 3.5;
+      screenCtx.beginPath();
+      screenCtx.moveTo(42, 88);
+      screenCtx.quadraticCurveTo(46, 62, 52 + sway, 46);
+      screenCtx.stroke();
+      for (let f = -2; f <= 2; f++) {
+        screenCtx.lineWidth = 2;
+        screenCtx.beginPath();
+        screenCtx.moveTo(52 + sway, 46);
+        screenCtx.quadraticCurveTo(52 + sway + f * 9, 40, 52 + sway + f * 13, 52 + Math.abs(f) * 2);
+        screenCtx.stroke();
+      }
+    }
+
+    // Subtle clinic top-right wellness badge & soft fade vignette
+    screenCtx.fillStyle = 'rgba(15, 23, 42, 0.54)';
+    screenCtx.fillRect(8, 8, 86, 16);
+    screenCtx.fillStyle = '#38bdf8';
+    screenCtx.fillRect(8, 8, 3, 16);
+    screenCtx.fillStyle = '#f8fafc';
+    screenCtx.font = 'bold 9px sans-serif';
+    screenCtx.fillText('THERASON WELLNESS', 14, 19);
+
+    // Subtle bottom playback progress bar
+    screenCtx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+    screenCtx.fillRect(0, h - 4, w, 4);
+    screenCtx.fillStyle = '#38bdf8';
+    screenCtx.fillRect(0, h - 4, Math.max(4, w * phase), 4);
+  };
+  drawReceptionScreenFrame(0);
+  const receptionScreen = track(finalizeTexture(screenCanvas, aniso, 1, 1, true, true));
+  receptionScreen.generateMipmaps = false;
+  receptionScreen.minFilter = THREE.LinearFilter;
+  receptionScreen.magFilter = THREE.LinearFilter;
+  let lastScreenBucket = -1;
+  const updateReceptionScreen = (tSec: number) => {
+    const bucket = Math.floor(tSec * 10);
+    if (bucket === lastScreenBucket) return;
+    lastScreenBucket = bucket;
+    drawReceptionScreenFrame(tSec);
+    receptionScreen.needsUpdate = true;
+  };
 
   return {
     tileBlue,
@@ -1095,7 +1458,11 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     sidewalk,
     wood,
     bark,
+    barkBump,
+    birchBark,
     leafFoliage,
+    cypressFoliage,
+    oliveFoliage,
     roofShingle,
     stuccoBump,
     contactShadow,
@@ -1114,6 +1481,8 @@ export function createTextureBundle(maxAnisotropy = 4): TextureBundle {
     palmFrond,
     roseFoliage,
     blossomFoliage,
+    receptionScreen,
+    updateReceptionScreen,
     dispose: () => {
       created.forEach((t) => t.dispose());
     },

@@ -1,8 +1,12 @@
 import * as THREE from 'three';
 import { GRID_SIZE } from '../data/catalog';
+import { SOLAR_ZONE, WORLD_TREES, WorldTreeDef, WorldTreeSpecies } from '../engine/isometricMath';
 import { ClinicRoom, SpriteKind } from '../types/clinic';
 import { glbRegistry } from './glbRegistry';
 import { TextureBundle } from './textures3d';
+
+export { WORLD_TREES };
+export type { WorldTreeDef };
 
 function setShadow(obj: THREE.Object3D, cast = true, receive = true) {
   obj.traverse((child) => {
@@ -30,10 +34,21 @@ export interface ClinicDoorHandle {
   triggerRadius: number;
   requiredRoomId?: string;
   alwaysOpen?: boolean;
+  manualPush?: boolean;
   openAmount: number;
+  swingSign?: number;
+  holdTimer?: number;
   leftLeaf: THREE.Object3D;
   rightLeaf?: THREE.Object3D;
   baseOffset?: number;
+}
+
+export interface DoorActorInput {
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  isMoving: boolean;
 }
 
 export interface SmartLightMeta {
@@ -71,31 +86,102 @@ export interface ClinicWorldHandle {
   facadeSignMat: THREE.MeshStandardMaterial;
   villaWinMat: THREE.MeshStandardMaterial;
   pillarLanternMat: THREE.MeshStandardMaterial;
+  worldTreeHitMeshes: THREE.Group;
+  lockedRoomCovers: THREE.Mesh[];
+  setZoomLod: (zoom: number) => void;
   dispose: () => void;
 }
 
 export function updateDoors3D(
   doors: ClinicDoorHandle[],
-  actorPositions: Array<{ x: number; z: number }>,
+  actors: DoorActorInput[],
   unlockedRooms: Set<string>,
   dt: number
 ) {
   for (const door of doors) {
     let target = 0;
+    let isOpeningNow = false;
+
     if (door.alwaysOpen) {
       target = 1;
+      isOpeningNow = true;
     } else {
       const canOpen = !door.requiredRoomId || unlockedRooms.has(door.requiredRoomId);
       if (canOpen) {
-        for (const pos of actorPositions) {
-          if (Math.hypot(pos.x - door.centerX, pos.z - door.centerZ) <= door.triggerRadius) {
+        if (door.manualPush) {
+          // Interior hinged doors stay closed until a walking person arrives right at the leaf and physically pushes through
+          let pushed = false;
+          let pushDir = door.swingSign ?? 1;
+
+          for (const actor of actors) {
+            const dx = actor.x - door.centerX;
+            const dz = actor.z - door.centerZ;
+            const perpDist = door.kind === 'swing_z' ? Math.abs(dx) : Math.abs(dz);
+            const alongDist = door.kind === 'swing_z' ? Math.abs(dz) : Math.abs(dx);
+            if (alongDist > 0.52) continue;
+
+            const speed = Math.hypot(actor.vx, actor.vz);
+            const approachDot =
+              door.kind === 'swing_z'
+                ? -Math.sign(dx || 1) * actor.vx
+                : -Math.sign(dz || 1) * actor.vz;
+            const headingIntoDoor = actor.isMoving && speed > 0.08 && approachDot > 0.05;
+
+            // Opens right as actor's hand/body reaches physical contact (~0.48m), or mid-stride inside jamb (~0.30m)
+            if ((perpDist <= 0.48 && headingIntoDoor) || (perpDist <= 0.30 && (actor.isMoving || door.openAmount > 0.18))) {
+              pushed = true;
+              // Latch swing direction away from the person pushing (so door opens in direction of travel)
+              if (door.openAmount < 0.14) {
+                if (door.kind === 'swing_z') {
+                  const travelX = Math.abs(actor.vx) > 0.05 ? Math.sign(actor.vx) : -Math.sign(dx || -1);
+                  // swing_z: rotation.y = -ang opens toward -X, +ang opens toward +X
+                  pushDir = travelX >= 0 ? -1 : 1;
+                } else {
+                  const travelZ = Math.abs(actor.vz) > 0.05 ? Math.sign(actor.vz) : -Math.sign(dz || -1);
+                  // swing_x: rotation.y = +ang opens toward -Z, -ang opens toward +Z
+                  pushDir = travelZ >= 0 ? -1 : 1;
+                }
+                door.swingSign = pushDir;
+              }
+              break;
+            }
+          }
+
+          if (pushed) {
             target = 1;
-            break;
+            isOpeningNow = true;
+            door.holdTimer = 0.14;
+          } else if ((door.holdTimer ?? 0) > 0) {
+            door.holdTimer = Math.max(0, (door.holdTimer ?? 0) - dt);
+            target = Math.max(door.openAmount, 0.72);
+          } else {
+            target = 0;
+          }
+        } else {
+          // Automatic exterior sliding entrance doors
+          for (const actor of actors) {
+            if (Math.hypot(actor.x - door.centerX, actor.z - door.centerZ) <= door.triggerRadius) {
+              target = 1;
+              isOpeningNow = true;
+              break;
+            }
           }
         }
       }
     }
-    door.openAmount = THREE.MathUtils.damp(door.openAmount, target, 7.5, dt);
+
+    // Interior hinged doors swing open crisply upon hand push, then glide shut naturally via hydraulic closer
+    const dampRate = door.manualPush
+      ? isOpeningNow
+        ? 15.0
+        : target > 0.05
+          ? 4.0
+          : 3.0
+      : 8.0;
+    door.openAmount = THREE.MathUtils.damp(door.openAmount, target, dampRate, dt);
+    if (!isOpeningNow && target === 0 && door.openAmount < 0.008) {
+      door.openAmount = 0;
+    }
 
     if (door.kind === 'sliding_z') {
       const base = door.baseOffset ?? 0.47;
@@ -105,13 +191,15 @@ export function updateDoors3D(
         door.rightLeaf.position.z = base + slide;
       }
     } else if (door.kind === 'swing_z') {
-      const ang = door.openAmount * 1.42;
+      const sign = door.swingSign ?? 1;
+      const ang = door.openAmount * 1.44 * sign;
       door.leftLeaf.rotation.y = -ang;
       if (door.rightLeaf) {
         door.rightLeaf.rotation.y = ang;
       }
     } else if (door.kind === 'swing_x') {
-      const ang = door.openAmount * 1.42;
+      const sign = door.swingSign ?? 1;
+      const ang = door.openAmount * 1.44 * sign;
       door.leftLeaf.rotation.y = ang;
       if (door.rightLeaf) {
         door.rightLeaf.rotation.y = -ang;
@@ -120,37 +208,9 @@ export function updateDoors3D(
   }
 }
 
-// Lightweight exterior & clinic architecture builder (vehicle-free for clean mobile FPS)
-
-export interface WorldTreeDef {
-  id: string;
-  x: number;
-  z: number;
-  scale: number;
-  rotY: number;
-  removeCost: number;
-}
-
-export const WORLD_TREES: WorldTreeDef[] = [
-  { id: 'tree_01', x: -0.2, z: 0.2, scale: 1.24, rotY: 0.4, removeCost: 80 },
-  { id: 'tree_02', x: 0.2, z: 9.4, scale: 1.04, rotY: 1.8, removeCost: 80 },
-  { id: 'tree_03', x: 0.1, z: 18.4, scale: 1.18, rotY: 3.1, removeCost: 80 },
-  { id: 'tree_04', x: 0.5, z: 25.0, scale: 1.22, rotY: 0.9, removeCost: 80 },
-  { id: 'tree_05', x: 8.2, z: 27.8, scale: 1.02, rotY: 2.5, removeCost: 80 },
-  { id: 'tree_06', x: 16.6, z: 27.8, scale: 1.12, rotY: 4.2, removeCost: 80 },
-  { id: 'tree_07', x: 13.4, z: -0.4, scale: 1.08, rotY: 1.2, removeCost: 80 },
-  { id: 'tree_08', x: 2.6, z: -4.6, scale: 1.28, rotY: 2.1, removeCost: 80 },
-  { id: 'tree_09', x: 12.4, z: -5.0, scale: 1.18, rotY: 5.0, removeCost: 80 },
-  { id: 'tree_10', x: 24.4, z: 0.3, scale: 0.94, rotY: 3.6, removeCost: 80 },
-  { id: 'tree_11', x: 25.2, z: 24.4, scale: 1.14, rotY: 0.6, removeCost: 80 },
-  { id: 'tree_12', x: 39.4, z: 3.4, scale: 1.22, rotY: 2.9, removeCost: 80 },
-  { id: 'tree_13', x: 39.6, z: 19.8, scale: 1.16, rotY: 4.7, removeCost: 80 },
-  { id: 'tree_14', x: 40.2, z: 11.4, scale: 0.94, rotY: 1.5, removeCost: 80 },
-];
-
 /**
  * Builds the realistic architectural clinic, sky dome, distant horizon,
- * paved avenue + cars, fountain courtyard, and natural multi-branch trees.
+ * paved avenue, fountain courtyard, rear solar utility zone, and natural multi-species trees.
  */
 export function buildClinicWorld3D(
   rooms: ClinicRoom[],
@@ -158,6 +218,9 @@ export function buildClinicWorld3D(
   removedTreeIds: string[] = []
 ): ClinicWorldHandle {
   const root = new THREE.Group();
+  const distantDetailsGroup = new THREE.Group();
+  const microDetailsGroup = new THREE.Group();
+  root.add(distantDetailsGroup, microDetailsGroup);
   const disposables: Array<{ dispose: () => void }> = [];
   const trackGeom = <T extends THREE.BufferGeometry>(g: T): T => {
     disposables.push(g);
@@ -353,39 +416,43 @@ export function buildClinicWorld3D(
   );
   const aoPlaneGeom = trackGeom(new THREE.PlaneGeometry(1, 1));
 
-  // 1. Natural Botanical Rolling Terrain (Flat building pads + undulating meadow + 3D grass tufts)
-  const lawnGeom = trackGeom(new THREE.PlaneGeometry(190, 190, 40, 40));
+  // 1. Focused Clinic Yard Terrain (compact surrounding lawn blending smoothly into horizon fog)
+  const lawnGeom = trackGeom(new THREE.PlaneGeometry(96, 96, 36, 36));
   lawnGeom.rotateX(-Math.PI / 2);
   const posAttr = lawnGeom.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < posAttr.count; i++) {
-    const wx = posAttr.getX(i) + GRID_SIZE / 2;
-    const wz = posAttr.getZ(i) + GRID_SIZE / 2;
-    const inClinicPad = wx >= -1.0 && wx <= 42.5 && wz >= -0.5 && wz <= 27.6;
+    const wx = posAttr.getX(i) + 14;
+    const wz = posAttr.getZ(i) + 12;
+    const inClinicPad = wx >= -8.5 && wx <= 39.5 && wz >= -2.5 && wz <= 28.0;
     const inHousePad = wx >= 2.5 && wx <= 12.5 && wz >= -10.5 && wz <= -0.5;
     if (!inClinicPad && !inHousePad) {
       const distClinic = Math.max(0, Math.hypot(Math.max(0, Math.abs(wx - 15) - 16), Math.max(0, Math.abs(wz - 11.5) - 15.5)));
-      const blend = Math.min(1, distClinic / 6.0);
+      const blend = Math.min(1, distClinic / 5.5);
       const undulate =
-        (Math.sin(wx * 0.14 + wz * 0.09) * 0.24 + Math.cos(wx * 0.07 - wz * 0.16) * 0.18) * blend;
+        (Math.sin(wx * 0.16 + wz * 0.11) * 0.16 + Math.cos(wx * 0.09 - wz * 0.18) * 0.12) * blend;
       posAttr.setY(i, undulate);
     }
   }
   lawnGeom.computeVertexNormals();
   const outerLawn = new THREE.Mesh(lawnGeom, grassMat);
-  outerLawn.position.set(GRID_SIZE / 2, -0.03, GRID_SIZE / 2);
+  outerLawn.position.set(14, -0.03, 12);
   outerLawn.receiveShadow = true;
   root.add(outerLawn);
 
-  // Uneven 3D Instanced Grass Tufts scattered organically across the meadow lawn (single draw call)
+  // Uneven 3D Instanced Grass Tufts kept around the immediate clinic yard perimeter (single draw call)
   const tuftGeom = trackGeom(new THREE.ConeGeometry(0.055, 0.24, 3));
   tuftGeom.translate(0, 0.12, 0);
   const tuftMat = trackMat(makeMat({ color: 0xffffff, roughness: 0.9, metalness: 0.0 }));
   const tuftPositions: Array<[number, number, number, number, number]> = [];
-  for (let i = 0; i < 360; i++) {
-    const gx = (Math.sin(i * 73.1 + 0.4) * 0.5 + 0.5) * 44 - 8;
-    const gz = (Math.cos(i * 41.7 + 1.9) * 0.5 + 0.5) * 42 - 11;
-    if (gx >= 1.6 && gx <= 39.2 && gz >= 1.6 && gz <= 22.6) continue; // keep clinic/courtyard/street clean
-    if (gx >= 2.8 && gx <= 21.0 && gz >= 22.8 && gz <= 26.1) continue; // keep solar placement tiles unobstructed while grass stays wild around edges
+  for (let i = 0; i < 240; i++) {
+    const gx = (Math.sin(i * 73.1 + 0.4) * 0.5 + 0.5) * 46 - 8;
+    const gz = (Math.cos(i * 41.7 + 1.9) * 0.5 + 0.5) * 36 - 7;
+    if (gx >= 1.6 && gx <= 38.2 && gz >= 1.6 && gz <= 22.6) continue; // keep clinic/courtyard/street clean
+    if (gx >= -1.2 && gx <= 27.6 && gz >= 22.0 && gz <= 26.8) continue; // keep South garden placement tiles clean
+    if (gx >= -1.5 && gx <= 2.0 && gz >= 0 && gz <= 26.8) continue; // keep West garden perimeter clean
+    if (gx >= 0 && gx <= 26.8 && gz >= -2.2 && gz <= 2.0) continue; // keep North rear lawn clean
+    if (gx >= 10.6 && gx <= 21.8 && gz >= -4.4 && gz <= -1.8) continue; // keep North-East garden lawn clean
+    if (gx >= SOLAR_ZONE.minX - 0.5 && gx <= SOLAR_ZONE.maxX + 1.5 && gz >= SOLAR_ZONE.minY - 0.5 && gz <= SOLAR_ZONE.maxY + 1.5) continue; // keep rear west solar pad clean
     if (gx >= 3.8 && gx <= 11.2 && gz >= -8.2 && gz <= -1.6) continue; // keep house plinth clean
     const scY = 0.65 + (i % 5) * 0.22;
     const scW = 0.8 + (i % 4) * 0.18;
@@ -413,24 +480,11 @@ export function buildClinicWorld3D(
   if (tuftInst.instanceColor) tuftInst.instanceColor.needsUpdate = true;
   tuftInst.computeBoundingSphere();
   tuftInst.receiveShadow = true;
-  root.add(tuftInst);
+  microDetailsGroup.add(tuftInst);
 
-  const distantHillMat = trackMat(makeMat({ color: 0x4b6e36, roughness: 0.96 }));
   const campusWallMat = trackMat(makeMat({ color: 0xdad1c4, bumpMap: textures.stuccoBump, bumpScale: 0.015, roughness: 0.88 }));
   const shingleMat = trackMat(makeMat({ map: textures.roofShingle, roughness: 0.84 }));
   const shutterMat = trackMat(makeMat({ color: 0x3b5249, roughness: 0.72 }));
-  const ridgeCoords: Array<[number, number, number, number]> = [
-    [-46, -42, 28, 4.8],
-    [14, -58, 36, 5.6],
-    [62, -40, 28, 4.4],
-    [-46, 46, 30, 4.8],
-  ];
-  for (const [rx, rz, rw, rh] of ridgeCoords) {
-    const hill = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(rw, 24, 14)), distantHillMat);
-    hill.scale.set(1.5, rh / rw, 1.0);
-    hill.position.set(rx, -0.9, rz);
-    root.add(hill);
-  }
 
   // Single Cozy 2-Story Doctor's Residence Cottage (compact proportions behind the taller clinic)
   const buildDoctorVilla = (hx: number, hz: number, rotY = 0) => {
@@ -565,28 +619,28 @@ export function buildClinicWorld3D(
   };
   buildDoctorVilla(7.2, -4.6, 0.04);
 
-  // 2. Natural Garden Flagstone Promenade & Imperfect Sandy-Gravel Garden Street (zero asphalt!)
-  const promenade = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(2.58, 0.08, 98)), sidewalkMat);
+  // 2. Natural Garden Flagstone Promenade & Compact Sandy-Gravel Front Approach (focused around the clinic)
+  const promenade = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(2.58, 0.08, 40)), sidewalkMat);
   promenade.position.set(28.4, 0.015, 12);
   promenade.receiveShadow = true;
   root.add(promenade);
 
   // Subtle weathered stone garden edging along courtyard perimeter
-  const promCurb = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.22, 0.11, 82)), curbMat);
+  const promCurb = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.22, 0.11, 38)), curbMat);
   promCurb.position.set(27.05, 0.03, 12);
   promCurb.receiveShadow = true;
   root.add(promCurb);
 
-  // Main Imperfect Natural Garden Lane (packed sandy earth, fine gravel & organic footpath ruts)
-  const gardenLane = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(8.5, 0.04, 102)), asphaltMat);
-  gardenLane.position.set(33.9, -0.02, 12);
+  // Main Imperfect Natural Garden Lane (packed sandy earth, trimmed closely to clinic perimeter)
+  const gardenLane = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(8.2, 0.04, 42)), asphaltMat);
+  gardenLane.position.set(33.75, -0.02, 12);
   gardenLane.receiveShadow = true;
   root.add(gardenLane);
 
-  // Soft grassy soil verge flanking eastern side of garden lane (x = 38.15 .. 40.6)
+  // Soft grassy soil verge flanking eastern side of garden lane (x = 37.85 .. 39.8)
   const vergeSoilMat = trackMat(makeMat({ color: 0x5c723e, roughness: 0.96 }));
-  const eastVerge = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(2.6, 0.045, 102)), vergeSoilMat);
-  eastVerge.position.set(39.4, -0.01, 12);
+  const eastVerge = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(2.0, 0.045, 42)), vergeSoilMat);
+  eastVerge.position.set(38.85, -0.01, 12);
   eastVerge.receiveShadow = true;
   root.add(eastVerge);
 
@@ -594,7 +648,7 @@ export function buildClinicWorld3D(
   const cobbleGeom = trackGeom(new THREE.BoxGeometry(0.26, 0.09, 0.42));
   const cobbleMat = trackMat(makeMat({ color: 0xffffff, roughness: 0.9 }));
   const cobbleCoords: Array<[number, number, number, number, number]> = [];
-  for (let z = -28; z <= 50; z += 0.56) {
+  for (let z = -6; z <= 30; z += 0.56) {
     if (z >= 13.6 && z <= 16.4) continue; // natural entrance path gap
     if (Math.abs(Math.round(z * 1.7)) % 9 === 0) continue; // occasional missing/sunken cobble for realism
     const jx = Math.sin(z * 3.1) * 0.055;
@@ -619,7 +673,7 @@ export function buildClinicWorld3D(
   cobbleInst.instanceMatrix.needsUpdate = true;
   if (cobbleInst.instanceColor) cobbleInst.instanceColor.needsUpdate = true;
   cobbleInst.computeBoundingSphere();
-  root.add(cobbleInst);
+  microDetailsGroup.add(cobbleInst);
 
   // Instanced Natural Flagstone Stepping Path leading across garden lane into clinic entrance (z ~ 15)
   const stepStoneGeom = trackGeom(new THREE.CylinderGeometry(0.42, 0.46, 0.05, 7));
@@ -650,14 +704,14 @@ export function buildClinicWorld3D(
   stepInst.instanceMatrix.needsUpdate = true;
   if (stepInst.instanceColor) stepInst.instanceColor.needsUpdate = true;
   stepInst.computeBoundingSphere();
-  root.add(stepInst);
+  microDetailsGroup.add(stepInst);
 
   // Instanced Garden Lane Border Grass Tufts & Pebbles along organic margins (1 draw call)
   const laneTuftCoords: Array<[number, number, number]> = [];
-  for (let i = 0; i < 64; i++) {
-    const gz = -18 + i * 0.92 + (Math.sin(i * 4.3) * 0.25);
+  for (let i = 0; i < 40; i++) {
+    const gz = -5 + i * 0.88 + (Math.sin(i * 4.3) * 0.25);
     if (gz >= 13.6 && gz <= 16.4) continue;
-    const sideX = i % 2 === 0 ? 29.88 + Math.abs(Math.sin(i * 2.1)) * 0.28 : 37.75 - Math.abs(Math.cos(i * 3.1)) * 0.35;
+    const sideX = i % 2 === 0 ? 29.88 + Math.abs(Math.sin(i * 2.1)) * 0.28 : 37.55 - Math.abs(Math.cos(i * 3.1)) * 0.35;
     laneTuftCoords.push([sideX, gz, 0.75 + (i % 4) * 0.22]);
   }
   const laneTuftInst = new THREE.InstancedMesh(tuftGeom, tuftMat, laneTuftCoords.length);
@@ -675,28 +729,14 @@ export function buildClinicWorld3D(
   laneTuftInst.instanceMatrix.needsUpdate = true;
   if (laneTuftInst.instanceColor) laneTuftInst.instanceColor.needsUpdate = true;
   laneTuftInst.computeBoundingSphere();
-  root.add(laneTuftInst);
+  microDetailsGroup.add(laneTuftInst);
 
-  // Natural Low Wooden Garden Bollards along walkway corners + 2 Rustic Timber Garden Benches
+  // Natural Low Wooden Garden Bollards along walkway corners
   for (const bz of [5.4, 13.2, 16.8, 22.8]) {
     const bollard = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.065, 0.075, 0.56, 8)), woodSlatMat);
     bollard.position.set(29.75, 0.28, bz);
     bollard.castShadow = true;
-    root.add(bollard);
-  }
-  for (const bz of [7.8, 19.8]) {
-    const legA = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.44, 0.34, 0.08)), darkMullionMat);
-    legA.position.set(38.25, 0.17, bz - 0.62);
-    const legB = legA.clone();
-    legB.position.set(38.25, 0.17, bz + 0.62);
-    const seat = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.46, 0.06, 1.54)), woodSlatMat);
-    seat.position.set(38.25, 0.37, bz);
-    seat.castShadow = true;
-    const back = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.07, 0.34, 1.54)), woodSlatMat);
-    back.position.set(38.46, 0.56, bz);
-    back.rotation.z = -0.15;
-    back.castShadow = true;
-    root.add(legA, legB, seat, back);
+    microDetailsGroup.add(bollard);
   }
 
   // Courtyard travertine stone walkway + wide entrance steps from open gate (x=27) to glass doors (x=22)
@@ -840,28 +880,54 @@ export function buildClinicWorld3D(
     rightLeaf: gateRightPivot,
   });
 
-  // Unlit Municipal Sidewalk Utility Poles on far eastern roadside (x=38.0) — clinic outdoor lighting comes from player's purchased lamps!
-  for (const sz of [3.5, 22.5]) {
-    const pole = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.05, 0.07, 3.05, 8)), darkMullionMat);
-    pole.position.set(38.1, 1.52, sz);
-    pole.castShadow = true;
-    const arm = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.55, 0.06, 0.08)), darkMullionMat);
-    arm.position.set(37.85, 3.02, sz);
-    root.add(pole, arm);
+  // Dedicated Rear West Solar Energy Zone Utility Pad directly behind the clinic's solid West wall (far from the Doctor's Villa)
+  {
+    const solarW = SOLAR_ZONE.maxX - SOLAR_ZONE.minX + 1;
+    const solarD = SOLAR_ZONE.maxY - SOLAR_ZONE.minY + 1;
+    const solarCx = SOLAR_ZONE.minX + solarW / 2;
+    const solarCz = SOLAR_ZONE.minY + solarD / 2;
+    const solarPad = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(solarW + 0.16, 0.05, solarD + 0.16)),
+      paverMat
+    );
+    solarPad.position.set(solarCx, 0.005, solarCz);
+    solarPad.receiveShadow = true;
+    const solarTrim = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(solarW + 0.28, 0.035, solarD + 0.28)),
+      curbMat
+    );
+    solarTrim.position.set(solarCx, -0.005, solarCz);
+    solarTrim.receiveShadow = true;
+    // Conduit cable bridge running East from the Rear West solar pad straight into the clinic's West wall (x=2.0)
+    const padEastEdge = SOLAR_ZONE.maxX + 1.0;
+    const conduitLen = Math.max(1.0, 1.9 - padEastEdge);
+    const conduit = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(conduitLen, 0.07, 0.22)),
+      darkMullionMat
+    );
+    conduit.position.set(padEastEdge + conduitLen / 2, 0.035, solarCz);
+    conduit.receiveShadow = true;
+    // Solar inverter / junction box mounted on the exterior West clinic rear wall
+    const inverterBox = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.16, 0.54, 0.42)),
+      aluminumTrimMat
+    );
+    inverterBox.position.set(1.82, 1.25, solarCz);
+    inverterBox.castShadow = true;
+    const inverterLed = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.03, 0.08, 0.08)),
+      trackMat(makeMat({ color: 0x34d399, emissive: 0x10b981, emissiveIntensity: 0.9, roughness: 0.3 }))
+    );
+    inverterLed.position.set(1.73, 1.38, solarCz);
+    root.add(solarTrim, solarPad, conduit, inverterBox, inverterLed);
   }
 
-  // Courtyard & roadside shrubs (placed safely off the asphalt road)
+  // Courtyard architectural shrubs (keeps South, North & West garden tiles clear for player decor!)
   const bushCoords: Array<[number, number, string]> = [
     [22.48, 3.2, 'bush_1'],
     [22.48, 12.4, 'bush_2'],
     [26.45, 3.8, 'bush_1'],
     [26.45, 20.6, 'bush_2'],
-    [1.4, 22.6, 'bush_2'],
-    [21.4, 22.6, 'bush_1'],
-    [5.6, 26.8, 'bush_1'],
-    [19.4, 26.7, 'bush_2'],
-    [38.8, 5.5, 'bush_1'],
-    [38.8, 17.5, 'bush_2'],
   ];
   for (const [bx, bz, key] of bushCoords) {
     const bush = glbRegistry.cloneNormalized(key, { targetHeight: 0.62, rotY: bx + bz });
@@ -871,20 +937,16 @@ export function buildClinicWorld3D(
     }
   }
   for (const [gx, gz] of [
-    [0.8, 4.2],
-    [0.9, 12.2],
-    [1.8, 25.4],
-    [4.4, 0.9],
-    [14.4, 0.9],
-    [23.2, 0.9],
-    [12.4, 26.8],
-    [22.2, 24.8],
-    [38.6, 10.8],
+    [-2.4, 4.2],
+    [-2.6, 20.8],
+    [3.8, 28.0],
+    [14.2, 28.2],
+    [24.2, 28.0],
   ]) {
     const grassClump = glbRegistry.cloneNormalized('grass_clump', { targetHeight: 0.34, rotY: gx * 2 });
     if (grassClump) {
       grassClump.position.set(gx, 0.0, gz);
-      root.add(grassClump);
+      microDetailsGroup.add(grassClump);
     }
   }
 
@@ -905,6 +967,7 @@ export function buildClinicWorld3D(
   slab.receiveShadow = true;
   root.add(slab);
 
+  const lockedRoomCovers: THREE.Mesh[] = [];
   for (const room of rooms) {
     const w = room.maxX - room.minX + 1;
     const d = room.maxY - room.minY + 1;
@@ -970,6 +1033,8 @@ export function buildClinicWorld3D(
         )
       );
       cover.position.set(cx, 1.74, cz);
+      cover.userData.roomId = room.id;
+      lockedRoomCovers.push(cover);
       root.add(cover);
     }
   }
@@ -1342,9 +1407,12 @@ export function buildClinicWorld3D(
       kind: axis === 'z' ? 'swing_z' : 'swing_x',
       centerX: cx,
       centerZ: cz,
-      triggerRadius: 2.0,
+      triggerRadius: 0.9,
       requiredRoomId,
+      manualPush: true,
       openAmount: 0,
+      swingSign: 1,
+      holdTimer: 0,
       leftLeaf: piv,
     });
   };
@@ -1387,7 +1455,7 @@ export function buildClinicWorld3D(
     kind: 'sliding_z',
     centerX: 22.0,
     centerZ: 15.0,
-    triggerRadius: 2.6,
+    triggerRadius: 1.45,
     openAmount: 0,
     leftLeaf: mainLeftSlide,
     rightLeaf: mainRightSlide,
@@ -1421,132 +1489,491 @@ export function buildClinicWorld3D(
   entranceGroup.add(canopy, canopyGlow, canopyBlue, facadeBox, facadeFace);
   root.add(entranceGroup);
 
-  // 7. High-Detail Botanical Oak Tree Template (flared roots + textured bark boughs + layered alpha-cutout leaf cards)
-  // Cloned with natural scale/rotation variation across the landscape!
-  const barkMat = trackMat(makeMat({ map: textures.bark, roughness: 0.94, metalness: 0.0 }));
+  // 7. Wild Untamed Perimeter Trees (oak, wild_fig, acacia, cypress, birch)
+  // Visually & structurally distinct from Store ornamental planter trees: raw earth root mounds, wild boughs, zero planters/blossoms.
+  const barkMat = trackMat(
+    makeMat({
+      map: textures.bark,
+      bumpMap: textures.barkBump,
+      bumpScale: 0.032,
+      roughness: 0.94,
+      metalness: 0.0,
+    })
+  );
+  const birchBarkMat = trackMat(
+    makeMat({
+      map: textures.birchBark,
+      bumpMap: textures.barkBump,
+      bumpScale: 0.015,
+      roughness: 0.86,
+      metalness: 0.0,
+    })
+  );
   const leafCardMat = trackMat(
     new THREE.MeshStandardMaterial({
       map: textures.leafFoliage,
-      alphaTest: 0.42,
+      alphaTest: 0.4,
       side: THREE.DoubleSide,
       roughness: 0.82,
       metalness: 0.0,
     })
   );
-  const innerShadeMat = trackMat(makeMat({ color: 0x264f1c, roughness: 0.92 }));
+  const cypressCardMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: textures.cypressFoliage,
+      alphaTest: 0.38,
+      side: THREE.DoubleSide,
+      roughness: 0.84,
+      metalness: 0.0,
+    })
+  );
+  const innerShadeMat = trackMat(makeMat({ color: 0x1e4016, roughness: 0.94 }));
+  const innerCypressMat = trackMat(makeMat({ color: 0x16321d, roughness: 0.94 }));
+  const soilMoundMat = trackMat(makeMat({ color: 0x5c4731, roughness: 0.96, metalness: 0.0 }));
 
-  const trunkBaseGeom = trackGeom(new THREE.CylinderGeometry(0.11, 0.21, 1.35, 10));
-  const rootFlareGeom = trackGeom(new THREE.CylinderGeometry(0.04, 0.09, 0.42, 6));
-  const mainBoughGeom = trackGeom(new THREE.CylinderGeometry(0.055, 0.095, 0.92, 8));
-  const twigGeom = trackGeom(new THREE.CylinderGeometry(0.024, 0.046, 0.56, 6));
-  const leafCardGeom = trackGeom(new THREE.PlaneGeometry(1.12, 1.12));
-  const crownCoreGeom = trackGeom(new THREE.DodecahedronGeometry(0.46, 1));
+  const leafCardGeom = trackGeom(new THREE.PlaneGeometry(1.16, 1.16));
+  const crownCoreGeom = trackGeom(new THREE.DodecahedronGeometry(0.45, 1));
+  const trunkRootFlareGeom = trackGeom(new THREE.CylinderGeometry(0.035, 0.095, 0.46, 6));
+  const soilMoundGeom = trackGeom(new THREE.CylinderGeometry(0.44, 0.62, 0.055, 10));
 
-  const buildRealisticTreeTemplate = () => {
+  interface SpeciesTemplatePart {
+    mesh: THREE.Mesh;
+    kind: 'bark' | 'birchBark' | 'shade' | 'cypressShade' | 'leafCard' | 'cypressCard';
+  }
+
+  const makeCurvedLimbGeom = (
+    pts: Array<[number, number, number]>,
+    rStart: number,
+    rEnd: number,
+    radialSegs = 7
+  ) => {
+    const curve = new THREE.CatmullRomCurve3(pts.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+    const avgRadius = Math.max(1e-4, (rStart + rEnd) * 0.5);
+    const tubeG = trackGeom(new THREE.TubeGeometry(curve, 8, avgRadius, radialSegs, false));
+    // Taper radius organically from base to tip along spline V coordinate
+    const pos = tubeG.attributes.position as THREE.BufferAttribute;
+    const uv = tubeG.attributes.uv as THREE.BufferAttribute;
+    const tmpC = new THREE.Vector3();
+    const tmpP = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      const t = THREE.MathUtils.clamp(uv.getX(i), 0, 1);
+      curve.getPointAt(t, tmpC);
+      tmpP.fromBufferAttribute(pos, i).sub(tmpC);
+      const targetScale = THREE.MathUtils.lerp(rStart, rEnd, t) / avgRadius;
+      tmpP.multiplyScalar(targetScale).add(tmpC);
+      pos.setXYZ(i, tmpP.x, tmpP.y, tmpP.z);
+    }
+    pos.needsUpdate = true;
+    tubeG.computeVertexNormals();
+    return tubeG;
+  };
+
+  const buildSpeciesTemplate = (species: WorldTreeSpecies): THREE.Group => {
     const t = new THREE.Group();
-    const trunk = new THREE.Mesh(trunkBaseGeom, barkMat);
-    trunk.position.y = 0.67;
-    trunk.rotation.z = 0.025;
-    t.add(trunk);
+    const isBirch = species === 'birch';
+    const bMat = isBirch ? birchBarkMat : barkMat;
+    const bKind: SpeciesTemplatePart['kind'] = isBirch ? 'birchBark' : 'bark';
 
-    // 4 flared root buttresses anchoring tree naturally into uneven grass
-    for (let ri = 0; ri < 4; ri++) {
-      const ra = (ri / 4) * Math.PI * 2 + 0.4;
-      const rf = new THREE.Mesh(rootFlareGeom, barkMat);
-      rf.position.set(Math.cos(ra) * 0.15, 0.14, Math.sin(ra) * 0.15);
-      rf.rotation.z = -Math.cos(ra) * 0.58;
-      rf.rotation.x = Math.sin(ra) * 0.58;
-      t.add(rf);
+    const addPart = (
+      geom: THREE.BufferGeometry,
+      mat: THREE.Material,
+      kind: SpeciesTemplatePart['kind'],
+      px = 0,
+      py = 0,
+      pz = 0,
+      rx = 0,
+      ry = 0,
+      rz = 0,
+      sx = 1,
+      sy = 1,
+      sz = 1
+    ) => {
+      const m = new THREE.Mesh(geom, mat);
+      m.position.set(px, py, pz);
+      m.rotation.set(rx, ry, rz);
+      m.scale.set(sx, sy, sz);
+      m.userData.speciesKind = kind;
+      t.add(m);
+      return m;
+    };
+
+    if (species === 'cypress') {
+      // Tall Mediterranean Columnar Cypress (deep evergreen tiered spire + slender furrowed trunk)
+      addPart(
+        makeCurvedLimbGeom([[0, 0, 0], [0.02, 1.4, 0], [0, 3.0, 0.02]], 0.14, 0.04, 8),
+        bMat,
+        bKind
+      );
+      for (let ri = 0; ri < 4; ri++) {
+        const ra = (ri / 4) * Math.PI * 2 + 0.3;
+        addPart(
+          trunkRootFlareGeom,
+          bMat,
+          bKind,
+          Math.cos(ra) * 0.11,
+          0.14,
+          Math.sin(ra) * 0.11,
+          Math.sin(ra) * 0.5,
+          0,
+          -Math.cos(ra) * 0.5
+        );
+      }
+      const tiers = 5;
+      for (let k = 0; k < tiers; k++) {
+        const frac = k / (tiers - 1);
+        const ty = 1.05 + frac * 1.95;
+        const rad = Math.sin((1 - frac * 0.82) * Math.PI * 0.65) * 0.82;
+        addPart(crownCoreGeom, innerCypressMat, 'cypressShade', 0, ty, 0, 0, k * 0.8, 0, rad * 0.9, 1.15, rad * 0.9);
+        const cardsInTier = k === tiers - 1 ? 3 : 4;
+        for (let c = 0; c < cardsInTier; c++) {
+          const ca = (c / cardsInTier) * Math.PI * 2 + k * 0.65;
+          addPart(
+            leafCardGeom,
+            cypressCardMat,
+            'cypressCard',
+            Math.cos(ca) * rad * 0.42,
+            ty,
+            Math.sin(ca) * rad * 0.42,
+            0.14,
+            ca + Math.PI / 2,
+            0.08,
+            rad * 1.25,
+            1.15,
+            1
+          );
+        }
+      }
+      t.updateMatrixWorld(true);
+      return t;
     }
 
-    // 4 diverging primary boughs + twigs + crossed alpha-tested botanical foliage sprays
+    if (species === 'acacia') {
+      // African/Sudanese Flat-Topped Umbrella Acacia (sculptural sweeping wide boughs + layered flat canopy)
+      addPart(
+        makeCurvedLimbGeom([[0, 0, 0], [-0.06, 0.65, 0.04], [0.02, 1.38, -0.02]], 0.18, 0.11, 8),
+        bMat,
+        bKind
+      );
+      for (let ri = 0; ri < 4; ri++) {
+        const ra = (ri / 4) * Math.PI * 2 + 0.5;
+        addPart(
+          trunkRootFlareGeom,
+          bMat,
+          bKind,
+          Math.cos(ra) * 0.15,
+          0.14,
+          Math.sin(ra) * 0.15,
+          Math.sin(ra) * 0.6,
+          0,
+          -Math.cos(ra) * 0.6
+        );
+      }
+      for (let b = 0; b < 5; b++) {
+        const ang = (b / 5) * Math.PI * 2 + 0.25;
+        const reach = 1.05 + (b % 2) * 0.18;
+        const bx = Math.cos(ang) * reach;
+        const bz = Math.sin(ang) * reach;
+        const topY = 2.08 + (b % 2) * 0.14;
+        addPart(
+          makeCurvedLimbGeom(
+            [
+              [0.01, 1.28, -0.01],
+              [bx * 0.52, 1.72, bz * 0.52],
+              [bx * 0.92, topY - 0.06, bz * 0.92],
+            ],
+            0.075,
+            0.032,
+            6
+          ),
+          bMat,
+          bKind
+        );
+        addPart(crownCoreGeom, innerShadeMat, 'shade', bx * 0.85, topY + 0.04, bz * 0.85, 0, ang, 0, 0.95, 0.42, 0.95);
+        for (let ci = 0; ci < 3; ci++) {
+          addPart(
+            leafCardGeom,
+            leafCardMat,
+            'leafCard',
+            bx * 0.92 + Math.cos(ang + ci) * 0.16,
+            topY + 0.1 + ci * 0.05,
+            bz * 0.92 + Math.sin(ang + ci) * 0.16,
+            Math.PI / 2 - 0.18,
+            ang + ci * 1.1,
+            0.12,
+            1.15,
+            1.15,
+            1
+          );
+        }
+      }
+      addPart(crownCoreGeom, innerShadeMat, 'shade', 0, 2.28, 0, 0, 0, 0, 1.28, 0.44, 1.28);
+      for (let ti = 0; ti < 4; ti++) {
+        const ta = (ti / 4) * Math.PI * 2;
+        addPart(
+          leafCardGeom,
+          leafCardMat,
+          'leafCard',
+          Math.cos(ta) * 0.35,
+          2.36 + (ti % 2) * 0.06,
+          Math.sin(ta) * 0.35,
+          Math.PI / 2 - 0.12,
+          ta,
+          0,
+          1.22,
+          1.22,
+          1
+        );
+      }
+      t.updateMatrixWorld(true);
+      return t;
+    }
+
+    if (species === 'birch') {
+      // Multi-stem Ornamental Silver Birch (2 graceful white curved stems + airy dappled crown)
+      for (const [ox, oz, leanX, leanZ, hTop] of [
+        [-0.08, -0.04, -0.14, -0.06, 2.35],
+        [0.09, 0.05, 0.16, 0.08, 2.1],
+      ]) {
+        addPart(
+          makeCurvedLimbGeom(
+            [
+              [ox * 0.6, 0, oz * 0.6],
+              [ox + leanX * 0.45, 1.1, oz + leanZ * 0.45],
+              [ox + leanX, hTop, oz + leanZ],
+            ],
+            0.1,
+            0.032,
+            7
+          ),
+          bMat,
+          bKind
+        );
+      }
+      const birchBoughs = [
+        { ang: 0.4, h: 1.5, rx: 0.56 },
+        { ang: 2.0, h: 1.7, rx: 0.52 },
+        { ang: 3.6, h: 1.55, rx: 0.58 },
+        { ang: 5.2, h: 1.78, rx: 0.5 },
+      ];
+      for (const bb of birchBoughs) {
+        const bx = Math.cos(bb.ang) * bb.rx;
+        const bz = Math.sin(bb.ang) * bb.rx;
+        addPart(
+          makeCurvedLimbGeom([[0, bb.h - 0.15, 0], [bx * 0.6, bb.h + 0.2, bz * 0.6], [bx, bb.h + 0.52, bz]], 0.045, 0.018, 5),
+          bMat,
+          bKind
+        );
+        addPart(crownCoreGeom, innerShadeMat, 'shade', bx * 0.85, bb.h + 0.52, bz * 0.85, 0, bb.ang, 0, 0.68, 0.58, 0.68);
+        for (let ci = 0; ci < 3; ci++) {
+          addPart(
+            leafCardGeom,
+            leafCardMat,
+            'leafCard',
+            bx * 0.92,
+            bb.h + 0.56,
+            bz * 0.92,
+            ci === 2 ? Math.PI / 2 - 0.25 : 0.25,
+            bb.ang + (ci * Math.PI) / 3,
+            0.22,
+            0.96,
+            0.96,
+            1
+          );
+        }
+      }
+      addPart(crownCoreGeom, innerShadeMat, 'shade', 0, 2.52, 0, 0, 0, 0, 0.82, 0.72, 0.82);
+      for (let ti = 0; ti < 4; ti++) {
+        const ta = (ti / 4) * Math.PI * 2;
+        addPart(
+          leafCardGeom,
+          leafCardMat,
+          'leafCard',
+          Math.cos(ta) * 0.22,
+          2.6 + (ti % 2) * 0.14,
+          Math.sin(ta) * 0.22,
+          0.45 + (ti % 2) * 0.3,
+          ta,
+          0.18,
+          1.0,
+          1.0,
+          1
+        );
+      }
+      t.updateMatrixWorld(true);
+      return t;
+    }
+
+    // Oak & Wild Fig: Organic curved trunk + gnarled root buttresses + sweeping boughs + natural forest canopy
+    const isWildFig = species === 'wild_fig';
+    const cardMat = leafCardMat;
+    const cardKind: SpeciesTemplatePart['kind'] = 'leafCard';
+
+    addPart(
+      makeCurvedLimbGeom(
+        [
+          [0, 0, 0],
+          [isWildFig ? 0.09 : -0.04, 0.72, isWildFig ? -0.05 : 0.03],
+          [0.01, 1.44, -0.01],
+        ],
+        isWildFig ? 0.24 : 0.2,
+        isWildFig ? 0.12 : 0.105,
+        9
+      ),
+      bMat,
+      bKind
+    );
+    const rootCount = isWildFig ? 5 : 4;
+    for (let ri = 0; ri < rootCount; ri++) {
+      const ra = (ri / rootCount) * Math.PI * 2 + 0.4;
+      addPart(
+        trunkRootFlareGeom,
+        bMat,
+        bKind,
+        Math.cos(ra) * (isWildFig ? 0.19 : 0.15),
+        0.14,
+        Math.sin(ra) * (isWildFig ? 0.19 : 0.15),
+        Math.sin(ra) * 0.62,
+        0,
+        -Math.cos(ra) * 0.62
+      );
+    }
+
     const boughs = [
-      { ang: 0.35, tilt: 0.58, h: 1.45, r: 0.34 },
-      { ang: 1.95, tilt: 0.52, h: 1.54, r: 0.32 },
-      { ang: 3.5, tilt: 0.62, h: 1.42, r: 0.36 },
-      { ang: 5.05, tilt: 0.48, h: 1.58, r: 0.3 },
+      { ang: 0.35, h: 1.32, r: isWildFig ? 0.82 : 0.72 },
+      { ang: 1.95, h: 1.42, r: isWildFig ? 0.76 : 0.68 },
+      { ang: 3.5, h: 1.28, r: isWildFig ? 0.84 : 0.74 },
+      { ang: 5.05, h: 1.46, r: isWildFig ? 0.74 : 0.66 },
     ];
     for (const bg of boughs) {
       const bx = Math.cos(bg.ang) * bg.r;
       const bz = Math.sin(bg.ang) * bg.r;
-      const bough = new THREE.Mesh(mainBoughGeom, barkMat);
-      bough.position.set(bx * 0.72, bg.h, bz * 0.72);
-      bough.rotation.z = -Math.cos(bg.ang) * bg.tilt;
-      bough.rotation.x = Math.sin(bg.ang) * bg.tilt;
-      t.add(bough);
-
-      for (const subOff of [-0.45, 0.45]) {
+      addPart(
+        makeCurvedLimbGeom(
+          [
+            [0.01, bg.h, -0.01],
+            [bx * 0.55, bg.h + 0.34, bz * 0.55],
+            [bx, bg.h + 0.64, bz],
+          ],
+          0.085,
+          0.038,
+          6
+        ),
+        bMat,
+        bKind
+      );
+      for (const subOff of [-0.46, 0.46]) {
         const sa = bg.ang + subOff;
-        const twig = new THREE.Mesh(twigGeom, barkMat);
-        twig.position.set(bx * 1.45 + Math.cos(sa) * 0.14, bg.h + 0.44, bz * 1.45 + Math.sin(sa) * 0.14);
-        twig.rotation.z = -Math.cos(sa) * 0.72;
-        twig.rotation.x = Math.sin(sa) * 0.72;
-        t.add(twig);
-
-        const fx = bx * 1.85 + Math.cos(sa) * 0.26;
-        const fy = bg.h + 0.66;
-        const fz = bz * 1.85 + Math.sin(sa) * 0.26;
+        const tx = bx + Math.cos(sa) * 0.28;
+        const tz = bz + Math.sin(sa) * 0.28;
+        addPart(
+          makeCurvedLimbGeom([[bx * 0.78, bg.h + 0.48, bz * 0.78], [tx, bg.h + 0.78, tz]], 0.036, 0.016, 5),
+          bMat,
+          bKind
+        );
         for (let ci = 0; ci < 3; ci++) {
-          const card = new THREE.Mesh(leafCardGeom, leafCardMat);
-          card.position.set(fx, fy, fz);
-          card.rotation.set(
-            (ci === 2 ? Math.PI / 2 - 0.3 : 0.25),
+          addPart(
+            leafCardGeom,
+            cardMat,
+            cardKind,
+            tx,
+            bg.h + 0.82,
+            tz,
+            ci === 2 ? Math.PI / 2 - 0.28 : 0.26,
             sa + (ci * Math.PI) / 3,
-            ci === 1 ? 0.35 : -0.2
+            ci === 1 ? 0.34 : -0.2,
+            0.94 + (ci % 2) * 0.16,
+            0.94 + (ci % 2) * 0.16,
+            1
           );
-          card.scale.setScalar(0.88 + (ci % 2) * 0.18);
-          t.add(card);
         }
       }
-
-      const innerCore = new THREE.Mesh(crownCoreGeom, innerShadeMat);
-      innerCore.position.set(bx * 1.55, bg.h + 0.52, bz * 1.55);
-      innerCore.scale.set(0.88, 0.68, 0.88);
-      t.add(innerCore);
+      addPart(crownCoreGeom, innerShadeMat, 'shade', bx * 0.86, bg.h + 0.7, bz * 0.86, 0, bg.ang, 0, 0.88, 0.68, 0.88);
     }
 
-    // Upper crown sunlit canopy cards
-    const topCore = new THREE.Mesh(crownCoreGeom, innerShadeMat);
-    topCore.position.set(0, 2.38, 0);
-    topCore.scale.set(1.05, 0.72, 1.05);
-    t.add(topCore);
+    addPart(crownCoreGeom, innerShadeMat, 'shade', 0, 2.48, 0, 0, 0, 0, 1.06, 0.74, 1.06);
     for (let ti = 0; ti < 5; ti++) {
       const ta = (ti / 5) * Math.PI * 2;
-      const topCard = new THREE.Mesh(leafCardGeom, leafCardMat);
-      topCard.position.set(Math.cos(ta) * 0.24, 2.48 + (ti % 2) * 0.16, Math.sin(ta) * 0.24);
-      topCard.rotation.set(0.55 + (ti % 2) * 0.35, ta, 0.2);
-      topCard.scale.setScalar(1.05);
-      t.add(topCard);
+      addPart(
+        leafCardGeom,
+        cardMat,
+        cardKind,
+        Math.cos(ta) * 0.24,
+        2.56 + (ti % 2) * 0.16,
+        Math.sin(ta) * 0.24,
+        0.52 + (ti % 2) * 0.34,
+        ta,
+        0.2,
+        1.08,
+        1.08,
+        1
+      );
     }
 
-    setShadow(t, true, true);
+    t.updateMatrixWorld(true);
     return t;
   };
 
-  const masterTree = buildRealisticTreeTemplate();
+  const speciesTemplates: Record<WorldTreeSpecies, THREE.Group> = {
+    oak: buildSpeciesTemplate('oak'),
+    wild_fig: buildSpeciesTemplate('wild_fig'),
+    acacia: buildSpeciesTemplate('acacia'),
+    cypress: buildSpeciesTemplate('cypress'),
+    birch: buildSpeciesTemplate('birch'),
+  };
 
   const removedSet = new Set(removedTreeIds);
   const activeTrees = WORLD_TREES.filter((t) => !removedSet.has(t.id));
 
-  // Merge active outdoor trees into InstancedMeshes (AO, bark, inner crown, leaf cards)
+  // Merge active outdoor trees into grouped InstancedMeshes + invisible raycast proxies for reliable click/tap removal
+  const worldTreeHitMeshes = new THREE.Group();
+  root.add(worldTreeHitMeshes);
+  const treeHitMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      colorWrite: false,
+    })
+  );
+  const hitTrunkGeom = trackGeom(new THREE.CylinderGeometry(0.46, 0.58, 2.35, 8));
+  const hitCanopyGeom = trackGeom(new THREE.SphereGeometry(1, 10, 8));
+
   const _treeRootMat4 = new THREE.Matrix4();
   const _childWorldMat4 = new THREE.Matrix4();
-  const barkMatrices: Array<{ geom: THREE.BufferGeometry; mat4: THREE.Matrix4 }> = [];
-  const shadeMatrices: THREE.Matrix4[] = [];
-  const leafMatrices: THREE.Matrix4[] = [];
+  const barkByGeom = new Map<THREE.BufferGeometry, THREE.Matrix4[]>();
+  const birchBarkByGeom = new Map<THREE.BufferGeometry, THREE.Matrix4[]>();
+  const shadeList: THREE.Matrix4[] = [];
+  const cypressShadeList: THREE.Matrix4[] = [];
+  const leafList: Array<{ mat4: THREE.Matrix4; tint: number }> = [];
+  const cypressCardList: Array<{ mat4: THREE.Matrix4; tint: number }> = [];
+
+  const leafTints = [0xffffff, 0xe8f5df, 0xf2efd8, 0xd4eac6, 0xdfeede];
+  const cypressTints = [0xffffff, 0xe2f0e4, 0xd8e8dc];
 
   if (activeTrees.length > 0) {
     const treeAoInst = new THREE.InstancedMesh(aoPlaneGeom, contactAoMat, activeTrees.length);
     treeAoInst.castShadow = false;
+    const soilMoundInst = new THREE.InstancedMesh(soilMoundGeom, soilMoundMat, activeTrees.length);
+    soilMoundInst.castShadow = false;
+    soilMoundInst.receiveShadow = true;
 
-    masterTree.updateMatrixWorld(true);
-    activeTrees.forEach(({ x: tx, z: tz, scale: sc, rotY }, idx) => {
+    activeTrees.forEach((tree, idx) => {
+      const { x: tx, z: tz, scale: sc, rotY, species } = tree;
       _tPos.set(tx, 0.014, tz);
       _tEuler.set(-Math.PI / 2, 0, 0);
       _tQuat.setFromEuler(_tEuler);
-      _tScale.set(2.3 * sc, 2.3 * sc, 1);
+      const aoR = species === 'cypress' ? 1.55 * sc : species === 'acacia' ? 2.65 * sc : 2.3 * sc;
+      _tScale.set(aoR, aoR, 1);
       _tMat4.compose(_tPos, _tQuat, _tScale);
       treeAoInst.setMatrixAt(idx, _tMat4);
+
+      _tPos.set(tx, 0.01, tz);
+      _tEuler.set(0, rotY, 0);
+      _tQuat.setFromEuler(_tEuler);
+      const soilScale = species === 'cypress' ? 0.85 * sc : 1.05 * sc;
+      _tScale.set(soilScale, sc, soilScale);
+      _tMat4.compose(_tPos, _tQuat, _tScale);
+      soilMoundInst.setMatrixAt(idx, _tMat4);
 
       _tPos.set(tx, 0, tz);
       _tEuler.set(0, rotY, 0);
@@ -1554,31 +1981,80 @@ export function buildClinicWorld3D(
       _tScale.setScalar(sc * 1.12);
       _treeRootMat4.compose(_tPos, _tQuat, _tScale);
 
-      masterTree.children.forEach((child) => {
+      const tpl = speciesTemplates[species] || speciesTemplates.oak;
+      tpl.children.forEach((child) => {
         const m = child as THREE.Mesh;
         if (!m.isMesh) return;
         _childWorldMat4.multiplyMatrices(_treeRootMat4, m.matrix);
-        if (m.material === barkMat) {
-          barkMatrices.push({ geom: m.geometry, mat4: _childWorldMat4.clone() });
-        } else if (m.material === innerShadeMat) {
-          shadeMatrices.push(_childWorldMat4.clone());
-        } else if (m.material === leafCardMat) {
-          leafMatrices.push(_childWorldMat4.clone());
+        const sKind = m.userData.speciesKind as SpeciesTemplatePart['kind'];
+        if (sKind === 'bark') {
+          const arr = barkByGeom.get(m.geometry);
+          if (arr) arr.push(_childWorldMat4.clone());
+          else barkByGeom.set(m.geometry, [_childWorldMat4.clone()]);
+        } else if (sKind === 'birchBark') {
+          const arr = birchBarkByGeom.get(m.geometry);
+          if (arr) arr.push(_childWorldMat4.clone());
+          else birchBarkByGeom.set(m.geometry, [_childWorldMat4.clone()]);
+        } else if (sKind === 'shade') {
+          shadeList.push(_childWorldMat4.clone());
+        } else if (sKind === 'cypressShade') {
+          cypressShadeList.push(_childWorldMat4.clone());
+        } else if (sKind === 'leafCard') {
+          leafList.push({ mat4: _childWorldMat4.clone(), tint: leafTints[idx % leafTints.length] });
+        } else if (sKind === 'cypressCard') {
+          cypressCardList.push({ mat4: _childWorldMat4.clone(), tint: cypressTints[idx % cypressTints.length] });
         }
       });
+
+      // Invisible 3D raycast proxy group so clicking/tapping ANY wild tree from trunk base to outer crown works 100%
+      const s = sc * 1.12;
+      const hitGrp = new THREE.Group();
+      hitGrp.userData.worldTreeId = tree.id;
+
+      const trunkProxy = new THREE.Mesh(hitTrunkGeom, treeHitMat);
+      trunkProxy.position.set(tx, 1.15 * s, tz);
+      trunkProxy.scale.set(s, s, s);
+      trunkProxy.userData.worldTreeId = tree.id;
+      trunkProxy.userData.noCastShadow = true;
+      hitGrp.add(trunkProxy);
+
+      if (species === 'cypress') {
+        const lowCanopy = new THREE.Mesh(hitCanopyGeom, treeHitMat);
+        lowCanopy.position.set(tx, 1.85 * s, tz);
+        lowCanopy.scale.set(1.0 * s, 1.15 * s, 1.0 * s);
+        lowCanopy.userData.worldTreeId = tree.id;
+        lowCanopy.userData.noCastShadow = true;
+        const topCanopy = new THREE.Mesh(hitCanopyGeom, treeHitMat);
+        topCanopy.position.set(tx, 2.85 * s, tz);
+        topCanopy.scale.set(0.85 * s, 0.95 * s, 0.85 * s);
+        topCanopy.userData.worldTreeId = tree.id;
+        topCanopy.userData.noCastShadow = true;
+        hitGrp.add(lowCanopy, topCanopy);
+      } else if (species === 'acacia') {
+        const canopyProxy = new THREE.Mesh(hitCanopyGeom, treeHitMat);
+        canopyProxy.position.set(tx, 2.2 * s, tz);
+        canopyProxy.scale.set(1.75 * s, 0.82 * s, 1.75 * s);
+        canopyProxy.userData.worldTreeId = tree.id;
+        canopyProxy.userData.noCastShadow = true;
+        hitGrp.add(canopyProxy);
+      } else {
+        const canopyProxy = new THREE.Mesh(hitCanopyGeom, treeHitMat);
+        canopyProxy.position.set(tx, 2.18 * s, tz);
+        canopyProxy.scale.set(1.52 * s, 1.25 * s, 1.52 * s);
+        canopyProxy.userData.worldTreeId = tree.id;
+        canopyProxy.userData.noCastShadow = true;
+        hitGrp.add(canopyProxy);
+      }
+      worldTreeHitMeshes.add(hitGrp);
     });
     treeAoInst.instanceMatrix.needsUpdate = true;
     treeAoInst.computeBoundingSphere();
-    root.add(treeAoInst);
+    soilMoundInst.instanceMatrix.needsUpdate = true;
+    soilMoundInst.computeBoundingSphere();
+    microDetailsGroup.add(treeAoInst);
+    root.add(soilMoundInst);
   }
 
-  // Bucket bark meshes by geometry so each bark geometry renders in a single InstancedMesh
-  const barkByGeom = new Map<THREE.BufferGeometry, THREE.Matrix4[]>();
-  for (const bm of barkMatrices) {
-    const arr = barkByGeom.get(bm.geom);
-    if (arr) arr.push(bm.mat4);
-    else barkByGeom.set(bm.geom, [bm.mat4]);
-  }
   for (const [geom, mats] of barkByGeom.entries()) {
     const inst = new THREE.InstancedMesh(geom, barkMat, mats.length);
     mats.forEach((mat4, i) => inst.setMatrixAt(i, mat4));
@@ -1588,26 +2064,69 @@ export function buildClinicWorld3D(
     inst.receiveShadow = true;
     root.add(inst);
   }
-
-  if (shadeMatrices.length > 0) {
-    const shadeInst = new THREE.InstancedMesh(crownCoreGeom, innerShadeMat, shadeMatrices.length);
-    shadeMatrices.forEach((mat4, i) => shadeInst.setMatrixAt(i, mat4));
+  for (const [geom, mats] of birchBarkByGeom.entries()) {
+    const inst = new THREE.InstancedMesh(geom, birchBarkMat, mats.length);
+    mats.forEach((mat4, i) => inst.setMatrixAt(i, mat4));
+    inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingSphere();
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+    root.add(inst);
+  }
+  if (shadeList.length > 0) {
+    const shadeInst = new THREE.InstancedMesh(crownCoreGeom, innerShadeMat, shadeList.length);
+    shadeList.forEach((mat4, i) => shadeInst.setMatrixAt(i, mat4));
     shadeInst.instanceMatrix.needsUpdate = true;
     shadeInst.computeBoundingSphere();
     shadeInst.castShadow = true;
     shadeInst.receiveShadow = true;
     root.add(shadeInst);
   }
-
-  if (leafMatrices.length > 0) {
-    const leafInst = new THREE.InstancedMesh(leafCardGeom, leafCardMat, leafMatrices.length);
-    leafMatrices.forEach((mat4, i) => leafInst.setMatrixAt(i, mat4));
-    leafInst.instanceMatrix.needsUpdate = true;
-    leafInst.computeBoundingSphere();
-    leafInst.castShadow = true;
-    leafInst.receiveShadow = true;
-    root.add(leafInst);
+  if (cypressShadeList.length > 0) {
+    const cShadeInst = new THREE.InstancedMesh(crownCoreGeom, innerCypressMat, cypressShadeList.length);
+    cypressShadeList.forEach((mat4, i) => cShadeInst.setMatrixAt(i, mat4));
+    cShadeInst.instanceMatrix.needsUpdate = true;
+    cShadeInst.computeBoundingSphere();
+    cShadeInst.castShadow = true;
+    cShadeInst.receiveShadow = true;
+    root.add(cShadeInst);
   }
+
+  const spawnFoliageInst = (
+    items: Array<{ mat4: THREE.Matrix4; tint: number }>,
+    mat: THREE.MeshStandardMaterial
+  ) => {
+    if (items.length === 0) return;
+    const inst = new THREE.InstancedMesh(leafCardGeom, mat, items.length);
+    items.forEach(({ mat4, tint }, i) => {
+      inst.setMatrixAt(i, mat4);
+      _tCol.setHex(tint);
+      inst.setColorAt(i, _tCol);
+    });
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    inst.computeBoundingSphere();
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+    root.add(inst);
+  };
+  spawnFoliageInst(leafList, leafCardMat);
+  spawnFoliageInst(cypressCardList, cypressCardMat);
+
+  let lastShowMicro = true;
+  let lastShowDistant = true;
+  const setZoomLod = (zoom: number) => {
+    const showMicro = zoom >= 0.98;
+    if (showMicro !== lastShowMicro) {
+      lastShowMicro = showMicro;
+      microDetailsGroup.visible = showMicro;
+    }
+    const showDistant = zoom >= 0.96;
+    if (showDistant !== lastShowDistant) {
+      lastShowDistant = showDistant;
+      distantDetailsGroup.visible = showDistant;
+    }
+  };
 
   return {
     group: root,
@@ -1623,6 +2142,9 @@ export function buildClinicWorld3D(
     facadeSignMat,
     villaWinMat,
     pillarLanternMat,
+    worldTreeHitMeshes,
+    lockedRoomCovers,
+    setZoomLod,
     dispose: () => {
       disposables.forEach((d) => d.dispose());
     },
@@ -1651,7 +2173,10 @@ interface SharedCatalogMats {
   blossomCardMat: THREE.MeshStandardMaterial;
   roseCardMat: THREE.MeshStandardMaterial;
   palmCardMat: THREE.MeshStandardMaterial;
+  oliveCardMat: THREE.MeshStandardMaterial;
+  cypressCardMat: THREE.MeshStandardMaterial;
   solarCellMat: THREE.MeshPhysicalMaterial;
+  receptionScreenMat: THREE.MeshStandardMaterial;
 }
 
 const sharedCatalogPoolByTextures = new WeakMap<TextureBundle, SharedCatalogMats>();
@@ -1686,8 +2211,20 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       transparent: true,
       depthWrite: false,
     }),
-    barkMat: makeMat({ map: textures.bark, roughness: 0.94, metalness: 0.0 }),
-    travertineMat: makeMat({ color: 0xd2c9bc, roughness: 0.72, metalness: 0.02 }),
+    barkMat: makeMat({
+      map: textures.bark,
+      bumpMap: textures.barkBump,
+      bumpScale: 0.028,
+      roughness: 0.94,
+      metalness: 0.0,
+    }),
+    travertineMat: makeMat({
+      color: 0xd6cdbf,
+      bumpMap: textures.paverBump,
+      bumpScale: 0.015,
+      roughness: 0.72,
+      metalness: 0.02,
+    }),
     soilMat: makeMat({ color: 0x453121, roughness: 0.96, metalness: 0.0 }),
     blossomCardMat: new THREE.MeshStandardMaterial({
       map: textures.blossomFoliage,
@@ -1710,12 +2247,34 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       roughness: 0.76,
       metalness: 0.0,
     }),
+    oliveCardMat: new THREE.MeshStandardMaterial({
+      map: textures.oliveFoliage,
+      alphaTest: 0.4,
+      side: THREE.DoubleSide,
+      roughness: 0.8,
+      metalness: 0.0,
+    }),
+    cypressCardMat: new THREE.MeshStandardMaterial({
+      map: textures.cypressFoliage,
+      alphaTest: 0.42,
+      side: THREE.DoubleSide,
+      roughness: 0.84,
+      metalness: 0.0,
+    }),
     solarCellMat: new THREE.MeshPhysicalMaterial({
       map: textures.solarCell,
       roughness: 0.14,
       metalness: 0.22,
       clearcoat: 0.92,
       clearcoatRoughness: 0.1,
+    }),
+    receptionScreenMat: new THREE.MeshStandardMaterial({
+      map: textures.receptionScreen,
+      emissiveMap: textures.receptionScreen,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.92,
+      roughness: 0.24,
+      metalness: 0.06,
     }),
   };
 
@@ -1762,9 +2321,10 @@ export function createCatalogMesh3D(
     sprite === 'wall_sconce_lamp' ||
     sprite === 'anatomy_poster' ||
     sprite === 'ac_nesma' ||
-    sprite === 'ac_lg';
+    sprite === 'ac_lg' ||
+    sprite === 'wall_clock';
 
-  if (!isGhost && sprite !== 'floor_rug' && !isWallMountedSprite) {
+  if (!isGhost && sprite !== 'floor_rug' && sprite !== 'stone_pathway' && !isWallMountedSprite) {
     const ao = new THREE.Mesh(
       new THREE.PlaneGeometry(width * 0.96, depth * 0.96),
       aoPlaneMat
@@ -1773,6 +2333,7 @@ export function createCatalogMesh3D(
     ao.position.y = 0.018;
     ao.userData.noCastShadow = true;
     ao.userData.sharedGlbMat = true;
+    ao.userData.lodMicro = true;
     inner.add(ao);
   }
 
@@ -1883,7 +2444,10 @@ export function createCatalogMesh3D(
     shared.blossomCardMat,
     shared.roseCardMat,
     shared.palmCardMat,
+    shared.oliveCardMat,
+    shared.cypressCardMat,
     shared.solarCellMat,
+    shared.receptionScreenMat,
   ]);
 
   const box = (w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
@@ -1926,7 +2490,10 @@ export function createCatalogMesh3D(
     blossomCardMat,
     roseCardMat,
     palmCardMat,
+    oliveCardMat,
+    cypressCardMat,
     solarCellMat,
+    receptionScreenMat,
   } = shared;
 
   switch (sprite) {
@@ -2030,11 +2597,11 @@ export function createCatalogMesh3D(
     }
 
     case 'waiting_chairs': {
-      // Authentic 3-seat tandem hospital/clinic waiting bench (separated contoured chairs on steel beam + armrests)
+      // Authentic 3-seat tandem hospital/clinic waiting bench (generous 0.62m per-seat spacing for 3 comfortable seated patients)
       // Main heavy-duty brushed steel horizontal beam
-      box(1.74, 0.055, 0.08, darkSlate, 0, 0.25, -0.04);
+      box(1.88, 0.055, 0.08, darkSlate, 0, 0.25, -0.04);
       // Twin die-cast aluminum inverted-T leg frames with dark floor glides
-      for (const lx of [-0.68, 0.68]) {
+      for (const lx of [-0.76, 0.76]) {
         cyl(0.028, 0.032, 0.24, silverMetal, lx, 0.13, -0.04);
         box(0.06, 0.038, 0.48, silverMetal, lx, 0.035, 0.01);
         for (const fz of [-0.21, 0.23]) {
@@ -2043,32 +2610,32 @@ export function createCatalogMesh3D(
         }
       }
 
-      // 3 individual separated ergonomic clinic seats
+      // 3 well-spaced individual ergonomic clinic seats (-0.62, 0, +0.62)
       const seatShellMat = makeMat({ color: 0x264b6e, roughness: 0.48, metalness: 0.08 });
-      const cushionMat = makeMat({ color: 0x1e6091, roughness: 0.58, metalness: 0.04 });
-      for (const sx of [-0.56, 0, 0.56]) {
+      const cushionMat = makeMat({ color: 0x1e6091, roughness: 0.56, metalness: 0.04 });
+      for (const sx of [-0.62, 0, 0.62]) {
         // Under-seat steel mounting bracket + contoured shell base
-        box(0.36, 0.028, 0.34, silverMetal, sx, 0.29, 0.03);
-        box(0.44, 0.045, 0.42, seatShellMat, sx, 0.325, 0.04);
-        // Contoured slim PU/vinyl seat pad
-        box(0.41, 0.038, 0.38, cushionMat, sx, 0.356, 0.05);
+        box(0.4, 0.028, 0.34, silverMetal, sx, 0.29, 0.03);
+        box(0.49, 0.045, 0.43, seatShellMat, sx, 0.325, 0.04);
+        // Contoured slim PU/vinyl seat pad (top at y = 0.375)
+        box(0.46, 0.038, 0.39, cushionMat, sx, 0.356, 0.05);
         // Rounded front waterfall lip
-        const lip = cyl(0.02, 0.02, 0.41, cushionMat, sx, 0.352, 0.235);
+        const lip = cyl(0.02, 0.02, 0.46, cushionMat, sx, 0.352, 0.24);
         lip.rotation.z = Math.PI / 2;
         lip.userData.noCastShadow = true;
 
         // Curved steel spine connecting seat to backrest (leaves realistic lumbar gap)
-        box(0.045, 0.24, 0.03, silverMetal, sx, 0.42, -0.17);
+        box(0.048, 0.24, 0.03, silverMetal, sx, 0.42, -0.18);
         // Ergonomic curved clinic backrest shell + top rim
-        const backShell = box(0.43, 0.34, 0.045, seatShellMat, sx, 0.61, -0.19);
-        backShell.rotation.x = -0.11;
-        const backPad = box(0.39, 0.29, 0.032, cushionMat, sx, 0.61, -0.172);
-        backPad.rotation.x = -0.11;
+        const backShell = box(0.48, 0.35, 0.045, seatShellMat, sx, 0.62, -0.2);
+        backShell.rotation.x = -0.12;
+        const backPad = box(0.43, 0.3, 0.032, cushionMat, sx, 0.62, -0.182);
+        backPad.rotation.x = -0.12;
         backPad.userData.noCastShadow = true;
       }
 
       // 4 slim chrome divider/end armrests with dark molded arm pads
-      for (const ax of [-0.82, -0.28, 0.28, 0.82]) {
+      for (const ax of [-0.91, -0.31, 0.31, 0.91]) {
         box(0.026, 0.22, 0.04, silverMetal, ax, 0.36, -0.05);
         box(0.044, 0.028, 0.36, darkSlate, ax, 0.475, 0.02);
       }
@@ -3566,6 +4133,8 @@ export function createCatalogMesh3D(
     // ================ DECOR & GUARANTEED-ILLUMINATING SMART LIGHTS ================
 
     case 'potted_plant': {
+      // Glazed terracotta saucer base
+      cyl(0.22, 0.19, 0.035, ceramicPot, 0, 0.018, 0);
       const glbPlant =
         glbRegistry.cloneNormalized('furn_plant_ficus', {
           maxFootprint: { w: 0.68, d: 0.68 },
@@ -3576,17 +4145,25 @@ export function createCatalogMesh3D(
           targetHeight: 0.88,
         });
       if (glbPlant) {
+        glbPlant.position.y = 0.02;
         inner.add(glbPlant);
       } else {
-        cyl(0.18, 0.13, 0.28, ceramicPot, 0, 0.14, 0);
-        cyl(0.03, 0.04, 0.36, woodMat, 0, 0.38, 0);
-        for (let i = 0; i < 7; i++) {
-          const ang = (i / 7) * Math.PI * 2;
-          const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 0.28), leafGreen);
-          leaf.position.set(Math.cos(ang) * 0.15, 0.54 + (i % 2) * 0.08, Math.sin(ang) * 0.15);
-          leaf.rotation.y = -ang + Math.PI / 2;
-          leaf.rotation.x = 0.45;
-          inner.add(leaf);
+        cyl(0.19, 0.135, 0.28, ceramicPot, 0, 0.16, 0);
+        const potRim = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.022, 6, 16), ceramicPot);
+        potRim.rotation.x = Math.PI / 2;
+        potRim.position.y = 0.3;
+        potRim.userData.sharedGlbMat = true;
+        inner.add(potRim);
+        cyl(0.17, 0.17, 0.03, soilMat, 0, 0.295, 0);
+        tube([[0, 0.28, 0], [-0.03, 0.48, 0.02], [0.02, 0.68, -0.02]], 0.024, barkMat, 6);
+        const leafCardG = new THREE.PlaneGeometry(0.42, 0.42);
+        for (let i = 0; i < 6; i++) {
+          const ang = (i / 6) * Math.PI * 2;
+          const card = new THREE.Mesh(leafCardG, i % 2 === 0 ? oliveCardMat : cypressCardMat);
+          card.position.set(Math.cos(ang) * 0.12, 0.62 + (i % 2) * 0.12, Math.sin(ang) * 0.12);
+          card.rotation.set(0.28, ang, (i % 2 === 0 ? 0.18 : -0.18));
+          card.userData.sharedGlbMat = true;
+          inner.add(card);
         }
       }
       break;
@@ -3857,17 +4434,19 @@ export function createCatalogMesh3D(
     }
 
     case 'flower_bed': {
-      // Sculpted limestone & cedar courtyard planter with trailing greens, rose cards, and multi-height blooms
-      box(0.84, 0.12, 0.84, travertineMat, 0, 0.06, 0);
-      box(0.74, 0.08, 0.74, woodMat, 0, 0.14, 0);
-      box(0.66, 0.16, 0.66, soilMat, 0, 0.11, 0);
+      // Sculpted beveled limestone & cedar courtyard planter with trailing greens, rose cards, and multi-height blooms
+      box(0.88, 0.06, 0.88, travertineMat, 0, 0.03, 0);
+      box(0.82, 0.12, 0.82, travertineMat, 0, 0.08, 0);
+      box(0.74, 0.08, 0.74, woodMat, 0, 0.15, 0);
+      box(0.66, 0.17, 0.66, soilMat, 0, 0.12, 0);
 
-      const roseCardG = new THREE.PlaneGeometry(0.46, 0.42);
-      for (let ci = 0; ci < 4; ci++) {
+      const roseCardG = new THREE.PlaneGeometry(0.48, 0.44);
+      for (let ci = 0; ci < 5; ci++) {
         const card = new THREE.Mesh(roseCardG, roseCardMat);
-        const ang = (ci / 4) * Math.PI * 2 + 0.4;
-        card.position.set(Math.cos(ang) * 0.1, 0.3, Math.sin(ang) * 0.1);
-        card.rotation.set(0.18, ang, 0);
+        const ang = (ci / 5) * Math.PI * 2 + 0.4;
+        const rad = ci === 4 ? 0.02 : 0.12;
+        card.position.set(Math.cos(ang) * rad, 0.31 + (ci === 4 ? 0.08 : 0), Math.sin(ang) * rad);
+        card.rotation.set(0.2, ang, 0);
         card.userData.sharedGlbMat = true;
         inner.add(card);
       }
@@ -3877,16 +4456,16 @@ export function createCatalogMesh3D(
       const leafG = new THREE.ConeGeometry(0.048, 0.17, 4);
       const petalG = new THREE.SphereGeometry(0.032, 6, 4);
       const centerMat = makeMat({ color: 0xfbbf24, roughness: 0.45 });
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 9; i++) {
         const ang = (i / 8) * Math.PI * 2 + 0.2;
-        const rad = i % 2 === 0 ? 0.22 : 0.12;
-        const fx = Math.cos(ang) * rad;
-        const fz = Math.sin(ang) * rad;
-        const hOff = i % 2 === 0 ? 0 : 0.055;
+        const rad = i === 8 ? 0.02 : i % 2 === 0 ? 0.22 : 0.12;
+        const fx = i === 8 ? 0 : Math.cos(ang) * rad;
+        const fz = i === 8 ? 0 : Math.sin(ang) * rad;
+        const hOff = i === 8 ? 0.09 : i % 2 === 0 ? 0 : 0.055;
         for (let li = 0; li < 3; li++) {
           const la = (li / 3) * Math.PI * 2 + i;
           const lf = new THREE.Mesh(leafG, leafGreen);
-          lf.position.set(fx + Math.cos(la) * 0.05, 0.21, fz + Math.sin(la) * 0.05);
+          lf.position.set(fx + Math.cos(la) * 0.05, 0.22, fz + Math.sin(la) * 0.05);
           lf.rotation.z = -Math.cos(la) * 0.92;
           lf.rotation.x = Math.sin(la) * 0.92;
           lf.scale.set(0.95, 1, 0.35);
@@ -3894,7 +4473,7 @@ export function createCatalogMesh3D(
           inner.add(lf);
         }
         const st = new THREE.Mesh(stemG, leafGreen);
-        st.position.set(fx, 0.27 + hOff * 0.5, fz);
+        st.position.set(fx, 0.28 + hOff * 0.5, fz);
         st.userData.sharedGlbMat = true;
         inner.add(st);
         const pMat = makeMat({ color: petalColors[i % petalColors.length], roughness: 0.5 });
@@ -3902,69 +4481,85 @@ export function createCatalogMesh3D(
           const pa = (pi / 5) * Math.PI * 2;
           const pet = new THREE.Mesh(petalG, pMat);
           pet.scale.set(1.3, 0.45, 0.9);
-          pet.position.set(fx + Math.cos(pa) * 0.032, 0.37 + hOff, fz + Math.sin(pa) * 0.032);
+          pet.position.set(fx + Math.cos(pa) * 0.032, 0.38 + hOff, fz + Math.sin(pa) * 0.032);
           pet.rotation.y = -pa;
           inner.add(pet);
         }
         const ctr = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.016, 7), centerMat);
-        ctr.position.set(fx, 0.382 + hOff, fz);
+        ctr.position.set(fx, 0.392 + hOff, fz);
         inner.add(ctr);
       }
       break;
     }
 
     case 'outdoor_tree': {
-      // High-craft botanical flowering courtyard tree (carved stone pit + flared bark trunk + organic boughs + layered blossom foliage cards)
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.055, 8, 20), travertineMat);
+      // High-craft botanical flowering courtyard tree (carved stone pit + curved gnarled spline bark trunk + organic boughs + blossom cards)
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.058, 8, 20), travertineMat);
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.045;
+      ring.position.y = 0.048;
       ring.userData.sharedGlbMat = true;
       inner.add(ring);
-      cyl(0.33, 0.35, 0.06, soilMat, 0, 0.03, 0);
+      cyl(0.34, 0.36, 0.06, soilMat, 0, 0.03, 0);
 
-      // Tapered curved main trunk + 4 buttress root flares
-      const trunk = cyl(0.085, 0.15, 1.32, barkMat, 0, 0.66, 0);
-      trunk.rotation.z = 0.03;
+      // Curved natural spline main trunk + 4 buttress root flares
+      tube(
+        [
+          [0, 0.02, 0],
+          [-0.035, 0.52, 0.025],
+          [0.02, 1.04, -0.02],
+          [0.01, 1.42, 0.01],
+        ],
+        0.105,
+        barkMat,
+        10
+      );
       for (let ri = 0; ri < 4; ri++) {
         const ra = (ri / 4) * Math.PI * 2 + 0.35;
-        const rf = cyl(0.032, 0.072, 0.38, barkMat, Math.cos(ra) * 0.12, 0.14, Math.sin(ra) * 0.12);
-        rf.rotation.z = -Math.cos(ra) * 0.56;
-        rf.rotation.x = Math.sin(ra) * 0.56;
+        const rf = cyl(0.034, 0.078, 0.4, barkMat, Math.cos(ra) * 0.13, 0.14, Math.sin(ra) * 0.13);
+        rf.rotation.z = -Math.cos(ra) * 0.58;
+        rf.rotation.x = Math.sin(ra) * 0.58;
       }
 
       const shadeLeafMat = makeMat({ color: 0x254f1c, roughness: 0.92 });
-      const crownCoreG = new THREE.DodecahedronGeometry(0.34, 1);
-      const cardG = new THREE.PlaneGeometry(0.92, 0.92);
+      const crownCoreG = new THREE.DodecahedronGeometry(0.35, 1);
+      const cardG = new THREE.PlaneGeometry(0.96, 0.96);
 
-      // 5 diverging botanical boughs + inner shaded canopy + crossed blossom leaf cards
+      // 5 diverging curved botanical boughs + inner shaded canopy + crossed blossom leaf cards
       const boughs = [
-        { ang: 0.2, tilt: 0.58, h: 1.36, r: 0.28 },
-        { ang: 1.45, tilt: 0.52, h: 1.46, r: 0.26 },
-        { ang: 2.7, tilt: 0.62, h: 1.34, r: 0.29 },
-        { ang: 3.95, tilt: 0.5, h: 1.48, r: 0.25 },
-        { ang: 5.2, tilt: 0.56, h: 1.4, r: 0.27 },
+        { ang: 0.2, h: 1.88, r: 0.46 },
+        { ang: 1.45, h: 1.98, r: 0.42 },
+        { ang: 2.7, h: 1.84, r: 0.48 },
+        { ang: 3.95, h: 2.02, r: 0.4 },
+        { ang: 5.2, h: 1.92, r: 0.45 },
       ];
       for (const bg of boughs) {
         const bx = Math.cos(bg.ang) * bg.r;
         const bz = Math.sin(bg.ang) * bg.r;
-        const bough = cyl(0.042, 0.074, 0.78, barkMat, bx * 0.72, bg.h, bz * 0.72);
-        bough.rotation.z = -Math.cos(bg.ang) * bg.tilt;
-        bough.rotation.x = Math.sin(bg.ang) * bg.tilt;
+        tube(
+          [
+            [0.01, 1.24, 0],
+            [bx * 0.54, bg.h - 0.32, bz * 0.54],
+            [bx, bg.h, bz],
+          ],
+          0.05,
+          barkMat,
+          7
+        );
 
         const core = new THREE.Mesh(crownCoreG, shadeLeafMat);
-        core.position.set(bx * 1.4, bg.h + 0.42, bz * 1.4);
+        core.position.set(bx * 0.94, bg.h + 0.04, bz * 0.94);
         core.scale.set(0.92, 0.68, 0.92);
         inner.add(core);
 
         for (let ci = 0; ci < 3; ci++) {
           const card = new THREE.Mesh(cardG, blossomCardMat);
-          card.position.set(bx * 1.55, bg.h + 0.5, bz * 1.55);
+          card.position.set(bx * 1.05, bg.h + 0.12, bz * 1.05);
           card.rotation.set(
             ci === 2 ? Math.PI / 2 - 0.26 : 0.22,
             bg.ang + (ci * Math.PI) / 3,
             ci === 1 ? 0.32 : -0.2
           );
-          card.scale.setScalar(0.82 + (ci % 2) * 0.18);
+          card.scale.setScalar(0.84 + (ci % 2) * 0.18);
           card.userData.sharedGlbMat = true;
           inner.add(card);
         }
@@ -3972,15 +4567,15 @@ export function createCatalogMesh3D(
 
       // Lush domed upper crown canopy
       const topCore = new THREE.Mesh(crownCoreG, shadeLeafMat);
-      topCore.position.set(0, 2.24, 0);
-      topCore.scale.set(1.12, 0.76, 1.12);
+      topCore.position.set(0, 2.32, 0);
+      topCore.scale.set(1.14, 0.78, 1.14);
       inner.add(topCore);
-      for (let ti = 0; ti < 5; ti++) {
-        const ta = (ti / 5) * Math.PI * 2;
+      for (let ti = 0; ti < 6; ti++) {
+        const ta = (ti / 6) * Math.PI * 2;
         const topCard = new THREE.Mesh(cardG, blossomCardMat);
-        topCard.position.set(Math.cos(ta) * 0.2, 2.34 + (ti % 2) * 0.14, Math.sin(ta) * 0.2);
-        topCard.rotation.set(0.5 + (ti % 2) * 0.3, ta, 0.18);
-        topCard.scale.setScalar(0.96);
+        topCard.position.set(Math.cos(ta) * 0.22, 2.42 + (ti % 2) * 0.14, Math.sin(ta) * 0.22);
+        topCard.rotation.set(0.48 + (ti % 2) * 0.3, ta, 0.18);
+        topCard.scale.setScalar(0.98);
         topCard.userData.sharedGlbMat = true;
         inner.add(topCard);
       }
@@ -3988,52 +4583,60 @@ export function createCatalogMesh3D(
     }
 
     case 'royal_palm': {
-      // Graceful ornamental courtyard palm in octagonal carved stone curb with arching pinnate fronds
-      const curb = cyl(0.38, 0.4, 0.12, travertineMat, 0, 0.06, 0);
+      // Graceful ornamental courtyard palm in octagonal carved stone curb with collar rings & arching pinnate fronds
+      const curbOuter = cyl(0.42, 0.44, 0.05, travertineMat, 0, 0.025, 0);
+      curbOuter.geometry.dispose();
+      curbOuter.geometry = new THREE.CylinderGeometry(0.42, 0.44, 0.05, 8);
+      const curb = cyl(0.38, 0.4, 0.12, travertineMat, 0, 0.065, 0);
       curb.geometry.dispose();
       curb.geometry = new THREE.CylinderGeometry(0.38, 0.4, 0.12, 8);
-      cyl(0.32, 0.34, 0.13, soilMat, 0, 0.065, 0);
+      cyl(0.32, 0.34, 0.13, soilMat, 0, 0.07, 0);
 
       // Ringed gently curving palm trunk (9 tapered segments)
       for (let s = 0; s < 9; s++) {
         const t = s / 8;
         const px = Math.sin(t * 1.4) * 0.09;
         const pz = Math.cos(t * 1.2) * 0.04 - 0.04;
-        const rBot = 0.115 - t * 0.038;
-        const rTop = 0.102 - t * 0.036;
+        const rBot = 0.118 - t * 0.038;
+        const rTop = 0.104 - t * 0.036;
         const seg = cyl(rTop, rBot, 0.22, barkMat, px, 0.18 + s * 0.195, pz);
         seg.rotation.z = -Math.cos(t * 1.4) * 0.07;
       }
-      // Smooth green crownshaft + golden date clusters
+      // Crownshaft collar ring + green crownshaft + golden date clusters
+      cyl(0.088, 0.094, 0.04, travertineMat, 0.088, 1.85, -0.02);
       cyl(0.078, 0.085, 0.36, leafGreen, 0.088, 2.02, -0.02);
       const dateMat = makeMat({ color: 0xd97706, roughness: 0.45 });
-      for (let d = 0; d < 3; d++) {
-        const da = (d / 3) * Math.PI * 2;
+      for (let d = 0; d < 4; d++) {
+        const da = (d / 4) * Math.PI * 2;
         const pod = new THREE.Mesh(new THREE.SphereGeometry(0.055, 7, 5), dateMat);
         pod.scale.set(0.8, 1.45, 0.8);
         pod.position.set(0.088 + Math.cos(da) * 0.1, 1.88, -0.02 + Math.sin(da) * 0.1);
         inner.add(pod);
       }
 
-      // 11 Arching pinnate palm fronds built from bent multi-segment planes with palmFrond alpha cutout
-      const frondGeom = new THREE.PlaneGeometry(0.68, 1.18, 2, 5);
-      frondGeom.translate(0, 0.59, 0);
+      // 13 Arching pinnate palm fronds built from bent multi-segment planes with palmFrond alpha cutout
+      const frondGeom = new THREE.PlaneGeometry(0.7, 1.22, 2, 5);
+      frondGeom.translate(0, 0.61, 0);
       const fPos = frondGeom.attributes.position as THREE.BufferAttribute;
       for (let vi = 0; vi < fPos.count; vi++) {
-        const fy = fPos.getY(vi);
-        const norm = fy / 1.18;
-        fPos.setZ(vi, -Math.pow(norm, 1.85) * 0.52);
+        const fy = Math.max(0, fPos.getY(vi));
+        const norm = Math.min(1, fy / 1.22);
+        fPos.setY(vi, fy);
+        fPos.setZ(vi, -Math.pow(norm, 1.85) * 0.54);
       }
+      fPos.needsUpdate = true;
       frondGeom.computeVertexNormals();
+      frondGeom.computeBoundingBox();
+      frondGeom.computeBoundingSphere();
 
-      for (let fi = 0; fi < 11; fi++) {
-        const tier = fi < 6 ? 0 : 1;
-        const ang = (fi / (tier === 0 ? 6 : 5)) * Math.PI * 2 + tier * 0.38;
+      for (let fi = 0; fi < 13; fi++) {
+        const tier = fi < 7 ? 0 : 1;
+        const ang = (fi / (tier === 0 ? 7 : 6)) * Math.PI * 2 + tier * 0.36;
         const fPivot = new THREE.Group();
         fPivot.position.set(0.088, 2.16 + tier * 0.08, -0.02);
         fPivot.rotation.y = ang;
         const fMesh = new THREE.Mesh(frondGeom, palmCardMat);
-        fMesh.rotation.x = tier === 0 ? 1.12 : 0.62;
+        fMesh.rotation.x = tier === 0 ? 1.14 : 0.62;
         fMesh.userData.sharedGlbMat = true;
         fPivot.add(fMesh);
         inner.add(fPivot);
@@ -4044,13 +4647,16 @@ export function createCatalogMesh3D(
     case 'marble_fountain': {
       // Sculpted two-tier travertine marble garden fountain with translucent turquoise water & night glow
       const bronzeMat = makeMat({ color: 0xb48a48, roughness: 0.32, metalness: 0.78 });
-      // Octagonal carved stone basin rim + floor
-      const basinBase = cyl(0.45, 0.47, 0.2, travertineMat, 0, 0.1, 0);
+      // Stepped octagonal plinth + carved stone basin rim
+      const stepPlinth = cyl(0.51, 0.54, 0.055, travertineMat, 0, 0.028, 0);
+      stepPlinth.geometry.dispose();
+      stepPlinth.geometry = new THREE.CylinderGeometry(0.51, 0.54, 0.055, 8);
+      const basinBase = cyl(0.45, 0.47, 0.2, travertineMat, 0, 0.13, 0);
       basinBase.geometry.dispose();
       basinBase.geometry = new THREE.CylinderGeometry(0.45, 0.47, 0.2, 8);
       const basinRim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.055, 8, 16), travertineMat);
       basinRim.rotation.x = Math.PI / 2;
-      basinRim.position.y = 0.21;
+      basinRim.position.y = 0.235;
       basinRim.userData.sharedGlbMat = true;
       inner.add(basinRim);
 
@@ -4064,25 +4670,34 @@ export function createCatalogMesh3D(
         opacity: 0.84,
         clearcoat: 1.0,
       });
-      const poolDisk = cyl(0.39, 0.39, 0.06, waterPoolMat, 0, 0.18, 0);
+      const poolDisk = cyl(0.39, 0.39, 0.06, waterPoolMat, 0, 0.2, 0);
       poolDisk.userData.noCastShadow = true;
 
-      // Central fluted marble pedestal + lower bowl + upper finial spout
-      cyl(0.09, 0.13, 0.42, travertineMat, 0, 0.38, 0);
-      cyl(0.24, 0.09, 0.11, travertineMat, 0, 0.6, 0);
-      const upperWater = cyl(0.2, 0.18, 0.03, waterPoolMat, 0, 0.65, 0);
+      // Central fluted marble pedestal + lower bowl + carved collar + upper finial spout
+      cyl(0.09, 0.13, 0.42, travertineMat, 0, 0.4, 0);
+      cyl(0.24, 0.09, 0.11, travertineMat, 0, 0.62, 0);
+      const upperBowlRim = new THREE.Mesh(new THREE.TorusGeometry(0.225, 0.026, 6, 16), travertineMat);
+      upperBowlRim.rotation.x = Math.PI / 2;
+      upperBowlRim.position.y = 0.675;
+      upperBowlRim.userData.sharedGlbMat = true;
+      inner.add(upperBowlRim);
+
+      const upperWater = cyl(0.2, 0.18, 0.03, waterPoolMat, 0, 0.67, 0);
       upperWater.userData.noCastShadow = true;
-      cyl(0.05, 0.075, 0.24, travertineMat, 0, 0.76, 0);
-      cyl(0.03, 0.045, 0.12, bronzeMat, 0, 0.92, 0);
+      cyl(0.05, 0.075, 0.24, travertineMat, 0, 0.78, 0);
+      cyl(0.03, 0.045, 0.12, bronzeMat, 0, 0.94, 0);
+      const finialOrb = new THREE.Mesh(new THREE.SphereGeometry(0.042, 8, 6), bronzeMat);
+      finialOrb.position.set(0, 1.01, 0);
+      inner.add(finialOrb);
 
       // 4 Translucent arcing water jets cascading from upper bowl
       for (let wi = 0; wi < 4; wi++) {
         const wa = (wi / 4) * Math.PI * 2 + 0.3;
         const arc = tube(
           [
-            [Math.cos(wa) * 0.04, 0.96, Math.sin(wa) * 0.04],
-            [Math.cos(wa) * 0.15, 0.88, Math.sin(wa) * 0.15],
-            [Math.cos(wa) * 0.24, 0.64, Math.sin(wa) * 0.24],
+            [Math.cos(wa) * 0.04, 0.98, Math.sin(wa) * 0.04],
+            [Math.cos(wa) * 0.15, 0.9, Math.sin(wa) * 0.15],
+            [Math.cos(wa) * 0.24, 0.66, Math.sin(wa) * 0.24],
           ],
           0.012,
           waterPoolMat,
@@ -4092,10 +4707,10 @@ export function createCatalogMesh3D(
       }
 
       addFloorHalo(2.15, 0x38bdf8, 0.44, 0, 0.026, 0);
-      addBulbAura(0.26, 0x7dd3fc, 0.32, 0, 0.42, 0);
+      addBulbAura(0.26, 0x7dd3fc, 0.32, 0, 0.44, 0);
       outer.userData.smartLight = {
         kind: 'sign_lamp',
-        localPos: [0, 0.55, 0],
+        localPos: [0, 0.58, 0],
         emissiveMats: [waterPoolMat],
         haloMats,
         haloMaxOpacities,
@@ -4884,6 +5499,323 @@ export function createCatalogMesh3D(
       art.position.set(-0.348, 1.15, 0);
       art.userData.noCastShadow = true;
       inner.add(art);
+      break;
+    }
+
+    case 'stone_pathway': {
+      // Walkable 1x1 organic irregular travertine stepping stones + slate river pebbles
+      const pebbleMat = makeMat({ color: 0x64748b, roughness: 0.88 });
+      const mossMat = makeMat({ color: 0x5c8532, roughness: 0.94 });
+      const stones: Array<[number, number, number, number, number]> = [
+        [-0.22, -0.2, 0.36, 0.32, 0.24],
+        [0.18, -0.16, 0.32, 0.34, -0.18],
+        [-0.14, 0.2, 0.38, 0.3, -0.12],
+        [0.22, 0.22, 0.3, 0.28, 0.31],
+      ];
+      for (const [sx, sz, sw, sd, ry] of stones) {
+        const st = box(sw, 0.032, sd, travertineMat, sx, 0.016, sz);
+        st.rotation.y = ry;
+        st.userData.noCastShadow = true;
+      }
+      for (let pi = 0; pi < 5; pi++) {
+        const pa = (pi / 5) * Math.PI * 2 + 0.5;
+        const pb = cyl(0.038, 0.042, 0.022, pi % 2 === 0 ? pebbleMat : mossMat, Math.cos(pa) * 0.32, 0.011, Math.sin(pa) * 0.32);
+        pb.userData.noCastShadow = true;
+      }
+      break;
+    }
+
+    case 'hedge_planter': {
+      // Sculpted 1x2 travertine & cedar hedge planter with multi-tier boxwood foliage & jasmine blossoms
+      const hedgeDarkMat = makeMat({ color: 0x264e1e, roughness: 0.9 });
+      const jasmineMat = makeMat({ color: 0xfefce8, roughness: 0.4 });
+      box(0.76, 0.14, 1.84, travertineMat, 0, 0.07, 0);
+      box(0.68, 0.18, 1.74, woodMat, 0, 0.22, 0);
+      box(0.58, 0.08, 1.64, soilMat, 0, 0.3, 0);
+      // Inner hedge core + sculpted boxwood cypress cards
+      box(0.54, 0.62, 1.56, hedgeDarkMat, 0, 0.64, 0);
+      const cardG = new THREE.PlaneGeometry(0.68, 0.68);
+      for (let hi = -2; hi <= 2; hi++) {
+        const hz = hi * 0.34;
+        const dome = new THREE.Mesh(new THREE.DodecahedronGeometry(0.28, 1), hedgeDarkMat);
+        dome.scale.set(0.95, 1.05, 1.1);
+        dome.position.set(0, 0.9, hz);
+        inner.add(dome);
+        for (let ci = 0; ci < 3; ci++) {
+          const card = new THREE.Mesh(cardG, cypressCardMat);
+          card.position.set((ci - 1) * 0.09, 0.72 + (ci === 1 ? 0.18 : 0), hz);
+          card.rotation.set(0.18, (ci * Math.PI) / 3 + hi * 0.6, 0.12);
+          card.userData.sharedGlbMat = true;
+          inner.add(card);
+        }
+        // White jasmine blossom clusters
+        for (const [jx, jy] of [
+          [0.24, 0.68],
+          [-0.24, 0.82],
+          [0.06, 1.02],
+        ]) {
+          const bl = new THREE.Mesh(new THREE.SphereGeometry(0.026, 6, 4), jasmineMat);
+          bl.position.set(jx, jy, hz + (hi % 2 === 0 ? 0.08 : -0.08));
+          inner.add(bl);
+        }
+      }
+      break;
+    }
+
+    case 'olive_tree': {
+      // Mediterranean ornamental olive tree in octagonal stone curb with gnarled multi-stem trunk & silver-sage foliage
+      const curb = cyl(0.38, 0.4, 0.14, travertineMat, 0, 0.07, 0);
+      curb.geometry.dispose();
+      curb.geometry = new THREE.CylinderGeometry(0.38, 0.4, 0.14, 8);
+      cyl(0.32, 0.34, 0.15, soilMat, 0, 0.075, 0);
+
+      // Gnarled twisted olive trunk splitting into 3 sculptural boughs
+      tube(
+        [
+          [-0.04, 0.08, 0.02],
+          [0.05, 0.48, -0.03],
+          [-0.02, 0.92, 0.02],
+          [0.01, 1.18, 0],
+        ],
+        0.085,
+        barkMat,
+        9
+      );
+      const oliveShadeMat = makeMat({ color: 0x4b6344, roughness: 0.88 });
+      const oliveFruitMat = makeMat({ color: 0x1e293b, roughness: 0.38 });
+      const cardG = new THREE.PlaneGeometry(0.84, 0.84);
+      const coreG = new THREE.DodecahedronGeometry(0.3, 1);
+      const boughs = [
+        { ang: 0.3, r: 0.36, h: 1.62 },
+        { ang: 2.35, r: 0.38, h: 1.56 },
+        { ang: 4.35, r: 0.34, h: 1.68 },
+      ];
+      for (const bg of boughs) {
+        const bx = Math.cos(bg.ang) * bg.r;
+        const bz = Math.sin(bg.ang) * bg.r;
+        tube([[0, 1.1, 0], [bx * 0.55, 1.36, bz * 0.55], [bx, bg.h, bz]], 0.042, barkMat, 6);
+        const core = new THREE.Mesh(coreG, oliveShadeMat);
+        core.position.set(bx, bg.h + 0.08, bz);
+        core.scale.set(0.95, 0.72, 0.95);
+        inner.add(core);
+        for (let ci = 0; ci < 3; ci++) {
+          const card = new THREE.Mesh(cardG, oliveCardMat);
+          card.position.set(bx, bg.h + 0.14, bz);
+          card.rotation.set(0.26, bg.ang + (ci * Math.PI) / 3, 0.18);
+          card.userData.sharedGlbMat = true;
+          inner.add(card);
+        }
+        // Small dark olive beads
+        for (let oi = 0; oi < 2; oi++) {
+          const ol = new THREE.Mesh(new THREE.SphereGeometry(0.024, 6, 4), oliveFruitMat);
+          ol.scale.set(0.85, 1.35, 0.85);
+          ol.position.set(bx + (oi - 0.5) * 0.16, bg.h - 0.04, bz + 0.12);
+          inner.add(ol);
+        }
+      }
+      const crown = new THREE.Mesh(coreG, oliveShadeMat);
+      crown.position.set(0, 1.98, 0);
+      crown.scale.set(1.06, 0.72, 1.06);
+      inner.add(crown);
+      for (let ti = 0; ti < 4; ti++) {
+        const ta = (ti / 4) * Math.PI * 2;
+        const topCard = new THREE.Mesh(cardG, oliveCardMat);
+        topCard.position.set(Math.cos(ta) * 0.16, 2.06, Math.sin(ta) * 0.16);
+        topCard.rotation.set(0.45, ta, 0.15);
+        topCard.userData.sharedGlbMat = true;
+        inner.add(topCard);
+      }
+      break;
+    }
+
+    case 'garden_umbrella_table': {
+      // 2x2 Outdoor Café Patio Umbrella, Slatted Teak Round Table & Bistro Chairs + Warm Evening Under-Glow
+      const canvasMat = makeMat({ color: 0xf3ece0, roughness: 0.72, side: THREE.DoubleSide });
+      const navySeatMat = makeMat({ color: 0x1e4e6e, roughness: 0.6 });
+      const patioRimMat = makeMat({ color: 0xbfb5a5, roughness: 0.76 });
+      const lanternMat = makeMat({
+        color: 0xfef3c7,
+        emissive: 0xfbbf24,
+        emissiveIntensity: 0.16,
+        roughness: 0.22,
+      });
+
+      // Travertine stone patio slab
+      box(1.88, 0.045, 1.88, travertineMat, 0, 0.022, 0);
+      box(1.74, 0.052, 1.74, patioRimMat, 0, 0.026, 0);
+
+      // Weighted slate umbrella stand + teak round slatted table
+      cyl(0.22, 0.25, 0.06, darkSlate, 0, 0.075, 0);
+      cyl(0.032, 0.036, 0.68, darkSlate, 0, 0.42, 0);
+      for (let li = 0; li < 4; li++) {
+        const ang = (li / 4) * Math.PI * 2 + Math.PI / 4;
+        cyl(0.024, 0.02, 0.66, woodMat, Math.cos(ang) * 0.28, 0.36, Math.sin(ang) * 0.28);
+      }
+      cyl(0.48, 0.48, 0.045, woodMat, 0, 0.71, 0);
+      // Table props: ceramic mug & medical clipboard
+      cyl(0.036, 0.032, 0.075, whiteBody, 0.18, 0.77, 0.12);
+      box(0.18, 0.022, 0.24, cyanAccent, -0.18, 0.745, -0.1);
+
+      // 3 Bistro Patio Chairs arranged around table
+      for (const ang of [0.35, 2.45, 4.55]) {
+        const ch = new THREE.Group();
+        ch.position.set(Math.cos(ang) * 0.64, 0, Math.sin(ang) * 0.64);
+        ch.rotation.y = -ang + Math.PI / 2;
+        const cSeat = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.045, 0.36), navySeatMat);
+        cSeat.position.y = 0.42;
+        const cBack = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.34, 0.04), woodMat);
+        cBack.position.set(0, 0.62, -0.16);
+        cBack.rotation.x = -0.12;
+        ch.add(cSeat, cBack);
+        for (const lx of [-0.15, 0.15]) {
+          for (const lz of [-0.15, 0.15]) {
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.014, 0.4, 8), darkSlate);
+            leg.position.set(lx, 0.2, lz);
+            ch.add(leg);
+          }
+        }
+        inner.add(ch);
+      }
+
+      // Tall wooden parasol mast + warm glowing under-canopy bulb + 8-rib octagonal canvas canopy
+      cyl(0.026, 0.028, 1.56, warmTimber, 0, 1.48, 0);
+      const canopyGroup = new THREE.Group();
+      canopyGroup.position.set(0, 2.16, 0);
+      canopyGroup.rotation.set(0.06, 0, -0.05);
+      const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.12, 0.42, 8), canvasMat);
+      canopy.position.y = 0.14;
+      const trimRing = new THREE.Mesh(new THREE.TorusGeometry(1.06, 0.016, 6, 8), cyanAccent);
+      trimRing.rotation.x = Math.PI / 2;
+      trimRing.rotation.z = Math.PI / 8;
+      trimRing.position.y = -0.06;
+      const topFinial = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.036, 0.08, 8), warmTimber);
+      topFinial.position.y = 0.37;
+      for (let ri = 0; ri < 8; ri++) {
+        const ra = (ri / 8) * Math.PI * 2;
+        const rib = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.96, 6), warmTimber);
+        rib.position.set(Math.cos(ra) * 0.46, 0.04, Math.sin(ra) * 0.46);
+        rib.rotation.z = Math.PI / 2 - 0.24;
+        rib.rotation.y = -ra;
+        canopyGroup.add(rib);
+      }
+      const lanternOrb = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 8), lanternMat);
+      lanternOrb.position.set(0, -0.08, 0);
+      lanternOrb.userData.noCastShadow = true;
+      canopyGroup.add(canopy, trimRing, topFinial, lanternOrb);
+      inner.add(canopyGroup);
+
+      addFloorHalo(2.5, 0xffd584, 0.44, 0, 0.028, 0);
+      addBulbAura(0.22, 0xffe4a8, 0.34, 0, 2.06, 0);
+      outer.userData.smartLight = {
+        kind: 'garden_lamp',
+        localPos: [0, 2.05, 0],
+        emissiveMats: [lanternMat],
+        haloMats,
+        haloMaxOpacities,
+      } as SmartLightMeta;
+      break;
+    }
+
+    case 'wall_clock': {
+      // Crisp brushed-aluminum clinical wall clock mounted flush on wall at x = -0.38, y = 1.56
+      const dialMat = makeMat({ color: 0xf8fafc, roughness: 0.28 });
+      const frame = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.024, 10, 28), silverMetal);
+      frame.rotation.y = Math.PI / 2;
+      frame.position.set(-0.37, 1.56, 0);
+      frame.userData.sharedGlbMat = true;
+      inner.add(frame);
+
+      const backCase = cyl(0.22, 0.22, 0.045, darkSlate, -0.382, 1.56, 0);
+      backCase.rotation.z = Math.PI / 2;
+
+      const face = cyl(0.195, 0.195, 0.018, dialMat, -0.362, 1.56, 0);
+      face.rotation.z = Math.PI / 2;
+      face.userData.noCastShadow = true;
+
+      for (let hi = 0; hi < 12; hi++) {
+        const ang = (hi / 12) * Math.PI * 2;
+        const isMajor = hi % 3 === 0;
+        const tick = box(
+          0.012,
+          isMajor ? 0.036 : 0.02,
+          isMajor ? 0.014 : 0.008,
+          darkSlate,
+          -0.351,
+          1.56 + Math.cos(ang) * 0.165,
+          Math.sin(ang) * 0.165
+        );
+        tick.rotation.x = ang;
+        tick.userData.noCastShadow = true;
+      }
+
+      // Hour, minute, and crimson sweep second hands
+      const hrHand = box(0.012, 0.095, 0.014, darkSlate, -0.346, 1.59, 0.024);
+      hrHand.rotation.x = 0.65;
+      hrHand.userData.noCastShadow = true;
+      const minHand = box(0.012, 0.135, 0.01, darkSlate, -0.343, 1.605, -0.028);
+      minHand.rotation.x = -0.42;
+      minHand.userData.noCastShadow = true;
+      const secHand = box(0.01, 0.145, 0.006, redAccent, -0.34, 1.56, 0.055);
+      secHand.rotation.x = 1.8;
+      secHand.userData.noCastShadow = true;
+      cyl(0.015, 0.015, 0.016, silverMetal, -0.342, 1.56, 0).rotation.z = Math.PI / 2;
+      break;
+    }
+
+    case 'reception_display_stand': {
+      // Heavy-duty floor-standing digital display kiosk with twin columns, VESA mount, shelf tray & animated scenic screen
+      // Floor baseplate + non-slip rubber leveling feet
+      for (const fx of [-0.22, 0.22]) {
+        for (const fz of [-0.15, 0.15]) {
+          const pad = cyl(0.025, 0.028, 0.018, blackRubber, fx, 0.009, fz);
+          pad.userData.noCastShadow = true;
+        }
+      }
+      box(0.56, 0.03, 0.42, darkSlate, 0, 0.032, 0);
+      box(0.5, 0.018, 0.36, silverMetal, 0, 0.055, 0);
+
+      // Twin brushed-chrome upright stand poles & rear cable management spine
+      for (const px of [-0.125, 0.125]) {
+        cyl(0.024, 0.026, 1.46, silverMetal, px, 0.78, -0.04);
+        cyl(0.036, 0.038, 0.055, darkSlate, px, 0.088, -0.04);
+      }
+      box(0.3, 0.045, 0.055, darkSlate, 0, 0.42, -0.04);
+      box(0.04, 1.18, 0.028, darkSlate, 0, 0.72, -0.07);
+
+      // Mid-height brochure / tablet ledge shelf
+      box(0.42, 0.024, 0.2, whiteBody, 0, 0.74, 0.075);
+      box(0.36, 0.012, 0.15, cyanAccent, 0, 0.758, 0.078).userData.noCastShadow = true;
+
+      // VESA mounting bracket behind display
+      box(0.38, 0.24, 0.038, darkSlate, 0, 1.44, -0.01);
+
+      // Commercial 16:9 widescreen display head (angled slightly back for reception lounge viewing)
+      const headGrp = new THREE.Group();
+      headGrp.position.set(0, 1.48, 0.032);
+      headGrp.rotation.x = -0.08;
+      inner.add(headGrp);
+
+      const casing = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.49, 0.04), darkSlate);
+      casing.userData.sharedGlbMat = true;
+      const trimBezel = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.51, 0.018), silverMetal);
+      trimBezel.position.z = -0.01;
+      trimBezel.userData.sharedGlbMat = true;
+
+      const screenPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.79, 0.43), receptionScreenMat);
+      screenPlane.position.z = 0.022;
+      screenPlane.userData.sharedGlbMat = true;
+      screenPlane.userData.noCastShadow = true;
+
+      const statusLed = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.01, 0.01), emeraldAccent);
+      statusLed.position.set(0, -0.23, 0.022);
+      statusLed.userData.sharedGlbMat = true;
+      statusLed.userData.noCastShadow = true;
+
+      const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.024, 0.03), silverMetal);
+      topBar.position.set(0, 0.26, 0);
+      topBar.userData.sharedGlbMat = true;
+
+      headGrp.add(casing, trimBezel, screenPlane, statusLed, topBar);
       break;
     }
   }

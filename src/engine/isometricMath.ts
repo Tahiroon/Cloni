@@ -37,17 +37,58 @@ export const WALL_DECOR_IDS = new Set([
   'anatomy_poster',
   'ac_nesma',
   'ac_lg',
+  'wall_clock',
 ]);
 
 export function isWallDecorId(catalogId: string): boolean {
   return WALL_DECOR_IDS.has(catalogId);
 }
 
+export type WorldTreeSpecies = 'oak' | 'wild_fig' | 'acacia' | 'cypress' | 'birch';
+
+export interface WorldTreeDef {
+  id: string;
+  x: number;
+  z: number;
+  scale: number;
+  rotY: number;
+  removeCost: number;
+  species: WorldTreeSpecies;
+}
+
 /**
- * Grassy side lawn directly beside the clinic opposite the Doctor's House
- * (z = 23..25, x = 3..20) reserved for ground-mounted solar panel placement.
+ * Untamed natural wild trees around the immediate clinic yard perimeter
+ * (strictly distinct from manicured ornamental planter trees sold in the Store).
+ * All positioned clear of the Rear West Solar Zone, Villa, and Entrance path.
  */
-export const SOLAR_ZONE = { minX: 3, maxX: 20, minY: 23, maxY: 25 } as const;
+export const WORLD_TREES: WorldTreeDef[] = [
+  // West perimeter lawn (north & south of the Rear Solar Zone x:-3..0, z:6..19)
+  { id: 'tree_01', x: -0.6, z: 1.8, scale: 1.18, rotY: 0.4, removeCost: 80, species: 'oak' },
+  { id: 'tree_02', x: -1.4, z: 3.8, scale: 1.06, rotY: 1.8, removeCost: 70, species: 'cypress' },
+  { id: 'tree_03', x: -1.4, z: 21.6, scale: 1.14, rotY: 3.1, removeCost: 80, species: 'acacia' },
+  { id: 'tree_04', x: 0.4, z: 24.4, scale: 1.12, rotY: 0.9, removeCost: 75, species: 'birch' },
+  // South garden lawn
+  { id: 'tree_05', x: 5.2, z: 24.5, scale: 1.04, rotY: 2.5, removeCost: 70, species: 'acacia' },
+  { id: 'tree_06', x: 11.4, z: 24.8, scale: 1.12, rotY: 4.2, removeCost: 80, species: 'oak' },
+  { id: 'tree_15', x: 17.8, z: 24.4, scale: 1.06, rotY: 1.3, removeCost: 75, species: 'wild_fig' },
+  { id: 'tree_16', x: 24.4, z: 24.4, scale: 1.08, rotY: 2.2, removeCost: 80, species: 'cypress' },
+  // North rear lawn (clear of the 3.5m North clinic wall & Villa)
+  { id: 'tree_07', x: 13.8, z: -0.4, scale: 1.02, rotY: 1.2, removeCost: 70, species: 'cypress' },
+  { id: 'tree_08', x: 2.2, z: -4.2, scale: 1.18, rotY: 2.1, removeCost: 85, species: 'oak' },
+  { id: 'tree_09', x: 18.6, z: -0.6, scale: 1.1, rotY: 5.0, removeCost: 80, species: 'acacia' },
+  { id: 'tree_10', x: 24.6, z: -0.2, scale: 0.98, rotY: 3.6, removeCost: 70, species: 'birch' },
+  // Immediate East yard corners (kept close to clinic focus)
+  { id: 'tree_11', x: 28.6, z: 0.4, scale: 1.08, rotY: 0.6, removeCost: 80, species: 'oak' },
+  { id: 'tree_12', x: 28.6, z: 23.8, scale: 1.12, rotY: 2.9, removeCost: 85, species: 'wild_fig' },
+  { id: 'tree_13', x: 13.4, z: -4.8, scale: 1.08, rotY: 4.7, removeCost: 80, species: 'birch' },
+  { id: 'tree_14', x: 22.8, z: -3.2, scale: 1.02, rotY: 1.5, removeCost: 75, species: 'cypress' },
+];
+
+/**
+ * Utility pad set cleanly back behind the clinic's solid West rear wall (x = -6..-2, z = 6..19),
+ * leaving a generous 3m grass/walkway buffer from the wall and far from the Doctor's Villa.
+ */
+export const SOLAR_ZONE = { minX: -6, maxX: -2, minY: 6, maxY: 19 } as const;
 
 export function isInSolarZone(gx: number, gy: number, effW = 1, effD = 1): boolean {
   return (
@@ -68,6 +109,79 @@ export function clampToSolarZone(
     gx: Math.max(SOLAR_ZONE.minX, Math.min(SOLAR_ZONE.maxX - effW + 1, gx)),
     gy: Math.max(SOLAR_ZONE.minY, Math.min(SOLAR_ZONE.maxY - effD + 1, gy)),
   };
+}
+
+/**
+ * Checks whether a grid tile (tx, ty) falls inside the buildable outdoor garden
+ * areas: East Courtyard, South Lawn, West Perimeter edges, North Rear Lawn (away from Villa),
+ * and Sidewalk Promenade.
+ */
+export function isTileInOutdoorGarden(
+  tx: number,
+  ty: number,
+  allowFenceEdgeLamps = false
+): boolean {
+  // Keep sliding main entrance path & gate promenade clear
+  if (tx >= 21 && tx <= 29 && (ty === 14 || ty === 15)) return false;
+  // Keep central reflecting fountain basin in courtyard clear
+  if ((tx === 24 || tx === 25) && (ty === 7 || ty === 8)) return false;
+  // Keep rear solar conduit cable bridge strip clear (-1..1, z=12..13)
+  if (tx >= -1 && tx <= 1 && (ty === 12 || ty === 13)) return false;
+  // Exclude indoor building footprint (2..21, 2..21)
+  if (tx >= 2 && tx <= 21 && ty >= 2 && ty <= 21) return false;
+  // Exclude Doctor's Residence Villa footprint (x: 4..10, z: -7..-2)
+  if (tx >= 4 && tx <= 10 && ty >= -7 && ty <= -2) return false;
+  // Exclude dedicated Rear West Solar Zone from normal garden clutter
+  if (tx >= SOLAR_ZONE.minX && tx <= SOLAR_ZONE.maxX && ty >= SOLAR_ZONE.minY && ty <= SOLAR_ZONE.maxY) {
+    return false;
+  }
+
+  // 1. East Courtyard
+  if (tx >= 22 && tx <= 26 && ty >= 2 && ty <= 21) return true;
+  // 2. Promenade walkway outside fence (lamps allowed along 27..29, general garden props on 28..29)
+  if (ty >= 2 && ty <= 21) {
+    if (allowFenceEdgeLamps && tx >= 27 && tx <= 29) return true;
+    if (!allowFenceEdgeLamps && (tx === 28 || tx === 29)) return true;
+  }
+  // 3. South Lawn (z=22..26)
+  if (tx >= 0 && tx <= 27 && ty >= 22 && ty <= 26) {
+    if (tx >= 22 && ty === 22) return false;
+    return true;
+  }
+  // 4. West Perimeter Lawn (tiles flanking solar zone, x: -1..1)
+  if (tx >= -1 && tx <= 1 && ty >= 0 && ty <= 26) return true;
+  // 5. North Rear Perimeter Lawn (behind north wall & former north solar area, clear of Villa)
+  if (tx >= 0 && tx <= 26 && ty >= -2 && ty <= 1) return true;
+  if (tx >= 11 && tx <= 21 && ty >= -4 && ty <= -3) return true;
+
+  return false;
+}
+
+/**
+ * Checks whether grid footprint (gx..gx+effW, gy..gy+effD) overlaps any active unremoved WorldTree.
+ */
+export function overlapsActiveWorldTree(
+  gx: number,
+  gy: number,
+  effW: number,
+  effD: number,
+  removedTreeIds: string[] = []
+): boolean {
+  const removedSet = new Set(removedTreeIds);
+  for (const tree of WORLD_TREES) {
+    if (removedSet.has(tree.id)) continue;
+    const tx = Math.floor(tree.x);
+    const ty = Math.floor(tree.z);
+    for (let dx = 0; dx < effW; dx++) {
+      for (let dy = 0; dy < effD; dy++) {
+        const cx = gx + dx;
+        const cy = gy + dy;
+        if (cx === tx && cy === ty) return true;
+        if (Math.hypot(cx + 0.5 - tree.x, cy + 0.5 - tree.z) < 0.72) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -174,7 +288,8 @@ export function snapToNearestValidWallSlot(
 export function buildObstacleBoxes(
   rooms: ClinicRoom[],
   placedItems: PlacedItem[],
-  itemFootprints: Map<string, { w: number; d: number }>
+  itemFootprints: Map<string, { w: number; d: number }>,
+  removedTreeIds: string[] = []
 ): ObstacleBox[] {
   const boxes: ObstacleBox[] = [];
   const halfBackWall = 0.15;
@@ -190,38 +305,38 @@ export function buildObstacleBoxes(
   boxes.push({ minX: 2 - halfBackWall, maxX: 2 + halfBackWall, minZ: 1.85, maxZ: 22.15 });
   // South front knee wall z = 22
   boxes.push({ minX: 1.88, maxX: 22.12, minZ: 22 - halfFrontWall, maxZ: 22 + halfFrontWall });
-  // East storefront wall x = 22 with automatic double-door opening z = 14.08..15.92
-  boxes.push({ minX: 22 - halfFrontWall, maxX: 22 + halfFrontWall, minZ: 1.88, maxZ: 14.08 });
-  boxes.push({ minX: 22 - halfFrontWall, maxX: 22 + halfFrontWall, minZ: 15.92, maxZ: 22.12 });
+  // East storefront wall x = 22 with automatic double-door opening z = 14.04..15.96
+  boxes.push({ minX: 22 - halfFrontWall, maxX: 22 + halfFrontWall, minZ: 1.88, maxZ: 14.04 });
+  boxes.push({ minX: 22 - halfFrontWall, maxX: 22 + halfFrontWall, minZ: 15.96, maxZ: 22.12 });
 
   // Interior horizontal partition z = 10
-  // Doors at x = 6.08..6.92 (door_bay_west) and x = 16.08..16.92 (door_rec_east)
+  // Single doors at x = 6.03..6.97 (door_bay_west) and x = 16.03..16.97 (door_rec_east)
   const bayNorthOpen = unlockedSet.has('room_gym');
   const recNorthOpen = unlockedSet.has('room_specialty_2');
   if (bayNorthOpen) {
-    boxes.push({ minX: 2.0, maxX: 6.08, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
-    boxes.push({ minX: 6.92, maxX: 12.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
+    boxes.push({ minX: 2.0, maxX: 6.03, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
+    boxes.push({ minX: 6.97, maxX: 12.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   } else {
     boxes.push({ minX: 2.0, maxX: 12.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   }
   if (recNorthOpen) {
-    boxes.push({ minX: 12.0, maxX: 16.08, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
-    boxes.push({ minX: 16.92, maxX: 22.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
+    boxes.push({ minX: 12.0, maxX: 16.03, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
+    boxes.push({ minX: 16.97, maxX: 22.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   } else {
     boxes.push({ minX: 12.0, maxX: 22.0, minZ: 10 - halfInteriorWall, maxZ: 10 + halfInteriorWall });
   }
 
   // Interior vertical partition x = 12
-  // Doors at z = 5.08..5.92 (door_west_east) and z = 14.08..14.92 (door_reception_bay)
+  // Single doors at z = 5.03..5.97 (door_west_east) and z = 14.03..14.97 (door_reception_bay)
   const northLinkOpen = unlockedSet.has('room_gym') && unlockedSet.has('room_specialty_2');
   if (northLinkOpen) {
-    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 2.0, maxZ: 5.08 });
-    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 5.92, maxZ: 10.0 });
+    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 2.0, maxZ: 5.03 });
+    boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 5.97, maxZ: 10.0 });
   } else {
     boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 2.0, maxZ: 10.0 });
   }
-  boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 10.0, maxZ: 14.08 });
-  boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 14.92, maxZ: 22.0 });
+  boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 10.0, maxZ: 14.03 });
+  boxes.push({ minX: 12 - halfInteriorWall, maxX: 12 + halfInteriorWall, minZ: 14.97, maxZ: 22.0 });
 
   // Locked Rooms as solid keep-out zones
   for (const r of rooms) {
@@ -269,34 +384,53 @@ export function buildObstacleBoxes(
     boxes.push({ minX: px - 0.12, maxX: px + 0.12, minZ: pz - 0.12, maxZ: pz + 0.12 });
   }
 
-  // Garden Lane Rustic Benches along far eastern verge
-  for (const bz of [7.8, 19.8]) {
-    boxes.push({ minX: 37.85, maxX: 38.65, minZ: bz - 0.85, maxZ: bz + 0.85 });
-  }
-
   // Doctor's Residence Villa behind clinic
   boxes.push({ minX: 4.8, maxX: 9.7, minZ: -6.5, maxZ: -1.9 });
 
+  // Active unremoved World Tree trunks so outdoor walkers steer around trunks cleanly
+  const removedTrees = new Set(removedTreeIds);
+  for (const tree of WORLD_TREES) {
+    if (removedTrees.has(tree.id)) continue;
+    const trunkR = 0.24 * tree.scale;
+    boxes.push({
+      minX: tree.x - trunkR,
+      maxX: tree.x + trunkR,
+      minZ: tree.z - trunkR,
+      maxZ: tree.z + trunkR,
+    });
+  }
+
   // Placed furniture & medical equipment AABBs (inset slightly so movement flows past edges cleanly)
   for (const item of placedItems) {
-    // Walkable rugs and elevated wall-mounted items never block floor movement
-    if (item.catalogId === 'floor_rug' || WALL_DECOR_IDS.has(item.catalogId)) continue;
+    // Walkable rugs, stone pathways, and elevated wall-mounted items never block floor movement
+    if (
+      item.catalogId === 'floor_rug' ||
+      item.catalogId === 'stone_pathway' ||
+      WALL_DECOR_IDS.has(item.catalogId)
+    ) {
+      continue;
+    }
 
     const fp = itemFootprints.get(item.catalogId) || { w: 1, d: 1 };
     const w = item.rotation % 2 === 0 ? fp.w : fp.d;
     const d = item.rotation % 2 === 0 ? fp.d : fp.w;
     const inset =
       item.catalogId === 'exercise_mat'
-        ? 0.25
+        ? 0.24
         : item.catalogId === 'waste_bin' ||
             item.catalogId === 'doctor_stool' ||
             item.catalogId === 'sanitizing_kiosk'
-          ? 0.24
-          : item.catalogId === 'flower_bed' ||
-              item.catalogId === 'garden_lamp' ||
-              item.catalogId === 'garden_spot_lamp'
-            ? 0.14
-            : 0.1;
+          ? 0.22
+          : item.catalogId === 'waiting_chairs' ||
+              item.catalogId === 'lounge_chair' ||
+              item.catalogId === 'luxury_chair' ||
+              item.catalogId === 'park_bench'
+            ? 0.08
+            : item.catalogId === 'flower_bed' ||
+                item.catalogId === 'garden_lamp' ||
+                item.catalogId === 'garden_spot_lamp'
+              ? 0.14
+              : 0.09;
     boxes.push({
       minX: item.gridX + inset,
       maxX: item.gridX + w - inset,
@@ -324,7 +458,7 @@ export function isWorldWalkable(
   boxes: ObstacleBox[],
   ignoreItemId?: string
 ): boolean {
-  if (wx < -1.5 || wx > 37.4 || wz < -1.5 || wz > 27.5) return false;
+  if (wx < -8.0 || wx > 37.8 || wz < -5.5 || wz > 28.0) return false;
   for (let i = 0; i < boxes.length; i++) {
     const b = boxes[i];
     if (ignoreItemId && b.itemId === ignoreItemId) continue;
@@ -341,6 +475,163 @@ export function isTileWalkable(
   ignoreItemId?: string
 ): boolean {
   return isWorldWalkable(tx + 0.5, ty + 0.5, radius, boxes, ignoreItemId);
+}
+
+/**
+ * Finds the nearest unobstructed world point when a character is displaced by newly placed/moved furniture.
+ */
+export function findNearestWalkableWorld(
+  wx: number,
+  wz: number,
+  radius: number,
+  boxes: ObstacleBox[],
+  ignoreItemId?: string
+): { x: number; z: number } {
+  if (isWorldWalkable(wx, wz, radius, boxes, ignoreItemId)) {
+    return { x: wx, z: wz };
+  }
+  for (let r = 0.25; r <= 3.5; r += 0.25) {
+    for (let a = 0; a < 16; a++) {
+      const ang = (a / 16) * Math.PI * 2;
+      const cx = wx + Math.cos(ang) * r;
+      const cz = wz + Math.sin(ang) * r;
+      if (isWorldWalkable(cx, cz, radius, boxes, ignoreItemId)) {
+        return { x: cx, z: cz };
+      }
+    }
+  }
+  return { x: wx, z: wz };
+}
+
+export function findNearestWalkableTile(
+  tx: number,
+  ty: number,
+  radius: number,
+  boxes: ObstacleBox[],
+  ignoreItemId?: string
+): { x: number; y: number } {
+  const res = findNearestWalkableWorld(tx + 0.5, ty + 0.5, radius, boxes, ignoreItemId);
+  return { x: res.x - 0.5, y: res.z - 0.5 };
+}
+
+export interface WaitSeatSlot {
+  seatKey: string;
+  itemId: string;
+  catalogId: string;
+  /** Exact world coordinate of the seat center minus 0.5 (tile space). */
+  seatTileX: number;
+  seatTileY: number;
+  /** Exact walkable standing approach coordinate right in front of the seat (tile space). */
+  approachTileX: number;
+  approachTileY: number;
+  facingRad: number;
+  seatHeight: number;
+  isOutdoor: boolean;
+}
+
+function rotateLocalSeatPoint(
+  cx: number,
+  cz: number,
+  rot: 0 | 1 | 2 | 3,
+  lx: number,
+  lz: number
+): { x: number; z: number } {
+  const ry = (-rot * Math.PI) / 2;
+  return {
+    x: cx + Math.cos(ry) * lx + Math.sin(ry) * lz,
+    z: cz - Math.sin(ry) * lx + Math.cos(ry) * lz,
+  };
+}
+
+/**
+ * Generates exact seat cushions + unobstructed front approach points for every waiting seat
+ * (3 simultaneous seats on waiting_chairs, 2 on park_bench, 1 on lounge_chair & luxury_chair).
+ */
+export function buildWaitSeatSlots(
+  placedItems: PlacedItem[],
+  rooms: ClinicRoom[]
+): WaitSeatSlot[] {
+  const seats: WaitSeatSlot[] = [];
+
+  for (const item of placedItems) {
+    const room = rooms.find(
+      (r) =>
+        item.gridX >= r.minX &&
+        item.gridX <= r.maxX &&
+        item.gridY >= r.minY &&
+        item.gridY <= r.maxY
+    );
+    if (room && !room.unlocked) continue;
+
+    if (item.catalogId === 'waiting_chairs') {
+      const effW = item.rotation % 2 === 0 ? 2 : 1;
+      const effD = item.rotation % 2 === 0 ? 1 : 2;
+      const cx = item.gridX + effW / 2;
+      const cz = item.gridY + effD / 2;
+      const facingRad = (-item.rotation * Math.PI) / 2;
+      const slotXs = [-0.62, 0, 0.62];
+      for (let i = 0; i < slotXs.length; i++) {
+        const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], 0.05);
+        const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, slotXs[i], 0.76);
+        seats.push({
+          seatKey: `${item.instanceId}_${i}`,
+          itemId: item.instanceId,
+          catalogId: item.catalogId,
+          seatTileX: seatPt.x - 0.5,
+          seatTileY: seatPt.z - 0.5,
+          approachTileX: appPt.x - 0.5,
+          approachTileY: appPt.z - 0.5,
+          facingRad,
+          seatHeight: 0.375,
+          isOutdoor: !room,
+        });
+      }
+    } else if (item.catalogId === 'park_bench') {
+      const effW = item.rotation % 2 === 0 ? 1 : 2;
+      const effD = item.rotation % 2 === 0 ? 2 : 1;
+      const cx = item.gridX + effW / 2;
+      const cz = item.gridY + effD / 2;
+      const facingRad = Math.PI / 2 - (item.rotation * Math.PI) / 2;
+      const slotZs = [-0.36, 0.36];
+      for (let i = 0; i < slotZs.length; i++) {
+        const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.06, slotZs[i]);
+        const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0.68, slotZs[i]);
+        seats.push({
+          seatKey: `${item.instanceId}_${i}`,
+          itemId: item.instanceId,
+          catalogId: item.catalogId,
+          seatTileX: seatPt.x - 0.5,
+          seatTileY: seatPt.z - 0.5,
+          approachTileX: appPt.x - 0.5,
+          approachTileY: appPt.z - 0.5,
+          facingRad,
+          seatHeight: 0.396,
+          isOutdoor: !room,
+        });
+      }
+    } else if (item.catalogId === 'lounge_chair' || item.catalogId === 'luxury_chair') {
+      const cx = item.gridX + 0.5;
+      const cz = item.gridY + 0.5;
+      const facingRad = (-item.rotation * Math.PI) / 2;
+      const isLux = item.catalogId === 'luxury_chair';
+      const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, isLux ? 0.06 : 0.04);
+      const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.74);
+      seats.push({
+        seatKey: `${item.instanceId}_0`,
+        itemId: item.instanceId,
+        catalogId: item.catalogId,
+        seatTileX: seatPt.x - 0.5,
+        seatTileY: seatPt.z - 0.5,
+        approachTileX: appPt.x - 0.5,
+        approachTileY: appPt.z - 0.5,
+        facingRad,
+        seatHeight: isLux ? 0.445 : 0.41,
+        isOutdoor: !room,
+      });
+    }
+  }
+
+  return seats;
 }
 
 /**
@@ -483,7 +774,7 @@ export function canStepBetween(
   toY: number,
   rooms: ClinicRoom[]
 ): boolean {
-  if (toX < 0 || toX > 36 || toY < 0 || toY >= GRID_SIZE) return false;
+  if (toX < -7 || toX > 37 || toY < -5 || toY >= GRID_SIZE) return false;
 
   // Handle diagonal step cleanly by requiring both orthogonal legs clear
   if (fromX !== toX && fromY !== toY) {
@@ -578,19 +869,21 @@ function hasLineOfSight(
   rooms: ClinicRoom[],
   blocked: Set<string>,
   boxes?: ObstacleBox[],
-  ignoreItemId?: string
+  ignoreItemId?: string,
+  allowIgnoreForSegment = false
 ): boolean {
   const dist = Math.hypot(x1 - x0, y1 - y0);
-  const steps = Math.max(2, Math.ceil(dist * 4));
+  const steps = Math.max(3, Math.ceil(dist * 6));
   let prevX = Math.round(x0);
   let prevY = Math.round(y0);
+  const segIgnore = allowIgnoreForSegment ? ignoreItemId : undefined;
 
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const fx = x0 + (x1 - x0) * t;
     const fy = y0 + (y1 - y0) * t;
     if (boxes && i < steps) {
-      if (!isWorldWalkable(fx + 0.5, fy + 0.5, 0.27, boxes, ignoreItemId)) {
+      if (!isWorldWalkable(fx + 0.5, fy + 0.5, 0.27, boxes, segIgnore)) {
         return false;
       }
     }
@@ -611,7 +904,7 @@ function hasLineOfSight(
 
 /**
  * 8-directional BFS + continuous obstacle-aware string-pulling so people walk along
- * smooth, natural organic diagonals without hugging corners or colliding with walls/furniture.
+ * smooth, natural organic paths without hugging corners or colliding with walls/furniture.
  */
 export function findGridPath(
   startX: number,
@@ -624,17 +917,51 @@ export function findGridPath(
   obstacleBoxes?: ObstacleBox[],
   ignoreGoalItemId?: string
 ): Array<{ x: number; y: number }> {
-  const sx = Math.round(startX);
-  const sy = Math.round(startY);
+  const boxes = obstacleBoxes || buildObstacleBoxes(rooms, placedItems, itemFootprints);
+
+  // If starting position is slightly overlapping an obstacle (e.g. just placed item), recover cleanly first
+  let effStartX = startX;
+  let effStartY = startY;
+  if (!isWorldWalkable(startX + 0.5, startY + 0.5, 0.2, boxes, ignoreGoalItemId)) {
+    const safe = findNearestWalkableTile(startX, startY, 0.22, boxes, ignoreGoalItemId);
+    effStartX = safe.x;
+    effStartY = safe.y;
+  }
+
+  let sx = Math.round(effStartX);
+  let sy = Math.round(effStartY);
   const gx = Math.round(goalX);
   const gy = Math.round(goalY);
 
-  if (sx === gx && sy === gy) return [];
+  if (Math.hypot(goalX - effStartX, goalY - effStartY) < 0.22) return [];
+  if (sx === gx && sy === gy) {
+    return [{ x: goalX, y: goalY }];
+  }
 
-  // Build blocked set for furniture, exterior doctor villa pad, and courtyard fountain
-  const blocked = new Set<string>(['24,7', '25,7', '24,8', '25,8']);
+  // Build blocked set for furniture, courtyard shrubs, exterior doctor villa pad, and courtyard fountain
+  const blocked = new Set<string>([
+    '24,7',
+    '25,7',
+    '24,8',
+    '25,8',
+    '22,3',
+    '22,12',
+    '26,3',
+    '26,20',
+  ]);
+  for (let vx = 4; vx <= 9; vx++) {
+    for (let vy = -7; vy <= -2; vy++) {
+      blocked.add(`${vx},${vy}`);
+    }
+  }
   for (const item of placedItems) {
-    if (item.catalogId === 'floor_rug' || WALL_DECOR_IDS.has(item.catalogId)) continue;
+    if (
+      item.catalogId === 'floor_rug' ||
+      item.catalogId === 'stone_pathway' ||
+      WALL_DECOR_IDS.has(item.catalogId)
+    ) {
+      continue;
+    }
     const fp = itemFootprints.get(item.catalogId) || { w: 1, d: 1 };
     const w = item.rotation % 2 === 0 ? fp.w : fp.d;
     const d = item.rotation % 2 === 0 ? fp.d : fp.w;
@@ -642,9 +969,21 @@ export function findGridPath(
       for (let dy = 0; dy < d; dy++) {
         const tx = item.gridX + dx;
         const ty = item.gridY + dy;
-        if (!(tx === gx && ty === gy) && !(tx === sx && ty === sy)) {
+        const isGoalCell = tx === gx && ty === gy && Boolean(ignoreGoalItemId && item.instanceId === ignoreGoalItemId);
+        if (!isGoalCell && !(tx === sx && ty === sy)) {
           blocked.add(`${tx},${ty}`);
         }
+      }
+    }
+  }
+
+  // If rounded start cell is inside an obstacle tile, nudge sx/sy to best adjacent free tile
+  if (blocked.has(`${sx},${sy}`)) {
+    for (const [ox, oy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]]) {
+      if (!blocked.has(`${sx + ox},${sy + oy}`) && canStepBetween(sx, sy, sx + ox, sy + oy, rooms)) {
+        sx += ox;
+        sy += oy;
+        break;
       }
     }
   }
@@ -664,8 +1003,15 @@ export function findGridPath(
   ];
 
   let found = false;
+  let bestFallbackKey = `${sx},${sy}`;
+  let bestFallbackDist = Math.hypot(sx - gx, sy - gy);
   while (queue.length > 0) {
     const cur = queue.shift()!;
+    const curDist = Math.hypot(cur.x - gx, cur.y - gy);
+    if (curDist < bestFallbackDist) {
+      bestFallbackDist = curDist;
+      bestFallbackKey = `${cur.x},${cur.y}`;
+    }
     if (cur.x === gx && cur.y === gy) {
       found = true;
       break;
@@ -677,7 +1023,14 @@ export function findGridPath(
       const key = `${nx},${ny}`;
       if (visited.has(key)) continue;
       if (blocked.has(key)) continue;
+      // Strictly forbid cutting diagonally across a blocked furniture/wall corner
+      if (dx !== 0 && dy !== 0) {
+        if (blocked.has(`${cur.x + dx},${cur.y}`) || blocked.has(`${cur.x},${cur.y + dy}`)) {
+          continue;
+        }
+      }
       if (!canStepBetween(cur.x, cur.y, nx, ny, rooms)) continue;
+      if (!(nx === gx && ny === gy) && !isTileWalkable(nx, ny, 0.18, boxes)) continue;
 
       visited.add(key);
       parent.set(key, `${cur.x},${cur.y}`);
@@ -685,12 +1038,8 @@ export function findGridPath(
     }
   }
 
-  if (!found) {
-    return [{ x: gx, y: gy }];
-  }
-
   const rawPath: Array<{ x: number; y: number }> = [];
-  let curKey = `${gx},${gy}`;
+  let curKey = found ? `${gx},${gy}` : bestFallbackKey;
   while (curKey !== `${sx},${sy}`) {
     const [px, py] = curKey.split(',').map(Number);
     rawPath.unshift({ x: px, y: py });
@@ -699,17 +1048,27 @@ export function findGridPath(
     curKey = prev;
   }
 
-  if (rawPath.length <= 2) return rawPath;
+  if (found && rawPath.length > 0) {
+    rawPath[rawPath.length - 1] = { x: goalX, y: goalY };
+  } else if (rawPath.length === 0) {
+    return [];
+  }
 
-  const boxes = obstacleBoxes || buildObstacleBoxes(rooms, placedItems, itemFootprints);
+  if (rawPath.length <= 1) return rawPath;
 
-  // String-pulling pass: skip redundant intermediate nodes whenever direct line of sight is unobstructed
-  const fullNodes = [{ x: startX, y: startY }, ...rawPath];
+  // String-pulling pass: skip redundant intermediate nodes ONLY when clear of obstacles (never skip through target item from afar)
+  const fullNodes = [{ x: effStartX, y: effStartY }, ...rawPath];
   const smoothed: Array<{ x: number; y: number }> = [];
   let anchorIdx = 0;
   while (anchorIdx < fullNodes.length - 1) {
     let furthestIdx = anchorIdx + 1;
     for (let probe = fullNodes.length - 1; probe > anchorIdx + 1; probe--) {
+      const isFinalGoalProbe = probe === fullNodes.length - 1;
+      const probeDist = Math.hypot(
+        fullNodes[probe].x - fullNodes[anchorIdx].x,
+        fullNodes[probe].y - fullNodes[anchorIdx].y
+      );
+      const allowGoalIgnore = Boolean(isFinalGoalProbe && ignoreGoalItemId && probeDist < 1.35);
       if (
         hasLineOfSight(
           fullNodes[anchorIdx].x,
@@ -719,7 +1078,8 @@ export function findGridPath(
           rooms,
           blocked,
           boxes,
-          ignoreGoalItemId
+          ignoreGoalItemId,
+          allowGoalIgnore
         )
       ) {
         furthestIdx = probe;

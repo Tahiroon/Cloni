@@ -78,7 +78,13 @@ export type SpriteKind =
   | 'marble_fountain'
   | 'rose_trellis'
   | 'zen_lantern'
-  | 'garden_gazebo';
+  | 'garden_gazebo'
+  | 'stone_pathway'
+  | 'hedge_planter'
+  | 'olive_tree'
+  | 'garden_umbrella_table'
+  | 'wall_clock'
+  | 'reception_display_stand';
 
 export type LightingMode = 'day' | 'night';
 
@@ -244,6 +250,8 @@ export interface PatientEntity {
   waitTimer: number;
   seatOffsetX?: number;
   seatOffsetZ?: number;
+  seatApproachX?: number;
+  seatApproachY?: number;
   seatFacingRad?: number;
   seatHeight?: number;
   isSeatedWait?: boolean;
@@ -252,6 +260,7 @@ export interface PatientEntity {
   leavingItemId?: string;
   idleMoveTimer?: number;
   headingRad?: number;
+  blockedTicks?: number;
   treatmentProgress?: number; // 0..1 while in_treatment
   pendingReward?: {
     coins: number;
