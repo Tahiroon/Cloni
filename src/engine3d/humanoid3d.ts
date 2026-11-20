@@ -41,6 +41,7 @@ export interface HumanoidRig {
   selectRing: THREE.Mesh;
   hitMesh: THREE.Mesh;
   handCup?: THREE.Group;
+  handFile?: THREE.Group;
   isSkinnedGlb: boolean;
   hipHeight?: number;
   heightScale?: number;
@@ -449,6 +450,24 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   const hairCol = new THREE.Color(appearance.hairColor || '#17100c');
   const shirtCol = new THREE.Color(appearance.shirtColor || '#ece9e1');
   const pantsCol = new THREE.Color(appearance.pantsColor || '#1e293b');
+  const shirtLum = 0.2126 * shirtCol.r + 0.7152 * shirtCol.g + 0.0722 * shirtCol.b;
+  const seedIdx = Math.abs(appearance.variantSeed || 0);
+  const contrastInnerHex =
+    shirtLum >= 0.42
+      ? (seedIdx % 2 === 0 ? 0x1e3a5f : 0x334155)
+      : 0xf8fafc;
+  const tiePalette = [0x9f1239, 0x1d4ed8, 0x047857, 0xb45309, 0x1e293b, 0x6d28d9];
+  const rawTieHex = tiePalette[seedIdx % tiePalette.length];
+  const tieColObj = new THREE.Color(rawTieHex);
+  const tieColorHex =
+    Math.abs(tieColObj.r - shirtCol.r) +
+      Math.abs(tieColObj.g - shirtCol.g) +
+      Math.abs(tieColObj.b - shirtCol.b) <
+    0.35
+      ? tiePalette[(seedIdx + 1) % tiePalette.length]
+      : rawTieHex;
+  const shoePalette = [0x1e1b18, 0x3a2618, 0x1e293b, 0x27272a];
+  const shoeLeatherHex = shoePalette[seedIdx % shoePalette.length];
   const isFemaleLook = Boolean(
     appearance.isFemale ||
       appearance.hasHijab ||
@@ -582,37 +601,25 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             if (mName === 'Black' && meshName === 'Suit_Body') {
               mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.48);
             } else if (mName === 'White' && meshName === 'Suit_Body') {
-              mat = makeClothMat(
-                shirtCol.clone().offsetHSL(0, -0.05, 0.14).getHex(),
-                appearance,
-                0.78,
-                0.48
-              );
+              mat = makeClothMat(contrastInnerHex, appearance, 0.78, 0.48);
             } else if (mName === 'Black' && meshName === 'Suit_Legs') {
               mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.36);
             } else if (meshName === 'Suit_Feet') {
-              mat = makeLeatherMat(0x1e293b, appearance, 0.48);
+              mat = makeLeatherMat(shoeLeatherHex, appearance, 0.48);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.8, 0.35);
             }
           } else {
-            if (
-              mName === 'LightBrown' ||
-              (mName === 'Suit' && meshName === 'Suit_Body') ||
-              mName === 'Tie'
-            ) {
+            if (mName === 'LightBrown' || (mName === 'Suit' && meshName === 'Suit_Body')) {
               mat = makeClothMat(shirtCol.getHex(), appearance, 0.8, 0.45);
+            } else if (mName === 'Tie') {
+              mat = makeClothMat(tieColorHex, appearance, 0.74, 0.52);
             } else if (mName === 'White' && meshName === 'Suit_Body') {
-              mat = makeClothMat(
-                shirtCol.clone().offsetHSL(0, -0.05, 0.08).getHex(),
-                appearance,
-                0.78,
-                0.45
-              );
+              mat = makeClothMat(contrastInnerHex, appearance, 0.78, 0.45);
             } else if (mName === 'LightBlue' || (mName === 'Suit' && meshName === 'Suit_Legs')) {
               mat = makeClothMat(pantsCol.getHex(), appearance, 0.84, 0.34);
             } else if (mName === 'Red_Dark' || mName === 'Black') {
-              mat = makeLeatherMat(0x27272a, appearance, 0.48);
+              mat = makeLeatherMat(shoeLeatherHex, appearance, 0.48);
             } else if (mName === 'Eye') {
               mat = new THREE.MeshPhysicalMaterial({
                 color: targetHex,
@@ -744,6 +751,10 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       'UpperArm.L': 'UpperArmL',
       LowerArmL: 'LowerArmL',
       'LowerArm.L': 'LowerArmL',
+      HandL: 'HandL',
+      'Hand.L': 'HandL',
+      WristL: 'HandL',
+      'Wrist.L': 'HandL',
       UpperArmR: 'UpperArmR',
       'UpperArm.R': 'UpperArmR',
       LowerArmR: 'LowerArmR',
@@ -752,6 +763,26 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       'Hand.R': 'HandR',
       WristR: 'HandR',
       'Wrist.R': 'HandR',
+      Index1R: 'Index1R',
+      'Index1.R': 'Index1R',
+      Index2R: 'Index2R',
+      'Index2.R': 'Index2R',
+      Middle1R: 'Middle1R',
+      'Middle1.R': 'Middle1R',
+      Middle2R: 'Middle2R',
+      'Middle2.R': 'Middle2R',
+      Ring1R: 'Ring1R',
+      'Ring1.R': 'Ring1R',
+      Ring2R: 'Ring2R',
+      'Ring2.R': 'Ring2R',
+      Pinky1R: 'Pinky1R',
+      'Pinky1.R': 'Pinky1R',
+      Pinky2R: 'Pinky2R',
+      'Pinky2.R': 'Pinky2R',
+      Thumb1R: 'Thumb1R',
+      'Thumb1.R': 'Thumb1R',
+      Thumb2R: 'Thumb2R',
+      'Thumb2.R': 'Thumb2R',
       UpperLegL: 'UpperLegL',
       'UpperLeg.L': 'UpperLegL',
       LowerLegL: 'LowerLegL',
@@ -1062,16 +1093,51 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       cupWater.position.y = 0.028;
       handCup.add(cupBody, cupRim, cupWater);
       if (bones['HandR']) {
-        cupBody.position.set(0, 0.05, 0.025);
-        cupRim.position.set(0, 0.092, 0.025);
-        cupWater.position.set(0, 0.078, 0.025);
+        cupBody.position.set(0, 0.048, 0.018);
+        cupRim.position.set(0, 0.09, 0.018);
+        cupWater.position.set(0, 0.076, 0.018);
       } else {
-        cupBody.position.set(0, 0.25, 0.025);
-        cupRim.position.set(0, 0.292, 0.025);
-        cupWater.position.set(0, 0.278, 0.025);
+        cupBody.position.set(0, 0.25, 0.018);
+        cupRim.position.set(0, 0.292, 0.018);
+        cupWater.position.set(0, 0.278, 0.018);
       }
       handCup.visible = false;
       cupAnchor.add(handCup);
+    }
+
+    let handFile: THREE.Group | undefined;
+    const fileAnchor = bones['HandR']?.bone || bones['LowerArmR']?.bone;
+    if (fileAnchor) {
+      handFile = new THREE.Group();
+      handFile.scale.setScalar(0.01);
+      // Keep handFile at (0,0,0) in 100x bone space; position child fileGrip inside 0.01-scaled meter space
+      const fileGrip = new THREE.Group();
+      if (bones['HandR']) {
+        fileGrip.position.set(0.004, 0.082, -0.022);
+      } else {
+        fileGrip.position.set(0.004, 0.285, -0.022);
+      }
+      fileGrip.rotation.set(Math.PI / 2, 0, 0);
+
+      const folderCover = new THREE.Mesh(
+        new THREE.BoxGeometry(0.21, 0.016, 0.27),
+        colorMat(0x0284c7, 0.48, 0.04)
+      );
+      folderCover.position.set(0.055, 0, -0.035);
+      const folderPages = new THREE.Mesh(
+        new THREE.BoxGeometry(0.185, 0.01, 0.245),
+        colorMat(0xf8fafc, 0.65, 0.0)
+      );
+      folderPages.position.set(0.061, 0.004, -0.027);
+      const folderTab = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.018, 0.028),
+        colorMat(0xf59e0b, 0.45, 0.02)
+      );
+      folderTab.position.set(0.12, 0.002, -0.175);
+      fileGrip.add(folderCover, folderPages, folderTab);
+      handFile.add(fileGrip);
+      handFile.visible = false;
+      fileAnchor.add(handFile);
     }
 
     const hScale = appearance.heightScale || 1;
@@ -1092,6 +1158,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       selectRing,
       hitMesh,
       handCup,
+      handFile,
       isSkinnedGlb: true,
       hipHeight: measuredHipH,
       heightScale: hScale,
@@ -1191,6 +1258,21 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   fallbackCup.position.set(0, -0.27, 0.045);
   fallbackCup.visible = false;
   rightArm.add(fallbackCup);
+  const fallbackFile = new THREE.Group();
+  const fbFolder = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.016, 0.26),
+    colorMat(0x0284c7, 0.5, 0.04)
+  );
+  const fbPages = new THREE.Mesh(
+    new THREE.BoxGeometry(0.175, 0.009, 0.235),
+    colorMat(0xf8fafc, 0.65, 0.0)
+  );
+  fbPages.position.set(0.005, 0.004, 0.008);
+  fallbackFile.add(fbFolder, fbPages);
+  fallbackFile.position.set(-0.01, -0.26, 0.045);
+  fallbackFile.rotation.set(0.15, 0, 1.25);
+  fallbackFile.visible = false;
+  rightArm.add(fallbackFile);
   torso.add(leftArm, rightArm);
 
   const headGroup = new THREE.Group();
@@ -1232,6 +1314,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     selectRing,
     hitMesh,
     handCup: fallbackCup,
+    handFile: fallbackFile,
     isSkinnedGlb: false,
     robePivot,
     torso,
@@ -1247,8 +1330,10 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
 const _charQuat = new THREE.Quaternion();
 const _swingQuat = new THREE.Quaternion();
+const _twistQuat = new THREE.Quaternion();
 const _localDeltaQuat = new THREE.Quaternion();
 const _axisX = new THREE.Vector3(1, 0, 0);
+const _axisY = new THREE.Vector3(0, 1, 0);
 const _axisZ = new THREE.Vector3(0, 0, 1);
 
 function applyCharEuler(ref: SkinnedBoneRef | undefined, rx: number, ry: number, rz: number) {
@@ -1260,19 +1345,26 @@ function applyCharEuler(ref: SkinnedBoneRef | undefined, rx: number, ry: number,
 }
 
 /**
- * Lowers T-pose arm cleanly to the side of the torso (dropZ) BEFORE applying
- * natural sagittal forward/backward swing around X (swingX).
+ * Lowers T-pose arm cleanly to the side of the torso (dropZ), swings forward/back (swingX),
+ * and optionally adducts inward across chest/midline (adductY).
  */
 function applyArmSagittal(
   ref: SkinnedBoneRef | undefined,
   dropZ: number,
-  swingX: number
+  swingX: number,
+  adductY = 0
 ) {
   if (!ref) return;
   _charQuat.setFromAxisAngle(_axisZ, dropZ);
   _swingQuat.setFromAxisAngle(_axisX, swingX);
   _swingQuat.multiply(_charQuat);
-  _localDeltaQuat.copy(ref.invWorldQ).multiply(_swingQuat).multiply(ref.restWorldQ);
+  if (Math.abs(adductY) > 1e-4) {
+    _twistQuat.setFromAxisAngle(_axisY, adductY);
+    _twistQuat.multiply(_swingQuat);
+    _localDeltaQuat.copy(ref.invWorldQ).multiply(_twistQuat).multiply(ref.restWorldQ);
+  } else {
+    _localDeltaQuat.copy(ref.invWorldQ).multiply(_swingQuat).multiply(ref.restWorldQ);
+  }
   ref.bone.quaternion.copy(ref.restQuat).multiply(_localDeltaQuat);
 }
 
@@ -1280,6 +1372,23 @@ function applyArmSagittal(
 function applyLocalElbowFlex(ref: SkinnedBoneRef | undefined, isLeft: boolean, flexRad: number) {
   if (!ref) return;
   _swingQuat.setFromAxisAngle(_axisZ, isLeft ? -flexRad : flexRad);
+  ref.bone.quaternion.copy(ref.restQuat).multiply(_swingQuat);
+}
+
+const _handEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+function applyLocalHandPose(
+  ref: SkinnedBoneRef | undefined,
+  extX: number,
+  pronY: number,
+  latZ = 0
+) {
+  if (!ref) return;
+  if (Math.abs(extX) < 1e-4 && Math.abs(pronY) < 1e-4 && Math.abs(latZ) < 1e-4) {
+    ref.bone.quaternion.copy(ref.restQuat);
+    return;
+  }
+  _handEuler.set(extX, pronY, latZ, 'YXZ');
+  _swingQuat.setFromEuler(_handEuler);
   ref.bone.quaternion.copy(ref.restQuat).multiply(_swingQuat);
 }
 
@@ -1304,6 +1413,12 @@ export function animateHumanoid3D(
     activeGait?: boolean;
     isDrinking?: boolean;
     drinkStage?: 'none' | 'filling' | 'sipping' | 'returning';
+    drinkElapsedMs?: number;
+    holdingFile?: boolean;
+    pickingFile?: boolean;
+    pickElapsedMs?: number;
+    placingFile?: boolean;
+    placeElapsedMs?: number;
     actorSeed?: number;
     seatedActivity?: 'idle' | 'typing' | 'writing' | 'glance' | 'rest';
     stairClimb?: number;
@@ -1328,6 +1443,12 @@ export function animateHumanoid3D(
     activeGait,
     isDrinking,
     drinkStage = isDrinking ? 'sipping' : 'none',
+    drinkElapsedMs,
+    holdingFile = false,
+    pickingFile = false,
+    pickElapsedMs,
+    placingFile = false,
+    placeElapsedMs,
     actorSeed = 0,
     seatedActivity = 'idle',
     stairClimb = 0,
@@ -1349,13 +1470,98 @@ export function animateHumanoid3D(
   const sit = THREE.MathUtils.clamp(sitBlend ?? (pose === 'seated' ? 1 : 0), 0, 1);
   const hScale = rig.heightScale ?? 1;
 
+  const smoothstep01 = (v: number) => {
+    const c = THREE.MathUtils.clamp(v, 0, 1);
+    return c * c * (3 - 2 * c);
+  };
+
+  // Continuous water-drinking kinematic parameters (fills cup -> reaches & lifts smoothly to mouth -> 2 sips -> lowers -> returns cup)
+  const activeDrink = !isMoving && sit < 0.2 && lie < 0.05 && drinkStage !== 'none';
+  let drinkRaise = 0; // 0: dispenser reach/ready, 1: cup rim at mouth
+  let drinkSipAmt = 0; // 0..1 gentle lip tilt during actual sips
+  let drinkFillReach = 0; // reaching toward spout / return tray
+  let drinkCupRx = 0;
+  let drinkCupRz = 0.42;
+
+  if (activeDrink) {
+    if (drinkElapsedMs !== undefined) {
+      if (drinkElapsedMs < 1450) {
+        drinkFillReach = smoothstep01(drinkElapsedMs / 380);
+        // At 1220..1450ms smoothly tuck hand in and grab cup off drip tray
+        const grab = smoothstep01((drinkElapsedMs - 1220) / 230);
+        drinkRaise = grab * 0.14;
+        drinkCupRx = -0.35 * (1 - grab);
+        drinkCupRz = THREE.MathUtils.lerp(0.18, 0.46, grab);
+      } else if (drinkElapsedMs < 3450) {
+        const u = THREE.MathUtils.clamp((drinkElapsedMs - 1450) / 2000, 0, 1);
+        const liftUp = smoothstep01(u / 0.24);
+        const lowerDown = u > 0.78 ? smoothstep01((u - 0.78) / 0.22) : 0;
+        drinkRaise = liftUp * (1 - lowerDown);
+
+        // Two unhurried, realistic sips at mouth level (first sip 0.24..0.48, pause, second sip 0.54..0.78)
+        const sip1 = u >= 0.24 && u <= 0.48 ? Math.sin(((u - 0.24) / 0.24) * Math.PI) : 0;
+        const sip2 = u >= 0.54 && u <= 0.78 ? Math.sin(((u - 0.54) / 0.24) * Math.PI) : 0;
+        drinkSipAmt = Math.max(sip1, sip2);
+
+        // Keep cup rim upright while lifting, then tilt slightly toward mouth during sip
+        drinkCupRx = THREE.MathUtils.lerp(0.0, -0.14 - drinkSipAmt * 0.24, drinkRaise);
+        drinkCupRz = THREE.MathUtils.lerp(0.46, -0.22 - drinkSipAmt * 0.08, drinkRaise);
+      } else {
+        const retU = THREE.MathUtils.clamp((drinkElapsedMs - 3450) / 400, 0, 1);
+        drinkFillReach = smoothstep01(retU < 0.7 ? retU / 0.7 : 1 - (retU - 0.7) / 0.3) * 0.85;
+        drinkCupRx = -0.25 * drinkFillReach;
+        drinkCupRz = 0.22;
+      }
+    } else if (drinkStage === 'filling') {
+      drinkFillReach = 0.85;
+    } else if (drinkStage === 'sipping') {
+      const wave = 0.5 + 0.5 * Math.sin(timeSec * 3.8);
+      drinkRaise = 0.92;
+      drinkSipAmt = wave;
+      drinkCupRx = -0.14 - wave * 0.24;
+      drinkCupRz = -0.22;
+    } else {
+      drinkFillReach = 0.65;
+    }
+  }
+
   if (rig.handCup) {
-    rig.handCup.visible =
-      !isMoving &&
-      sit < 0.2 &&
-      lie < 0.1 &&
+    const showCup =
+      activeDrink &&
       pose === 'standing' &&
-      (drinkStage === 'sipping' || drinkStage === 'returning');
+      (drinkStage === 'sipping' ||
+        (drinkStage === 'filling' && (drinkElapsedMs ?? 0) >= 1250) ||
+        (drinkStage === 'returning' && (drinkElapsedMs ?? 3500) < 3720));
+    rig.handCup.visible = showCup;
+    if (showCup) {
+      rig.handCup.rotation.set(drinkCupRx, 0, drinkCupRz);
+    }
+  }
+
+  const activePickFile = pickingFile && !activeDrink && sit < 0.25 && lie < 0.05;
+  const pickMs = pickElapsedMs ?? ((timeSec * 1000) % 1450);
+  const pickReach = activePickFile ? smoothstep01(pickMs / 500) : 0;
+  const pickGrasp = activePickFile && pickMs >= 550 ? smoothstep01((pickMs - 550) / 820) : 0;
+
+  const activePlaceFile = placingFile && !activeDrink && sit < 0.25 && lie < 0.05;
+  const placeMs = placeElapsedMs ?? 0;
+  const placeReach = activePlaceFile
+    ? placeMs < 520
+      ? smoothstep01(placeMs / 470)
+      : 1 - smoothstep01((placeMs - 520) / 380)
+    : 0;
+  const placeReleased = activePlaceFile && placeMs >= 520;
+  const placeFingerOpen = activePlaceFile && placeMs >= 450 ? smoothstep01((placeMs - 450) / 140) : 0;
+
+  if (rig.handFile) {
+    const showFile =
+      !activeDrink &&
+      sit < 0.25 &&
+      lie < 0.05 &&
+      ((activePickFile && pickMs >= 550) ||
+        (activePlaceFile && !placeReleased && holdingFile) ||
+        (holdingFile && !activePickFile && !activePlaceFile));
+    rig.handFile.visible = showFile;
   }
 
   if (rig.isSkinnedGlb && rig.bones) {
@@ -1431,21 +1637,24 @@ export function animateHumanoid3D(
     const hipH = rig.hipHeight ?? 0.63 * hScale;
     const sitHipY = THREE.MathUtils.clamp(0.06 + seatHeight + 0.068 * hScale - hipH, -0.52, 0.25);
 
-    const phase = gaitActive ? timeSec * 3.1 : walkPhase;
-    const stride = Math.sin(phase);
+    const phase = gaitActive ? timeSec * 4.2 : walkPhase;
+    const sinP = Math.sin(phase);
+    const stride = sinP + 0.075 * Math.sin(phase * 2);
+    const armStride = Math.sin(phase - 0.16);
     const cosP = Math.cos(phase);
     const cos2 = Math.cos(phase * 2);
     const climbAmt = THREE.MathUtils.clamp(stairClimb, 0, 1) * activeBlend;
     const descAmt = THREE.MathUtils.clamp(-stairClimb, 0, 1) * activeBlend;
     const stairEffort = Math.max(climbAmt, descAmt);
 
+    // Smooth human double-peaked COM vertical trajectory & subtle lateral stance transfer
     const standY =
       0.042 +
-      (cos2 - 1) * 0.012 * activeBlend +
-      0.024 * Math.abs(stride) * climbAmt -
+      (-cos2 * 0.015 - 0.008) * activeBlend +
+      0.024 * Math.abs(sinP) * climbAmt -
       0.014 * descAmt -
-      Math.abs(standWeight) * 0.008;
-    const standX = -cosP * 0.012 * activeBlend + standWeight * 0.036;
+      Math.abs(standWeight) * 0.007;
+    const standX = -cosP * 0.016 * activeBlend + standWeight * 0.036;
 
     const basePosX = standX;
     const basePosY = THREE.MathUtils.lerp(standY, sitHipY, sit);
@@ -1469,8 +1678,8 @@ export function animateHumanoid3D(
       hipTargetZ - hipH * Math.sin(theta)
     );
 
-    const walkHipY = -stride * 0.052 * activeBlend + standWeight * 0.038;
-    const walkHipZ = stride * 0.024 * activeBlend + standWeight * 0.055;
+    const walkHipY = -stride * 0.074 * activeBlend + standWeight * 0.038;
+    const walkHipZ = stride * 0.034 * activeBlend + standWeight * 0.055;
     const sitHipSway = Math.sin(t * 0.33) * 0.014 * (seatedActivity === 'idle' ? 1 : 0.4);
     const baseHipY = walkHipY * (1 - sit);
     const baseHipZ = walkHipZ * (1 - sit) + sitHipSway * sit;
@@ -1546,14 +1755,23 @@ export function animateHumanoid3D(
       sitElbowRFlex += smoothGest * 0.36;
     }
 
+    const pickTorsoLean = activePickFile ? THREE.MathUtils.lerp(0.095, 0.025, pickGrasp) * pickReach : 0;
+    const placeTorsoLean = activePlaceFile ? 0.23 * placeReach : 0;
     const torsoStandX =
-      -0.035 * activeBlend +
+      0.025 * activeBlend +
       0.13 * climbAmt -
       0.055 * descAmt -
       pushAmt * 0.065 +
+      pickTorsoLean +
+      placeTorsoLean +
       breath * 0.65;
-    const torsoStandY = stride * 0.04 * activeBlend - pushAmt * 0.09 - standWeight * 0.05;
-    const torsoStandZ = -stride * 0.014 * activeBlend - standWeight * 0.042;
+    const torsoStandY =
+      stride * 0.052 * activeBlend -
+      pushAmt * 0.09 -
+      standWeight * 0.05 +
+      (activePickFile ? -0.05 * pickReach * (1 - pickGrasp * 0.7) : 0) +
+      (activePlaceFile ? -0.1 * placeReach : 0);
+    const torsoStandZ = -stride * 0.018 * activeBlend - standWeight * 0.042;
     const baseTorsoX = THREE.MathUtils.lerp(torsoStandX, sitTorsoX, sit);
     const baseTorsoY = THREE.MathUtils.lerp(torsoStandY, sitTorsoY, sit);
     const baseTorsoZ = THREE.MathUtils.lerp(torsoStandZ, sitTorsoZ, sit);
@@ -1565,12 +1783,22 @@ export function animateHumanoid3D(
     );
 
     const baseChestX = THREE.MathUtils.lerp(
-      0.015 * activeBlend + 0.05 * climbAmt - 0.02 * descAmt - pushAmt * 0.04 + breath,
+      0.018 * activeBlend +
+        0.05 * climbAmt -
+        0.02 * descAmt -
+        pushAmt * 0.04 +
+        pickTorsoLean * 0.6 +
+        placeTorsoLean * 0.45 +
+        breath,
       sitChestX,
       sit
     );
-    const baseChestY = THREE.MathUtils.lerp(stride * 0.048 * activeBlend - pushAmt * 0.08 - standWeight * 0.03, sitTorsoY * 0.45, sit);
-    const baseChestZ = THREE.MathUtils.lerp(-stride * 0.018 * activeBlend - standWeight * 0.025, -sitTorsoZ * 0.3, sit);
+    const baseChestY = THREE.MathUtils.lerp(
+      stride * 0.068 * activeBlend - pushAmt * 0.08 - standWeight * 0.03 + (activePlaceFile ? -0.06 * placeReach : 0),
+      sitTorsoY * 0.45,
+      sit
+    );
+    const baseChestZ = THREE.MathUtils.lerp(-stride * 0.022 * activeBlend - standWeight * 0.025, -sitTorsoZ * 0.3, sit);
     applyCharEuler(
       b['Chest'],
       THREE.MathUtils.lerp(baseChestX, 0.015 + lieBreath * 0.03, lie),
@@ -1579,8 +1807,15 @@ export function animateHumanoid3D(
     );
 
     const restShrug = seatedActivity === 'rest' ? Math.sin(t * 1.1) * 0.022 * sit * (1 - lie) : 0;
-    const baseShoulderLY = -stride * 0.04 * activeBlend * (1 - sit);
-    const baseShoulderRY = (-stride * 0.04 * activeBlend - pushAmt * 0.12) * (1 - sit);
+    const baseShoulderLY = -stride * 0.05 * activeBlend * (1 - sit);
+    const baseShoulderRY =
+      activeDrink
+        ? THREE.MathUtils.lerp(0.16 * drinkFillReach, 0.28 + drinkSipAmt * 0.03, drinkRaise)
+        : activePickFile
+          ? THREE.MathUtils.lerp(0.24, 0.12, pickGrasp) * pickReach
+          : activePlaceFile
+            ? 0.18 * placeReach
+            : (-stride * 0.05 * activeBlend - pushAmt * 0.12) * (1 - sit);
     applyCharEuler(
       b['ShoulderL'],
       0,
@@ -1591,7 +1826,11 @@ export function animateHumanoid3D(
       b['ShoulderR'],
       0,
       THREE.MathUtils.lerp(baseShoulderRY, 0, lie),
-      THREE.MathUtils.lerp(0.04 + restShrug, 0.045 + lieBreath * 0.015, lie)
+      THREE.MathUtils.lerp(
+        activeDrink || activePickFile || activePlaceFile ? -0.04 : 0.04 + restShrug,
+        0.045 + lieBreath * 0.015,
+        lie
+      )
     );
 
     // Legs transition seamlessly between gait, stance, grounded chair sit (or low floor mat sit), and relaxed lying
@@ -1612,26 +1851,35 @@ export function animateHumanoid3D(
     const sitKneeAngle = THREE.MathUtils.lerp(1.34, 0.62, lowMatFactor);
     const sitFootAngle = THREE.MathUtils.lerp(0.06, 0.28, lowMatFactor);
 
-    const swing = stride * 0.33 * activeBlend * (1 - 0.22 * descAmt);
-    const stairThighLiftL = Math.max(0, stride) * 0.36 * climbAmt;
-    const stairThighLiftR = Math.max(0, -stride) * 0.36 * climbAmt;
+    const swing = stride * 0.35 * activeBlend * (1 - 0.22 * descAmt);
+    const stairThighLiftL = Math.max(0, cosP) * 0.34 * climbAmt + Math.max(0, sinP) * 0.14 * climbAmt;
+    const stairThighLiftR = Math.max(0, -cosP) * 0.34 * climbAmt + Math.max(0, -sinP) * 0.14 * climbAmt;
     const stairKneeL =
-      Math.max(0, stride) * 0.48 * climbAmt + (0.24 + Math.max(0, -stride) * 0.18) * descAmt;
+      Math.max(0, cosP) * 0.42 * climbAmt + (0.24 + Math.max(0, -cosP) * 0.16) * descAmt;
     const stairKneeR =
-      Math.max(0, -stride) * 0.48 * climbAmt + (0.24 + Math.max(0, stride) * 0.18) * descAmt;
-    const stairFootL = -Math.max(0, stride) * 0.16 * climbAmt + 0.14 * descAmt;
-    const stairFootR = -Math.max(0, -stride) * 0.16 * climbAmt + 0.14 * descAmt;
-    const idleKneeL = Math.max(0, -standWeight) * 0.12;
-    const idleKneeR = Math.max(0, standWeight) * 0.12;
+      Math.max(0, -cosP) * 0.42 * climbAmt + (0.24 + Math.max(0, cosP) * 0.16) * descAmt;
+    const stairFootL = -Math.max(0, cosP) * 0.16 * climbAmt + 0.14 * descAmt;
+    const stairFootR = -Math.max(0, -cosP) * 0.16 * climbAmt + 0.14 * descAmt;
+
+    // Anatomical human gait knee flexion:
+    // 1) Swing-phase clearance peaks during mid-swing (cosP > 0 for L, cosP < 0 for R)
+    // 2) Gentle loading-response knee yield cushions early stance after heel strike
+    const swingClearL = Math.pow(Math.max(0, cosP), 0.9) * 0.70;
+    const loadYieldL = Math.max(0, sinP) * Math.max(0, -cosP) * 0.28;
+    const swingClearR = Math.pow(Math.max(0, -cosP), 0.9) * 0.70;
+    const loadYieldR = Math.max(0, -sinP) * Math.max(0, cosP) * 0.28;
+
+    const idleKneeL = Math.max(0, -standWeight) * 0.13 + 0.04 * standIdleAmt;
+    const idleKneeR = Math.max(0, standWeight) * 0.13 + 0.04 * standIdleAmt;
     const standKneeL =
       0.04 +
       idleKneeL +
-      (Math.max(0, -cosP) * 0.56 + Math.max(0, stride) * 0.12) * activeBlend +
+      (swingClearL + loadYieldL) * activeBlend +
       stairKneeL;
     const standKneeR =
       0.04 +
       idleKneeR +
-      (Math.max(0, cosP) * 0.56 + Math.max(0, -stride) * 0.12) * activeBlend +
+      (swingClearR + loadYieldR) * activeBlend +
       stairKneeR;
 
     // During reclining (lie 0->1), swing knees slightly upward and extend shins ahead of full recline
@@ -1684,13 +1932,20 @@ export function animateHumanoid3D(
       0
     );
 
+    // Ankle dorsiflexion during swing & heel-strike (-), plantarflexion push-off at terminal stance (+)
+    const ankleSwingL =
+      (-Math.max(0, cosP) * 0.14 - Math.max(0, sinP) * 0.08 + Math.max(0, -sinP) * 0.18) *
+      activeBlend;
+    const ankleSwingR =
+      (-Math.max(0, -cosP) * 0.14 - Math.max(0, -sinP) * 0.08 + Math.max(0, sinP) * 0.18) *
+      activeBlend;
     const baseFootLX = THREE.MathUtils.lerp(
-      -stride * 0.17 * activeBlend + stairFootL - idleKneeL * 0.35,
+      ankleSwingL + stairFootL - idleKneeL * 0.35,
       sitFootAngle + toeTap,
       sit
     );
     const baseFootRX = THREE.MathUtils.lerp(
-      stride * 0.17 * activeBlend + stairFootR - idleKneeR * 0.35,
+      ankleSwingR + stairFootR - idleKneeR * 0.35,
       sitFootAngle,
       sit
     );
@@ -1707,79 +1962,189 @@ export function animateHumanoid3D(
       0
     );
 
-    // Arms blend smoothly across standing, door push, drinking, seated lap/desk, and relaxed lying
+    // Arms blend smoothly across relaxed stance, human walk swing, door push, drinking, file shelf pick/carry, seated, and lying
     const standArmGest = Math.max(0, (Math.sin(t * 0.31 + 0.9) - 0.62) / 0.38) * standIdleAmt;
     const smoothStandGest = standArmGest * standArmGest * (3 - 2 * standArmGest);
 
-    const armSwing = stride * 0.24 * activeBlend * (1 + 0.24 * stairEffort);
-    const armStandL = armSwing - 0.025 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03;
+    const armSwing = armStride * 0.27 * activeBlend * (1 + 0.22 * stairEffort);
+    const carryFileArm = holdingFile && !activePickFile && !activePlaceFile && sit < 0.2 && lie < 0.05;
+    const armStandL =
+      armSwing - 0.035 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03;
     const armStandRBase =
-      -armSwing - 0.025 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.18;
-    const armStandR = THREE.MathUtils.lerp(armStandRBase, -1.06, pushAmt);
-    const activeDrink = !isMoving && sit < 0.2 && lie < 0.05 && drinkStage !== 'none';
-    const drinkSip = drinkStage === 'sipping' ? 0.5 + 0.5 * Math.sin(timeSec * 4.2) : 0;
+      -armSwing - 0.035 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.16;
 
+    const pickArmX = THREE.MathUtils.lerp(
+      THREE.MathUtils.lerp(-0.18, -1.26, pickReach),
+      -0.46,
+      pickGrasp
+    );
+    const pickArmAdduct = THREE.MathUtils.lerp(
+      THREE.MathUtils.lerp(0.0, 0.14, pickReach),
+      0.24,
+      pickGrasp
+    );
+    const pickElbowFlex = THREE.MathUtils.lerp(
+      THREE.MathUtils.lerp(0.24, 0.32, pickReach),
+      1.16,
+      pickGrasp
+    );
+
+    const placeArmX = !placeReleased
+      ? THREE.MathUtils.lerp(-0.44, -0.78, placeReach)
+      : THREE.MathUtils.lerp(-0.04, -0.78, placeReach);
+    const placeArmAdduct = !placeReleased
+      ? THREE.MathUtils.lerp(0.24, 0.15, placeReach)
+      : 0.15 * placeReach;
+    const placeElbowFlex = !placeReleased
+      ? THREE.MathUtils.lerp(1.16, 0.36, placeReach)
+      : THREE.MathUtils.lerp(0.24, 0.36, placeReach);
+
+    const armStandR = activePickFile
+      ? pickArmX
+      : activePlaceFile
+        ? placeArmX
+        : carryFileArm
+          ? -0.44 + armSwing * 0.14
+          : THREE.MathUtils.lerp(armStandRBase, -1.06, pushAmt);
+
+    // Ready/Reach drink arm angles solved from character GLB skeleton -> exact mouth alignment at drinkRaise = 1
+    const drinkArmReadyX = THREE.MathUtils.lerp(-0.66, -0.92, drinkFillReach);
+    const drinkArmSipX = -1.14 - drinkSipAmt * 0.04;
     const rightArmSwingX = activeDrink
-      ? drinkStage === 'filling'
-        ? -0.58 - Math.sin(timeSec * 2.2) * 0.04
-        : drinkStage === 'sipping'
-          ? -0.68 - drinkSip * 0.24
-          : -0.48
+      ? THREE.MathUtils.lerp(drinkArmReadyX, drinkArmSipX, drinkRaise)
       : THREE.MathUtils.lerp(armStandR, sitArmRSwing, sit);
 
-    const standElbowR = THREE.MathUtils.lerp(
-      0.14 + smoothStandGest * 0.44 + Math.max(0, stride) * 0.22 * activeBlend,
-      0.42,
-      pushAmt
-    );
+    const rightArmAdductY = activeDrink
+      ? THREE.MathUtils.lerp(0.14 * drinkFillReach + 0.14 * (1 - drinkFillReach), 0.49 + drinkSipAmt * 0.03, drinkRaise)
+      : activePickFile
+        ? pickArmAdduct
+        : activePlaceFile
+          ? placeArmAdduct
+          : carryFileArm
+            ? 0.24
+            : 0;
+
+    const rightArmDropZ = activeDrink
+      ? THREE.MathUtils.lerp(1.45, 1.38, drinkRaise)
+      : THREE.MathUtils.lerp(1.43, 1.42, sit);
+
+    const standElbowR = activePickFile
+      ? pickElbowFlex
+      : activePlaceFile
+        ? placeElbowFlex
+        : carryFileArm
+          ? 1.16 + Math.sin(walkPhase) * 0.03 * activeBlend
+          : THREE.MathUtils.lerp(
+              0.24 + smoothStandGest * 0.36 + Math.max(0, armStride) * 0.26 * activeBlend,
+              0.46,
+              pushAmt
+            );
+    const drinkElbowReady = THREE.MathUtils.lerp(1.38, 0.64, drinkFillReach);
+    const drinkElbowSip = 2.22 + drinkSipAmt * 0.06;
     const rightElbowFlex = activeDrink
-      ? drinkStage === 'filling'
-        ? 0.58
-        : drinkStage === 'sipping'
-          ? 1.2 + drinkSip * 0.28
-          : 0.44
+      ? THREE.MathUtils.lerp(drinkElbowReady, drinkElbowSip, drinkRaise)
       : THREE.MathUtils.lerp(standElbowR, sitElbowRFlex, sit);
 
-    const baseArmDropL = THREE.MathUtils.lerp(-1.49, -1.43, sit);
-    const baseArmDropR = THREE.MathUtils.lerp(1.49, 1.43, sit);
+    const baseArmDropL = THREE.MathUtils.lerp(-1.43, -1.42, sit);
     const baseArmSwingL = THREE.MathUtils.lerp(armStandL, sitArmLSwing, sit);
 
     applyArmSagittal(
       b['UpperArmL'],
       THREE.MathUtils.lerp(baseArmDropL, -1.41, lie),
-      THREE.MathUtils.lerp(baseArmSwingL, -0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16, lie)
+      THREE.MathUtils.lerp(baseArmSwingL, -0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16, lie),
+      0
     );
     applyArmSagittal(
       b['UpperArmR'],
-      THREE.MathUtils.lerp(baseArmDropR, 1.41, lie),
-      THREE.MathUtils.lerp(rightArmSwingX, -0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16, lie)
+      THREE.MathUtils.lerp(rightArmDropZ, 1.41, lie),
+      THREE.MathUtils.lerp(rightArmSwingX, -0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16, lie),
+      THREE.MathUtils.lerp(rightArmAdductY, 0, lie)
     );
 
-    const elbowStandL = 0.14 + Math.max(0, -stride) * 0.22 * activeBlend + Math.sin(t * 0.47) * 0.03 * standIdleAmt;
+    const elbowStandL =
+      0.24 + Math.max(0, -armStride) * 0.26 * activeBlend + Math.sin(t * 0.47) * 0.03 * standIdleAmt;
     const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit);
     applyLocalElbowFlex(b['LowerArmL'], true, THREE.MathUtils.lerp(baseElbowL, 0.26 + armRelaxL, lie));
     applyLocalElbowFlex(b['LowerArmR'], false, THREE.MathUtils.lerp(rightElbowFlex, 0.28 + armRelaxR, lie));
 
-    // Natural head & neck glance
+    // Right wrist & finger curl for genuine file grasp, carry, and flat desk placement
+    let handExtX = 0;
+    let handPronY = 0;
+    if (lie < 0.05 && sit < 0.2 && !activeDrink) {
+      if (activePickFile) {
+        handPronY = THREE.MathUtils.lerp(-0.55 * pickReach, -0.34, pickGrasp);
+      } else if (activePlaceFile) {
+        handExtX = !placeReleased ? 0.66 * placeReach : 0.18 * placeReach;
+        handPronY = !placeReleased ? THREE.MathUtils.lerp(-0.34, -1.45, placeReach) : -0.8 * placeReach;
+      } else if (carryFileArm) {
+        handPronY = -0.34;
+      }
+    }
+    applyLocalHandPose(b['HandR'], handExtX, handPronY, 0);
+
+    const gripAmt =
+      lie < 0.05 && sit < 0.2 && !activeDrink
+        ? activePickFile
+          ? pickGrasp > 0 || pickMs >= 500
+            ? 1
+            : 0
+          : activePlaceFile
+            ? 1 - placeFingerOpen
+            : carryFileArm
+              ? 1
+              : 0
+        : 0;
+    const f1Curl = -0.68 * gripAmt;
+    const f2Curl = -0.56 * gripAmt;
+    applyLocalHandPose(b['Index1R'], f1Curl, 0, 0);
+    applyLocalHandPose(b['Index2R'], f2Curl, 0, 0);
+    applyLocalHandPose(b['Middle1R'], f1Curl, 0, 0);
+    applyLocalHandPose(b['Middle2R'], f2Curl, 0, 0);
+    applyLocalHandPose(b['Ring1R'], f1Curl, 0, 0);
+    applyLocalHandPose(b['Ring2R'], f2Curl, 0, 0);
+    applyLocalHandPose(b['Pinky1R'], f1Curl, 0, 0);
+    applyLocalHandPose(b['Pinky2R'], f2Curl, 0, 0);
+    applyLocalHandPose(b['Thumb1R'], 0.14 * gripAmt, 0.22 * gripAmt, 0.34 * gripAmt);
+    applyLocalHandPose(b['Thumb2R'], 0.18 * gripAmt, 0, 0.24 * gripAmt);
+
+    // Natural head stabilization during walk & focused gaze during shelf-pick / file placement / drinking
     const standYaw =
       (Math.sin(t * 0.51) * 0.16 + Math.sin(t * 0.21 + 0.9) * 0.11) *
-      (1 - activeBlend * 0.62) *
+      (1 - activeBlend * 0.68) *
       (1 - pushAmt);
-    const standPitch = (Math.sin(t * 0.78) * 0.032 + Math.sin(t * 0.29) * 0.02) * (1 - activeBlend * 0.4);
+    const standPitch = activePickFile
+      ? THREE.MathUtils.lerp(-0.07, 0.04, pickGrasp) * pickReach
+      : activePlaceFile
+        ? 0.24 * placeReach
+        : (Math.sin(t * 0.78) * 0.032 + Math.sin(t * 0.29) * 0.02) * (1 - activeBlend * 0.45) -
+          cos2 * 0.016 * activeBlend;
 
     const lookYaw = activeDrink
       ? 0
-      : THREE.MathUtils.lerp(standYaw, sitLookYaw, sit);
+      : activePickFile
+        ? Math.sin(pickReach * Math.PI) * 0.05
+        : activePlaceFile
+          ? -0.06 * placeReach
+          : THREE.MathUtils.lerp(standYaw, sitLookYaw, sit);
+    const drinkHeadPitch =
+      THREE.MathUtils.lerp(0.05 * drinkFillReach, -0.09 - drinkSipAmt * 0.11, drinkRaise);
+    const drinkNeckPitch =
+      THREE.MathUtils.lerp(0.02 * drinkFillReach, -0.04 - drinkSipAmt * 0.04, drinkRaise);
     const lookPitch = activeDrink
-      ? drinkStage === 'filling'
-        ? 0.1
-        : drinkStage === 'sipping'
-          ? -0.15 * drinkSip
-          : 0.06
+      ? drinkHeadPitch
       : THREE.MathUtils.lerp(standPitch, sitLookPitch, sit);
-    const headTiltZ = activeDrink ? 0 : Math.sin(t * 0.37) * 0.035 * (1 - activeBlend * 0.7) * (1 - pushAmt);
+    const headTiltZ =
+      activeDrink || activePickFile || activePlaceFile
+        ? 0
+        : Math.sin(t * 0.37) * 0.035 * (1 - activeBlend * 0.7) * (1 - pushAmt);
 
-    const baseNeckX = THREE.MathUtils.lerp(0.01 * activeBlend, -0.025 + sitLookPitch * 0.25, sit);
+    const baseNeckX = activeDrink
+      ? drinkNeckPitch
+      : THREE.MathUtils.lerp(
+          0.012 * activeBlend + (activePlaceFile ? 0.1 * placeReach : 0),
+          -0.025 + sitLookPitch * 0.25,
+          sit
+        );
     const baseHeadX = THREE.MathUtils.lerp(lookPitch, -0.02 + lookPitch, sit);
     applyCharEuler(
       b['Neck'],
@@ -1843,14 +2208,21 @@ export function animateHumanoid3D(
   rig.bodyPivot.position.set(0, 0.05, 0);
   const fbClimb = THREE.MathUtils.clamp(stairClimb, 0, 1);
   const fbDesc = THREE.MathUtils.clamp(-stairClimb, 0, 1);
-  const swing = isMoving ? Math.sin(walkPhase) * (0.46 + 0.14 * fbClimb - 0.1 * fbDesc) : 0;
-  rig.leftLeg.rotation.x = swing - (isMoving ? Math.max(0, -Math.sin(walkPhase)) * 0.28 * fbClimb : 0);
-  rig.rightLeg.rotation.x = -swing - (isMoving ? Math.max(0, Math.sin(walkPhase)) * 0.28 * fbClimb : 0);
-  rig.leftShin.rotation.x = isMoving ? Math.max(0, -Math.sin(walkPhase)) * 0.45 * fbClimb + 0.22 * fbDesc : 0;
-  rig.rightShin.rotation.x = isMoving ? Math.max(0, Math.sin(walkPhase)) * 0.45 * fbClimb + 0.22 * fbDesc : 0;
-  rig.torso.rotation.x = isMoving ? 0.1 * fbClimb - 0.04 * fbDesc : 0;
+  const swing = isMoving ? Math.sin(walkPhase) * (0.42 + 0.12 * fbClimb - 0.1 * fbDesc) : 0;
+  const fbCos = Math.cos(walkPhase);
+  rig.leftLeg.rotation.x = swing - (isMoving ? Math.max(0, fbCos) * 0.24 * fbClimb : 0);
+  rig.rightLeg.rotation.x = -swing - (isMoving ? Math.max(0, -fbCos) * 0.24 * fbClimb : 0);
+  rig.leftShin.rotation.x = isMoving ? Math.max(0, fbCos) * (0.58 + 0.25 * fbClimb) + 0.22 * fbDesc : 0.04;
+  rig.rightShin.rotation.x = isMoving ? Math.max(0, -fbCos) * (0.58 + 0.25 * fbClimb) + 0.22 * fbDesc : 0.04;
+  rig.torso.rotation.x = isMoving ? 0.1 * fbClimb - 0.04 * fbDesc : activePlaceFile ? 0.18 * placeReach : 0;
   rig.leftArm.rotation.x = -swing * 0.65;
-  rig.rightArm.rotation.x = THREE.MathUtils.lerp(swing * 0.65, -0.95, THREE.MathUtils.clamp(doorPush, 0, 1));
+  rig.rightArm.rotation.x = activePickFile
+    ? -0.92
+    : activePlaceFile
+      ? THREE.MathUtils.lerp(-0.45, -1.05, placeReach)
+      : holdingFile && !activePickFile
+        ? -0.45
+        : THREE.MathUtils.lerp(swing * 0.65, -0.95, THREE.MathUtils.clamp(doorPush, 0, 1));
   rig.headGroup.rotation.y = Math.sin(t * 0.5) * 0.14;
 }
 

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import {
   CLINIC_FLOOR_ELEV,
+  RECEPTION_CHAIR_LOCAL_X,
+  RECEPTION_CHAIR_LOCAL_Z,
   SOLAR_ZONE,
   WORLD_TREES,
   WorldTreeDef,
@@ -72,6 +74,10 @@ export interface WaterCoolerRigMeta {
   bubble: THREE.Mesh;
 }
 
+export interface ReceptionDeskRigMeta {
+  deskFile: THREE.Group;
+}
+
 export interface ClinicWorldHandle {
   group: THREE.Group;
   doors: ClinicDoorHandle[];
@@ -113,8 +119,10 @@ export function updateDoors3D(
       const canOpen = !door.requiredRoomId || unlockedRooms.has(door.requiredRoomId);
       if (canOpen) {
         if (door.manualPush) {
-          // Interior hinged doors stay closed until a walking person arrives right at the leaf and physically pushes through
+          // Interior hinged doors start yielding smoothly as a person reaches to push (~0.80m),
+          // swing smoothly clear as they cross the threshold, then settle closed via hydraulic closer
           let pushed = false;
+          let pushTarget = 0;
           let pushDir = door.swingSign ?? 1;
 
           for (const actor of actors) {
@@ -122,42 +130,42 @@ export function updateDoors3D(
             const dz = actor.z - door.centerZ;
             const perpDist = door.kind === 'swing_z' ? Math.abs(dx) : Math.abs(dz);
             const alongDist = door.kind === 'swing_z' ? Math.abs(dz) : Math.abs(dx);
-            if (alongDist > 0.52) continue;
+            if (alongDist > 0.62 || perpDist > 0.82) continue;
 
             const speed = Math.hypot(actor.vx, actor.vz);
             const approachDot =
               door.kind === 'swing_z'
-                ? -Math.sign(dx || 1) * actor.vx
-                : -Math.sign(dz || 1) * actor.vz;
-            const headingIntoDoor = actor.isMoving && speed > 0.08 && approachDot > 0.05;
+                ? -Math.sign(dx || 1) * (actor.vx / (speed || 1))
+                : -Math.sign(dz || 1) * (actor.vz / (speed || 1));
+            const headingIntoDoor = actor.isMoving && speed > 0.08 && approachDot > 0.15;
 
-            // Opens right as actor's hand/body reaches physical contact (~0.48m), or mid-stride inside jamb (~0.30m)
-            if ((perpDist <= 0.48 && headingIntoDoor) || (perpDist <= 0.30 && (actor.isMoving || door.openAmount > 0.18))) {
+            if (headingIntoDoor && perpDist <= 0.82) {
               pushed = true;
-              // Latch swing direction away from the person pushing (so door opens in direction of travel)
-              if (door.openAmount < 0.14) {
+              const proximity = THREE.MathUtils.clamp((0.82 - perpDist) / 0.38, 0.35, 1.0);
+              pushTarget = Math.max(pushTarget, proximity);
+              if (door.openAmount < 0.18) {
                 if (door.kind === 'swing_z') {
                   const travelX = Math.abs(actor.vx) > 0.05 ? Math.sign(actor.vx) : -Math.sign(dx || -1);
-                  // swing_z: rotation.y = -ang opens toward -X, +ang opens toward +X
                   pushDir = travelX >= 0 ? -1 : 1;
                 } else {
                   const travelZ = Math.abs(actor.vz) > 0.05 ? Math.sign(actor.vz) : -Math.sign(dz || -1);
-                  // swing_x: rotation.y = +ang opens toward -Z, -ang opens toward +Z
                   pushDir = travelZ >= 0 ? -1 : 1;
                 }
                 door.swingSign = pushDir;
               }
-              break;
+            } else if (perpDist <= 0.44 && (actor.isMoving || door.openAmount > 0.16)) {
+              pushed = true;
+              pushTarget = 1.0;
             }
           }
 
           if (pushed) {
-            target = 1;
+            target = Math.max(door.openAmount, pushTarget);
             isOpeningNow = true;
-            door.holdTimer = 0.14;
+            door.holdTimer = Math.max(door.holdTimer ?? 0, 0.38);
           } else if ((door.holdTimer ?? 0) > 0) {
             door.holdTimer = Math.max(0, (door.holdTimer ?? 0) - dt);
-            target = Math.max(door.openAmount, 0.72);
+            target = Math.max(door.openAmount * 0.96, 0.86);
           } else {
             target = 0;
           }
@@ -174,36 +182,45 @@ export function updateDoors3D(
       }
     }
 
-    // Interior hinged doors swing open crisply upon hand push, then glide shut naturally via hydraulic closer
+    // Smooth inertia curve: calm hydraulic open/close without robotic snap
     const dampRate = door.manualPush
       ? isOpeningNow
-        ? 15.0
+        ? 8.2
         : target > 0.05
-          ? 4.0
-          : 3.0
-      : 8.0;
+          ? 3.8
+          : 2.6
+      : isOpeningNow
+        ? 6.4
+        : 3.8;
     door.openAmount = THREE.MathUtils.damp(door.openAmount, target, dampRate, dt);
-    if (!isOpeningNow && target === 0 && door.openAmount < 0.008) {
+    if (!isOpeningNow && target === 0 && door.openAmount < 0.004) {
       door.openAmount = 0;
     }
 
+    // Soft S-curve easing for hinged leaf feel
+    const easedSwing =
+      door.openAmount <= 0
+        ? 0
+        : door.openAmount * door.openAmount * (3 - 2 * door.openAmount) * 0.25 +
+          door.openAmount * 0.75;
+
     if (door.kind === 'sliding_z') {
       const base = door.baseOffset ?? 0.47;
-      const slide = door.openAmount * 0.78;
+      const slide = door.openAmount * 0.82;
       door.leftLeaf.position.z = -base - slide;
       if (door.rightLeaf) {
         door.rightLeaf.position.z = base + slide;
       }
     } else if (door.kind === 'swing_z') {
       const sign = door.swingSign ?? 1;
-      const ang = door.openAmount * 1.44 * sign;
+      const ang = easedSwing * 1.46 * sign;
       door.leftLeaf.rotation.y = -ang;
       if (door.rightLeaf) {
         door.rightLeaf.rotation.y = ang;
       }
     } else if (door.kind === 'swing_x') {
       const sign = door.swingSign ?? 1;
-      const ang = door.openAmount * 1.44 * sign;
+      const ang = easedSwing * 1.46 * sign;
       door.leftLeaf.rotation.y = ang;
       if (door.rightLeaf) {
         door.rightLeaf.rotation.y = -ang;
@@ -1884,7 +1901,7 @@ export function buildClinicWorld3D(
     kind: 'sliding_z',
     centerX: 22.0,
     centerZ: 15.0,
-    triggerRadius: 1.45,
+    triggerRadius: 1.85,
     openAmount: 0,
     leftLeaf: mainLeftSlide,
     rightLeaf: mainRightSlide,
@@ -3023,78 +3040,117 @@ export function createCatalogMesh3D(
     }
 
     case 'reception_desk': {
+      const deskFile = new THREE.Group();
+      deskFile.position.set(RECEPTION_CHAIR_LOCAL_X - 0.3, 0.728, 0.08);
+      deskFile.rotation.y = 0.18;
+      const dfCover = new THREE.Mesh(
+        new THREE.BoxGeometry(0.21, 0.014, 0.27),
+        makeMat({ color: 0x0284c7, roughness: 0.48 })
+      );
+      dfCover.userData.noCastShadow = true;
+      const dfSheets = new THREE.Mesh(
+        new THREE.BoxGeometry(0.185, 0.009, 0.245),
+        whiteBody
+      );
+      dfSheets.position.set(0.006, 0.008, 0.008);
+      dfSheets.userData.noCastShadow = true;
+      const dfTab = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.016, 0.028),
+        makeMat({ color: 0xf59e0b, roughness: 0.45 })
+      );
+      dfTab.position.set(0.065, 0.002, -0.14);
+      dfTab.userData.noCastShadow = true;
+      deskFile.add(dfCover, dfSheets, dfTab);
+      deskFile.visible = false;
+
       const glbDesk = glbRegistry.cloneNormalized('furn_desk', {
-        maxFootprint: { w: 1.72, d: 0.72 },
-        targetHeight: 0.74,
+        stretchToBox: { w: 1.66, h: 0.72, d: 0.54 },
+        rotY: Math.PI,
       });
       if (glbDesk) {
-        glbDesk.position.set(0, 0, 0.1);
+        glbDesk.position.set(0, 0, 0.21);
         inner.add(glbDesk);
         const ledApron = box(
           1.45,
-          0.04,
-          0.04,
+          0.036,
+          0.036,
           makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.85 }),
           0,
-          0.08,
-          0.42
+          0.075,
+          0.47
         );
         ledApron.userData.noCastShadow = true;
         const mon = glbRegistry.cloneNormalized('furn_monitor', {
-          targetHeight: 0.34,
+          targetHeight: 0.29,
           rotY: Math.PI,
         });
         if (mon) {
-          mon.position.set(0.18, 0.73, 0.08);
+          mon.position.set(RECEPTION_CHAIR_LOCAL_X, 0.715, 0.14);
           inner.add(mon);
         }
         const lamp = glbRegistry.cloneNormalized('furn_lamp_desk', {
-          targetHeight: 0.3,
+          targetHeight: 0.26,
           rotY: -0.6,
         });
         if (lamp) {
-          lamp.position.set(-0.56, 0.73, 0.18);
+          lamp.position.set(0.56, 0.715, 0.22);
           inner.add(lamp);
         }
+        inner.add(deskFile);
+
         const chair = glbRegistry.cloneNormalized('furn_chair_desk', {
-          targetHeight: 0.86,
-          rotY: Math.PI,
+          targetHeight: 0.8,
+          rotY: 0,
         });
         if (chair) {
-          chair.position.set(-0.1, 0, -0.42);
+          chair.position.set(RECEPTION_CHAIR_LOCAL_X, 0, RECEPTION_CHAIR_LOCAL_Z);
           inner.add(chair);
         }
       } else {
-        box(1.68, 0.72, 0.54, whiteBody, 0, 0.36, 0.1);
-        box(1.64, 0.32, 0.56, blueUpholstery, 0, 0.2, 0.12);
+        // Open knee-hole architectural desk frame (pedestal on +X, modesty apron at +Z, open legroom behind -Z)
+        box(0.46, 0.67, 0.52, whiteBody, 0.58, 0.335, 0.21);
+        box(0.06, 0.67, 0.52, whiteBody, -0.78, 0.335, 0.21);
+        box(1.66, 0.67, 0.08, whiteBody, 0, 0.335, 0.43);
+        box(1.62, 0.3, 0.06, blueUpholstery, 0, 0.18, 0.45);
         const ledApron = box(
-          1.54,
-          0.04,
-          0.04,
+          1.5,
+          0.038,
+          0.038,
           makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.85 }),
           0,
           0.05,
-          0.4
+          0.48
         );
         ledApron.userData.noCastShadow = true;
-        box(1.76, 0.07, 0.64, woodMat, 0, 0.75, 0.08);
-        box(1.1, 0.22, 0.22, whiteBody, 0, 0.86, 0.26);
-        box(0.08, 0.16, 0.08, darkSlate, 0.18, 0.85, 0.04);
-        box(0.46, 0.28, 0.04, darkSlate, 0.18, 1.0, 0.04);
+        box(1.72, 0.06, 0.56, woodMat, 0, 0.7, 0.2);
+        deskFile.position.y = 0.738;
+        inner.add(deskFile);
+        box(1.06, 0.19, 0.18, whiteBody, 0, 0.81, 0.38);
+        box(0.08, 0.16, 0.08, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.81, 0.16);
+        box(0.46, 0.28, 0.04, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.96, 0.16);
         const recScr = box(
           0.42,
           0.23,
           0.02,
           makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.35 }),
-          0.18,
-          1.0,
-          0.02
+          RECEPTION_CHAIR_LOCAL_X,
+          0.96,
+          0.14
         );
         recScr.userData.noCastShadow = true;
-        cyl(0.04, 0.18, 0.24, darkSlate, -0.1, 0.12, -0.32);
-        box(0.36, 0.08, 0.34, blueUpholstery, -0.1, 0.36, -0.32);
-        box(0.34, 0.4, 0.08, blueUpholstery, -0.1, 0.58, -0.45);
+        cyl(0.04, 0.18, 0.24, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.12, RECEPTION_CHAIR_LOCAL_Z);
+        box(0.36, 0.075, 0.34, blueUpholstery, RECEPTION_CHAIR_LOCAL_X, 0.355, RECEPTION_CHAIR_LOCAL_Z);
+        box(
+          0.34,
+          0.38,
+          0.075,
+          blueUpholstery,
+          RECEPTION_CHAIR_LOCAL_X,
+          0.56,
+          RECEPTION_CHAIR_LOCAL_Z - 0.13
+        );
       }
+      outer.userData.receptionDesk = { deskFile } satisfies ReceptionDeskRigMeta;
       break;
     }
 
@@ -3214,6 +3270,7 @@ export function createCatalogMesh3D(
       // Warm camel-tan tufted lumbar throw pillow
       const lumbar = box(0.38, 0.19, 0.09, camelPillowMat, 0, 0.5, -0.08);
       lumbar.rotation.x = -0.18;
+      inner.scale.setScalar(0.89);
       break;
     }
 
@@ -3361,13 +3418,14 @@ export function createCatalogMesh3D(
         box(0.09, 0.22, 0.54, blueUpholstery, ax, 0.46, -0.01);
         box(0.07, 0.03, 0.48, warmTimber, ax, 0.58, -0.01);
       }
+      inner.scale.setScalar(0.92);
       break;
     }
 
     case 'coffee_table': {
       const glbTable = glbRegistry.cloneNormalized('furn_coffee_table', {
-        maxFootprint: { w: 0.78, d: 0.68 },
-        targetHeight: 0.42,
+        maxFootprint: { w: 0.72, d: 0.62 },
+        targetHeight: 0.35,
       });
       if (glbTable) {
         inner.add(glbTable);
@@ -3380,6 +3438,7 @@ export function createCatalogMesh3D(
         box(0.72, 0.06, 0.62, woodMat, 0, 0.34, 0);
         box(0.22, 0.02, 0.16, cyanAccent, -0.1, 0.38, 0.05);
         box(0.18, 0.02, 0.14, whiteBody, 0.14, 0.38, -0.06);
+        inner.scale.setScalar(0.92);
       }
       break;
     }
@@ -3551,13 +3610,14 @@ export function createCatalogMesh3D(
         returnedCup,
         bubble,
       } as WaterCoolerRigMeta;
+      inner.scale.setScalar(0.81);
       break;
     }
 
     case 'med_cabinet': {
       const glbMedCab = glbRegistry.cloneNormalized('furn_med_cabinet', {
-        maxFootprint: { w: 0.8, d: 0.56 },
-        targetHeight: 1.56,
+        maxFootprint: { w: 0.74, d: 0.5 },
+        targetHeight: 1.42,
       });
       if (glbMedCab) {
         inner.add(glbMedCab);
@@ -3589,6 +3649,7 @@ export function createCatalogMesh3D(
         box(0.025, 0.08, 0.02, emeraldAccent, 0, 1.5, 0.18);
         const glassPane = box(0.68, 0.74, 0.02, frostGlassMat, 0, 1.12, 0.175);
         glassPane.userData.noCastShadow = true;
+        inner.scale.setScalar(0.91);
       }
       break;
     }
@@ -3598,24 +3659,80 @@ export function createCatalogMesh3D(
         maxFootprint: { w: 0.84, d: 0.56 },
         targetHeight: 1.24,
       });
+      const binderPalette = [
+        0x0284c7, // clinical cyan
+        0x0d9488, // medical teal
+        0x2563eb, // royal blue
+        0xd97706, // manila amber
+        0x475569, // archival slate
+        0xdc2626, // urgent triage red
+        0x059669, // emerald chart
+      ];
+      const binderMats = binderPalette.map((col) => makeMat({ color: col, roughness: 0.45 }));
+      const manilaMat = makeMat({ color: 0xe7d2a8, roughness: 0.62 });
+      const labelMat = makeMat({ color: 0xf8fafc, roughness: 0.3 });
+
+      const populateShelfRow = (yBase: number, rowIdx: number, maxW = 0.54, depth = 0.165) => {
+        // Vertical ring binders on left/center + leaning folder + horizontal patient chart stack on right
+        let cursorX = -maxW * 0.5 + 0.032;
+        const binderCount = rowIdx % 2 === 0 ? 7 : 6;
+        for (let bi = 0; bi < binderCount; bi++) {
+          const bw = 0.038 + ((bi + rowIdx) % 3) * 0.008;
+          const bh = 0.125 + ((bi * 3 + rowIdx) % 4) * 0.007;
+          if (cursorX + bw * 0.5 > maxW * 0.26) break;
+          const mat = binderMats[(bi + rowIdx * 2) % binderMats.length];
+          const b = box(bw, bh, depth, mat, cursorX, yBase + bh * 0.5, 0.004);
+          // Spine label sticker visible from front & back
+          const labelF = box(bw * 0.65, 0.026, 0.005, labelMat, cursorX, yBase + bh * 0.68, depth * 0.5 + 0.005);
+          labelF.userData.noCastShadow = true;
+          const labelB = box(bw * 0.65, 0.026, 0.005, labelMat, cursorX, yBase + bh * 0.68, -depth * 0.5 - 0.001);
+          labelB.userData.noCastShadow = true;
+          // White paper block tucked inside binder top edge
+          const pages = box(bw * 0.72, 0.008, depth * 0.86, labelMat, cursorX, yBase + bh + 0.001, 0.004);
+          pages.userData.noCastShadow = true;
+          b.castShadow = false;
+          cursorX += bw + 0.008;
+        }
+
+        // Right-hand horizontal stack of flat patient chart folders with stepped index tabs
+        const stackCount = 3 + (rowIdx % 2);
+        const stackX = maxW * 0.34;
+        for (let si = 0; si < stackCount; si++) {
+          const fy = yBase + 0.011 + si * 0.022;
+          const fMat = si % 2 === 0 ? manilaMat : binderMats[(rowIdx + si) % binderMats.length];
+          const folder = box(0.15, 0.018, depth * 0.92, fMat, stackX, fy, 0.004);
+          folder.rotation.y = (si % 2 === 0 ? 1 : -1) * 0.06;
+          folder.castShadow = false;
+          const sheet = box(0.14, 0.006, depth * 0.86, labelMat, stackX, fy + 0.008, 0.004);
+          sheet.rotation.y = folder.rotation.y;
+          sheet.userData.noCastShadow = true;
+        }
+      };
+
       if (glbShelf) {
         inner.add(glbShelf);
+        // Bookshelf normalized to 1.24m has shelf surfaces cleanly at these Y heights
+        const glbShelfYs = [0.186, 0.361, 0.536, 0.712, 0.887, 1.062];
+        glbShelfYs.forEach((sy, idx) => populateShelfRow(sy, idx, 0.52, 0.165));
+        // Top archive tray with extra active patient charts
+        box(0.24, 0.04, 0.17, darkSlate, 0.14, 1.255, 0);
+        box(0.2, 0.022, 0.14, binderMats[0], 0.14, 1.275, 0);
+        box(0.19, 0.012, 0.13, labelMat, 0.14, 1.288, 0).userData.noCastShadow = true;
       } else {
-        box(0.68, 1.18, 0.46, whiteBody, 0, 0.59, 0);
-        box(0.62, 1.06, 0.04, silverMetal, 0, 0.59, 0.22);
-        const colors = [0x0284c7, 0x0d9488, 0xf59e0b, 0x2563eb, 0xef4444];
-        for (let i = 0; i < 5; i++) {
-          box(0.09, 0.26, 0.3, makeMat({ color: colors[i], roughness: 0.4 }), -0.22 + i * 0.11, 0.85, 0.06);
-          box(0.09, 0.26, 0.3, makeMat({ color: colors[(i + 2) % 5], roughness: 0.4 }), -0.22 + i * 0.11, 0.48, 0.06);
+        box(0.68, 1.18, 0.44, whiteBody, 0, 0.59, 0);
+        box(0.62, 1.06, 0.36, darkSlate, 0, 0.59, 0.02);
+        for (const sy of [0.16, 0.42, 0.68, 0.94]) {
+          box(0.64, 0.025, 0.4, silverMetal, 0, sy, 0.01);
         }
+        [0.175, 0.435, 0.695, 0.955].forEach((sy, idx) => populateShelfRow(sy, idx, 0.54, 0.28));
       }
       break;
     }
 
     case 'wheelchair_bay': {
       const glbChair = glbRegistry.cloneNormalized('furn_wheelchair', {
-        maxFootprint: { w: 0.78, d: 0.78 },
-        targetHeight: 0.94,
+        maxFootprint: { w: 0.66, d: 0.66 },
+        targetHeight: 0.75,
       });
       if (glbChair) {
         inner.add(glbChair);
@@ -3640,6 +3757,7 @@ export function createCatalogMesh3D(
           cyl(0.02, 0.02, 0.14, blackRubber, sx * 0.88, 0.92, -0.29).rotation.x = Math.PI / 2;
           box(0.14, 0.025, 0.14, darkSlate, sx * 0.5, 0.14, 0.34);
         }
+        inner.scale.setScalar(0.8);
       }
       break;
     }
@@ -3657,22 +3775,23 @@ export function createCatalogMesh3D(
       cyl(0.2, 0.2, 0.02, darkSlate, 0, 0.44, 0);
       box(0.04, 0.26, 0.04, silverMetal, 0, 0.58, -0.19);
       box(0.28, 0.14, 0.06, blueUpholstery, 0, 0.72, -0.19);
+      inner.scale.setScalar(0.82);
       break;
     }
 
     case 'corner_desk': {
       const glbCorner = glbRegistry.cloneNormalized('furn_desk_corner', {
-        maxFootprint: { w: 1.82, d: 0.9 },
-        targetHeight: 0.78,
+        maxFootprint: { w: 1.72, d: 0.84 },
+        targetHeight: 0.64,
       });
       if (glbCorner) {
         inner.add(glbCorner);
         const mon = glbRegistry.cloneNormalized('furn_monitor', {
-          targetHeight: 0.36,
+          targetHeight: 0.29,
           rotY: Math.PI,
         });
         if (mon) {
-          mon.position.set(0.24, 0.76, -0.16);
+          mon.position.set(0.22, 0.625, -0.15);
           inner.add(mon);
         }
       } else {
@@ -3703,6 +3822,7 @@ export function createCatalogMesh3D(
         cyl(0.035, 0.18, 0.24, darkSlate, 0.22, 0.12, 0.28);
         box(0.38, 0.07, 0.36, blueUpholstery, 0.22, 0.38, 0.28);
         box(0.36, 0.4, 0.07, blueUpholstery, 0.22, 0.6, 0.44);
+        inner.scale.setScalar(0.85);
       }
       break;
     }
@@ -3749,6 +3869,7 @@ export function createCatalogMesh3D(
       tube([[-0.11, 0.87, 0.18], [-0.23, 0.78, 0.1], [-0.24, 0.62, 0.02], [-0.21, 0.74, -0.05]], 0.009, redAccent);
       box(0.02, 0.09, 0.075, whiteBody, -0.23, 0.75, 0.06);
       box(0.02, 0.09, 0.075, cyanAccent, -0.23, 0.75, -0.05);
+      inner.scale.setScalar(0.8);
       break;
     }
 
@@ -3792,6 +3913,7 @@ export function createCatalogMesh3D(
       const headDisc = cyl(0.044, 0.036, 0.036, silverMetal, -0.26, 1.01, 0.05);
       headDisc.rotation.z = Math.PI / 2 - 0.35;
       tube([[-0.22, 0.83, 0.04], [-0.27, 0.65, 0.06], [-0.25, 0.52, -0.02], [-0.18, 0.72, -0.04]], 0.011, darkSlate);
+      inner.scale.setScalar(0.8);
       break;
     }
 
@@ -3833,6 +3955,7 @@ export function createCatalogMesh3D(
       const tipGlow = cyl(0.012, 0.012, 0.02, makeMat({ color: 0xef4444, emissive: 0xdc2626, emissiveIntensity: 0.9 }), 0.14, 1.09, 0.06);
       tipGlow.userData.noCastShadow = true;
       box(0.14, 0.045, 0.06, emeraldAccent, -0.16, 0.84, 0.13);
+      inner.scale.setScalar(0.79);
       break;
     }
 
@@ -3870,6 +3993,7 @@ export function createCatalogMesh3D(
       tube([[-0.08, 0.84, -0.14], [-0.18, 1.12, -0.16], [0.02, 1.42, -0.08], [0.22, 1.32, 0.02]], 0.013, blackRubber);
       cyl(0.17, 0.17, 0.075, whiteBody, 0.24, 1.26, 0.04);
       cyl(0.15, 0.15, 0.022, blueUpholstery, 0.24, 1.22, 0.04);
+      inner.scale.setScalar(0.81);
       break;
     }
 
@@ -3913,6 +4037,7 @@ export function createCatalogMesh3D(
       const grip = box(0.04, 0.15, 0.06, darkSlate, 0.26, 0.8, 0.04);
       grip.rotation.x = -0.25;
       tube([[0.18, 0.52, 0.08], [0.29, 0.44, 0.06], [0.3, 0.6, 0.02], [0.26, 0.74, 0.03]], 0.015, blackRubber);
+      inner.scale.setScalar(0.81);
       break;
     }
 
@@ -3951,6 +4076,7 @@ export function createCatalogMesh3D(
       // Patient hand emergency stop pendant hanging on side
       tube([[0.7, 0.65, 0.2], [0.64, 0.5, 0.36], [0.52, 0.56, 0.35]], 0.008, darkSlate, 8);
       box(0.07, 0.04, 0.04, redAccent, 0.5, 0.56, 0.35);
+      inner.scale.set(0.95, 0.78, 0.94);
       break;
     }
 
@@ -3988,6 +4114,7 @@ export function createCatalogMesh3D(
       box(0.03, 0.05, 0.24, cyanAccent, 0.22, 0.28, 0);
       tube([[0.22, 0.14, 0.18], [0.1, 0.08, 0.26], [-0.04, 0.1, 0.25]], 0.008, blackRubber, 8);
       box(0.09, 0.03, 0.14, darkSlate, -0.05, 0.1, 0.25);
+      inner.scale.setScalar(0.86);
       break;
     }
 
@@ -4022,6 +4149,7 @@ export function createCatalogMesh3D(
       scr.userData.noCastShadow = true;
       box(0.05, 0.05, 0.05, redAccent, 0.54, 1.06, 0);
       tube([[0.54, 1.05, 0], [0.46, 0.92, 0.06], [0.38, 0.85, 0.02]], 0.006, redAccent, 8);
+      inner.scale.set(0.9, 0.82, 0.9);
       break;
     }
 
@@ -4055,6 +4183,7 @@ export function createCatalogMesh3D(
         0
       );
       bikeScr.userData.noCastShadow = true;
+      inner.scale.setScalar(0.82);
       break;
     }
 
@@ -4072,6 +4201,7 @@ export function createCatalogMesh3D(
       box(0.09, 0.46, 0.02, redAccent, -0.18, 1.24, -0.25);
       box(0.09, 0.54, 0.02, emeraldAccent, 0.16, 1.2, -0.25);
       box(0.09, 0.42, 0.02, cyanAccent, 0, 0.92, -0.25);
+      inner.scale.set(0.94, 0.9, 0.94);
       break;
     }
 
@@ -4098,6 +4228,7 @@ export function createCatalogMesh3D(
       ballViolet.position.set(0, 0.9, 0);
       cyl(0.16, 0.16, 0.04, cyanAccent, 0, 0.08, 0.04);
       inner.add(ringLow, ringHigh, ballBlue, ballViolet);
+      inner.scale.setScalar(0.84);
       break;
     }
 
@@ -4132,6 +4263,7 @@ export function createCatalogMesh3D(
         const rail = cyl(0.03, 0.03, 1.7, warmTimber, 0, 0.84, lz);
         rail.rotation.z = Math.PI / 2;
       }
+      inner.scale.set(0.94, 0.82, 0.86);
       break;
     }
 
@@ -4168,6 +4300,7 @@ export function createCatalogMesh3D(
       );
       monScr.rotation.z = 0.25;
       monScr.userData.noCastShadow = true;
+      inner.scale.set(0.92, 0.81, 0.92);
       break;
     }
 
@@ -4199,6 +4332,7 @@ export function createCatalogMesh3D(
         -0.01
       );
       emgScr.userData.noCastShadow = true;
+      inner.scale.setScalar(0.82);
       break;
     }
 
@@ -4219,6 +4353,7 @@ export function createCatalogMesh3D(
       cyl(0.018, 0.018, 0.07, amberAccent, 0, 0.22, 0.24).rotation.x = Math.PI / 2;
       box(0.06, 0.26, 0.28, silverMetal, 0.31, 0.56, 0);
       box(0.05, 0.2, 0.22, blueUpholstery, 0.32, 0.58, 0);
+      inner.scale.setScalar(0.81);
       break;
     }
 
@@ -4251,6 +4386,7 @@ export function createCatalogMesh3D(
       box(0.22, 0.035, 0.04, whiteBody, 0, 0.96, 0);
       box(0.08, 0.24, 0.22, blueUpholstery, 0.26, 0.62, 0);
       tube([[0.18, 0.42, 0.1], [0.29, 0.34, 0.08], [0.3, 0.5, 0], [0.26, 0.58, -0.02]], 0.015, silverMetal);
+      inner.scale.setScalar(0.8);
       break;
     }
 
@@ -4283,6 +4419,7 @@ export function createCatalogMesh3D(
       waxSurface.userData.noCastShadow = true;
       const heatLed = box(0.04, 0.025, 0.02, amberAccent, -0.14, 0.72, 0.185);
       heatLed.userData.noCastShadow = true;
+      inner.scale.setScalar(0.81);
       break;
     }
 
@@ -4323,9 +4460,10 @@ export function createCatalogMesh3D(
       inner.add(bulb, guardRing);
       addFloorHalo(1.45, 0xff4d3d, 0.34, 0.22, 0.028, 0);
       addBulbAura(0.18, 0xff3b30, 0.46, 0.23, 1.04, 0);
+      inner.scale.setScalar(0.82);
       outer.userData.smartLight = {
         kind: 'ir_lamp',
-        localPos: [0.22, 1.06, 0],
+        localPos: [0.18, 0.87, 0],
         emissiveMats: [irBulbMat],
         haloMats,
         haloMaxOpacities,
@@ -4374,6 +4512,7 @@ export function createCatalogMesh3D(
       );
       pScr.userData.noCastShadow = true;
       tube([[0.64, 0.55, -0.32], [0.42, 0.36, -0.34], [0.22, 0.38, -0.3], [0.08, 0.46, -0.28]], 0.014, darkSlate);
+      inner.scale.set(0.96, 0.84, 0.94);
       break;
     }
 
@@ -4414,6 +4553,7 @@ export function createCatalogMesh3D(
       strapKnee.position.set(0.28, 0.09, 0);
       tiltGroup.add(tDeck, tPad, tPill, footBoard, strapChest, strapKnee);
       inner.add(tiltGroup);
+      inner.scale.setScalar(0.92);
       break;
     }
 
@@ -4439,6 +4579,7 @@ export function createCatalogMesh3D(
       tube([[0, 1.76, 0.11], [0.08, 1.48, 0.14], [0.14, 1.24, 0.17], [0.15, 1.08, 0.18]], 0.006, blackRubber, 8);
       box(0.09, 0.02, 0.025, silverMetal, -0.15, 1.04, 0.18);
       box(0.09, 0.02, 0.025, silverMetal, 0.15, 1.04, 0.18);
+      inner.scale.set(0.9, 0.86, 0.9);
       break;
     }
 
@@ -4475,6 +4616,7 @@ export function createCatalogMesh3D(
       webRing.rotation.x = Math.PI / 2;
       webRing.position.set(0.02, 0.76, 0.12);
       inner.add(webRing);
+      inner.scale.setScalar(0.84);
       break;
     }
 
@@ -4517,6 +4659,7 @@ export function createCatalogMesh3D(
       const fRoller = cyl(0.055, 0.055, 0.34, cyanAccent, -0.06, 0.18, 0);
       fRoller.rotation.x = Math.PI / 2;
       box(0.16, 0.06, 0.24, blueUpholstery, 0.12, 0.16, 0);
+      inner.scale.setScalar(0.81);
       break;
     }
 
@@ -4563,6 +4706,7 @@ export function createCatalogMesh3D(
         g.add(fr, cloth);
         inner.add(g);
       }
+      inner.scale.set(1, 0.9, 1);
       break;
     }
 
@@ -4573,6 +4717,7 @@ export function createCatalogMesh3D(
       for (let i = 0; i < 6; i++) {
         box(0.11, 1.54, 0.065, warmTimber, 0, 0.85, -0.35 + i * 0.14);
       }
+      inner.scale.set(1, 0.91, 1);
       break;
     }
 
@@ -4585,6 +4730,7 @@ export function createCatalogMesh3D(
       box(0.08, 0.18, 0.04, makeMat({ color: 0x38bdf8, roughness: 0.2 }), 0, 1.14, 0.1);
       box(0.06, 0.04, 0.08, silverMetal, 0, 1.0, 0.12);
       box(0.18, 0.03, 0.14, silverMetal, 0, 0.82, 0.11);
+      inner.scale.setScalar(0.8);
       break;
     }
 
@@ -4652,12 +4798,12 @@ export function createCatalogMesh3D(
       cyl(0.22, 0.19, 0.035, ceramicPot, 0, 0.018, 0);
       const glbPlant =
         glbRegistry.cloneNormalized('furn_plant_ficus', {
-          maxFootprint: { w: 0.68, d: 0.68 },
-          targetHeight: 0.96,
+          maxFootprint: { w: 0.6, d: 0.6 },
+          targetHeight: 0.84,
         }) ||
         glbRegistry.cloneNormalized('furn_plant1', {
-          maxFootprint: { w: 0.62, d: 0.62 },
-          targetHeight: 0.88,
+          maxFootprint: { w: 0.56, d: 0.56 },
+          targetHeight: 0.78,
         });
       if (glbPlant) {
         glbPlant.position.y = 0.02;
@@ -4746,9 +4892,10 @@ export function createCatalogMesh3D(
       cyl(0.095, 0.115, 0.055, darkSlate, 0, 0.89, 0);
       addFloorHalo(2.45, 0xffcc78, 0.48, 0, 0.026, 0);
       addBulbAura(0.24, 0xffd584, 0.36, 0, 0.76, 0);
+      inner.scale.setScalar(0.85);
       outer.userData.smartLight = {
         kind: 'garden_lamp',
-        localPos: [0, 0.92, 0],
+        localPos: [0, 0.78, 0],
         emissiveMats: [lampGlowMat],
         haloMats,
         haloMaxOpacities,
@@ -4805,8 +4952,8 @@ export function createCatalogMesh3D(
 
     case 'clinic_floor_lamp': {
       const glbLamp = glbRegistry.cloneNormalized('furn_lamp_floor', {
-        maxFootprint: { w: 0.6, d: 0.6 },
-        targetHeight: 1.62,
+        maxFootprint: { w: 0.54, d: 0.54 },
+        targetHeight: 1.44,
       });
       const bulbMat = makeMat({
         color: 0xfef3c7,
@@ -4816,19 +4963,19 @@ export function createCatalogMesh3D(
       });
       if (glbLamp) {
         inner.add(glbLamp);
-        const bulb = cyl(0.09, 0.12, 0.16, bulbMat, 0, 1.42, 0);
+        const bulb = cyl(0.08, 0.105, 0.14, bulbMat, 0, 1.26, 0);
         bulb.userData.noCastShadow = true;
       } else {
-        cyl(0.18, 0.2, 0.04, darkSlate, 0, 0.02, 0);
-        cyl(0.025, 0.03, 1.38, silverMetal, 0, 0.71, 0);
-        const shade = cyl(0.16, 0.22, 0.28, bulbMat, 0, 1.46, 0);
+        cyl(0.16, 0.18, 0.036, darkSlate, 0, 0.018, 0);
+        cyl(0.022, 0.026, 1.22, silverMetal, 0, 0.62, 0);
+        const shade = cyl(0.14, 0.19, 0.24, bulbMat, 0, 1.3, 0);
         shade.userData.noCastShadow = true;
       }
-      addFloorHalo(2.55, 0xffe4b3, 0.45, 0, 0.026, 0);
-      addBulbAura(0.28, 0xffe8bf, 0.32, 0, 1.45, 0);
+      addFloorHalo(2.35, 0xffe4b3, 0.45, 0, 0.026, 0);
+      addBulbAura(0.25, 0xffe8bf, 0.32, 0, 1.28, 0);
       outer.userData.smartLight = {
         kind: 'indoor_lamp',
-        localPos: [0, 1.5, 0],
+        localPos: [0, 1.33, 0],
         emissiveMats: [bulbMat],
         haloMats,
         haloMaxOpacities,
@@ -4901,9 +5048,10 @@ export function createCatalogMesh3D(
       }
       addFloorHalo(2.15, 0xffe2ad, 0.4, 0, 0.026, 0);
       addBulbAura(0.21, 0xffe9be, 0.34, 0, 0.78, 0);
+      inner.scale.setScalar(0.84);
       outer.userData.smartLight = {
         kind: 'indoor_lamp',
-        localPos: [0, 0.85, 0],
+        localPos: [0, 0.71, 0],
         emissiveMats: [tableGlowMat],
         haloMats,
         haloMaxOpacities,
@@ -5650,6 +5798,7 @@ export function createCatalogMesh3D(
       cyl(0.04, 0.18, 0.26, darkSlate, 0, 0.13, 0.34);
       box(0.38, 0.08, 0.36, blueUpholstery, 0, 0.38, 0.34);
       box(0.36, 0.42, 0.08, blueUpholstery, 0, 0.62, 0.48);
+      inner.scale.setScalar(0.86);
       break;
     }
 
@@ -5665,6 +5814,7 @@ export function createCatalogMesh3D(
         box(0.2, 0.22, 0.24, makeMat({ color: towelColors[(i + 2) % 5], roughness: 0.45 }), -0.5 + i * 0.25, 0.88, 0.08);
         cyl(0.06, 0.06, 0.2, makeMat({ color: towelColors[(i + 1) % 5], roughness: 0.35 }), -0.5 + i * 0.25, 1.28, 0.08);
       }
+      inner.scale.set(0.94, 0.92, 0.94);
       break;
     }
 
@@ -5972,6 +6122,7 @@ export function createCatalogMesh3D(
         boneMat,
         8
       );
+      inner.scale.setScalar(0.83);
       break;
     }
 
@@ -5998,8 +6149,8 @@ export function createCatalogMesh3D(
 
     case 'waste_bin': {
       const glbTrash = glbRegistry.cloneNormalized('furn_trashcan', {
-        maxFootprint: { w: 0.36, d: 0.36 },
-        targetHeight: 0.56,
+        maxFootprint: { w: 0.3, d: 0.3 },
+        targetHeight: 0.38,
       });
       if (glbTrash) {
         inner.add(glbTrash);
@@ -6008,6 +6159,7 @@ export function createCatalogMesh3D(
         cyl(0.155, 0.155, 0.05, darkSlate, 0, 0.5, 0);
         box(0.09, 0.025, 0.06, blackRubber, 0, 0.02, 0.15);
         box(0.1, 0.08, 0.02, emeraldAccent, 0, 0.3, 0.145);
+        inner.scale.setScalar(0.74);
       }
       break;
     }
@@ -6230,9 +6382,10 @@ export function createCatalogMesh3D(
 
       addFloorHalo(2.5, 0xffd584, 0.44, 0, 0.028, 0);
       addBulbAura(0.22, 0xffe4a8, 0.34, 0, 2.06, 0);
+      inner.scale.setScalar(0.88);
       outer.userData.smartLight = {
         kind: 'garden_lamp',
-        localPos: [0, 2.05, 0],
+        localPos: [0, 1.8, 0],
         emissiveMats: [lanternMat],
         haloMats,
         haloMaxOpacities,
@@ -6341,6 +6494,7 @@ export function createCatalogMesh3D(
       topBar.userData.sharedGlbMat = true;
 
       headGrp.add(casing, trimBezel, screenPlane, statusLed, topBar);
+      inner.scale.setScalar(0.84);
       break;
     }
   }

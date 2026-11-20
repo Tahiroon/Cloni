@@ -23,6 +23,7 @@ import {
   buildWaitSeatSlots,
   findGridPath,
   findNearestWalkableTile,
+  getReceptionDeskPose,
   getValidWallRotationsForTile,
   hasContinuousLineOfSight,
   isInSolarZone,
@@ -70,37 +71,63 @@ const SUDANESE_SKINS = [
 ];
 
 const MALE_CASUAL_LOOKS: Array<{ shirt: string; pants: string; shirtStyle: 'tshirt' | 'shirt' }> = [
-  { shirt: '#f1f5f9', pants: '#1e293b', shirtStyle: 'shirt' },
-  { shirt: '#0369a1', pants: '#334155', shirtStyle: 'tshirt' },
-  { shirt: '#3f6212', pants: '#27272a', shirtStyle: 'tshirt' },
-  { shirt: '#7c2d12', pants: '#1e293b', shirtStyle: 'shirt' },
-  { shirt: '#334155', pants: '#475569', shirtStyle: 'shirt' },
-  { shirt: '#0f766e', pants: '#1e293b', shirtStyle: 'tshirt' },
-  { shirt: '#b45309', pants: '#27272a', shirtStyle: 'tshirt' },
-  { shirt: '#1d4ed8', pants: '#334155', shirtStyle: 'shirt' },
+  // Bright / Light Shirts paired with Deep / Dark Trousers
+  { shirt: '#f8fafc', pants: '#172554', shirtStyle: 'shirt' },   // Crisp White + Deep Navy
+  { shirt: '#38bdf8', pants: '#1e293b', shirtStyle: 'tshirt' },  // Sky Blue Tee + Charcoal
+  { shirt: '#fbbf24', pants: '#27272a', shirtStyle: 'tshirt' },  // Warm Amber Tee + Onyx
+  { shirt: '#34d399', pants: '#1e293b', shirtStyle: 'tshirt' },  // Fresh Mint Tee + Slate
+  { shirt: '#e7dcc8', pants: '#3b2618', shirtStyle: 'shirt' },   // Cream Linen + Espresso Brown
+  { shirt: '#fb7185', pants: '#172554', shirtStyle: 'tshirt' },  // Coral Rose Tee + Navy
+  { shirt: '#a3e635', pants: '#1f2937', shirtStyle: 'tshirt' },  // Lime Tee + Charcoal
+  { shirt: '#93c5fd', pants: '#334155', shirtStyle: 'shirt' },   // Powder Blue Shirt + Slate
+  // Rich / Deep Shirts paired with Light Khaki, Stone & Medium Denim Trousers
+  { shirt: '#9f1239', pants: '#d6cfc2', shirtStyle: 'shirt' },   // Burgundy + Light Stone
+  { shirt: '#047857', pants: '#cbb696', shirtStyle: 'tshirt' },  // Emerald Tee + Warm Khaki
+  { shirt: '#1d4ed8', pants: '#e2dcd0', shirtStyle: 'shirt' },   // Royal Blue + Sand Beige
+  { shirt: '#c2410c', pants: '#4b6b94', shirtStyle: 'tshirt' },  // Terracotta Tee + Mid Denim
+  { shirt: '#1e293b', pants: '#cbb696', shirtStyle: 'tshirt' },  // Dark Charcoal Tee + Khaki
+  { shirt: '#6d28d9', pants: '#d6cfc2', shirtStyle: 'shirt' },   // Deep Violet + Light Stone
+  { shirt: '#0f766e', pants: '#bfb097', shirtStyle: 'tshirt' },  // Teal Tee + Warm Tan
+  { shirt: '#7c2d12', pants: '#94a3b8', shirtStyle: 'shirt' },   // Rust Brown + Cool Silver Grey
 ];
 
 const FEMALE_ABAYA_COLORS = [
-  '#17171b',
+  '#141418',
   '#1e293b',
   '#172554',
-  '#3b1d2a',
-  '#133c42',
-  '#3b2a22',
+  '#4c1d32',
+  '#0f4c52',
+  '#423026',
+  '#3b2f4a',
 ];
 const FEMALE_OPEN_ABAYA_LOOKS = [
-  { outer: '#18181b', inner: '#e5dfd3' },
-  { outer: '#1e293b', inner: '#cbd5e1' },
-  { outer: '#114247', inner: '#d6ccc2' },
-  { outer: '#4a1d32', inner: '#e2d4d8' },
-  { outer: '#362922', inner: '#dfd7cc' },
+  { outer: '#141418', inner: '#f4efe6' },
+  { outer: '#1e293b', inner: '#bae6fd' },
+  { outer: '#0f4c52', inner: '#f3e8d8' },
+  { outer: '#581c3a', inner: '#fce7f3' },
+  { outer: '#362922', inner: '#e7dcc8' },
+  { outer: '#1e3a8a', inner: '#f8fafc' },
+  { outer: '#3b4a32', inner: '#f4ebd9' },
 ];
-const FEMALE_DRESS_COLORS = ['#3d6b58', '#8b4958', '#0f5e73', '#8f4730', '#58355e'];
+const FEMALE_DRESS_COLORS = [
+  '#2f6f5b',
+  '#9f3f58',
+  '#0369a1',
+  '#b45309',
+  '#6d28d9',
+  '#0f766e',
+  '#be123c',
+  '#3f6212',
+];
 const FEMALE_CASUAL_LOOKS = [
-  { shirt: '#0e7490', pants: '#1e293b' },
-  { shirt: '#9f1239', pants: '#1e293b' },
-  { shirt: '#334155', pants: '#0f172a' },
-  { shirt: '#6b4f3a', pants: '#27272a' },
+  { shirt: '#0284c7', pants: '#172554' },
+  { shirt: '#e11d48', pants: '#1e293b' },
+  { shirt: '#f59e0b', pants: '#27272a' },
+  { shirt: '#10b981', pants: '#1e293b' },
+  { shirt: '#f8fafc', pants: '#3b2618' },
+  { shirt: '#7c3aed', pants: '#d6cfc2' },
+  { shirt: '#0f766e', pants: '#cbb696' },
+  { shirt: '#9f1239', pants: '#e2dcd0' },
 ];
 
 const EMPTY_REMOVED_TREES: string[] = [];
@@ -138,6 +165,15 @@ export default function App() {
   const [placementDraft, setPlacementDraft] = useState<PlacementDraft | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const treatmentTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const receptionCheckedInIdsRef = useRef<Set<string>>(new Set());
+
+  const handleReceptionCheckinDone = useCallback((patientId: string) => {
+    receptionCheckedInIdsRef.current.add(patientId);
+    if (receptionCheckedInIdsRef.current.size > 32) {
+      const first = receptionCheckedInIdsRef.current.values().next().value;
+      if (first) receptionCheckedInIdsRef.current.delete(first);
+    }
+  }, []);
 
   const lightingMode: LightingMode = clinic.lightingMode || 'day';
 
@@ -401,44 +437,33 @@ export default function App() {
     [clinic.placedItems, clinic.rooms, catalogById]
   );
 
-  // Pick a walkable reception desk check-in spot in front of the desk
+  // Pick a walkable reception desk check-in spot in front of the desk (supports any rotation & sub-tile position)
   const getReceptionCheckinSpot = useCallback(
     (currentPatients: PatientEntity[]) => {
       const desk = clinic.placedItems.find((it) => it.catalogId === 'reception_desk');
       const rawSpots = desk
-        ? desk.rotation === 0
-          ? [
-              { x: desk.gridX + 1, y: desk.gridY + 1 },
-              { x: desk.gridX, y: desk.gridY + 1 },
-              { x: desk.gridX + 1, y: Math.min(20, desk.gridY + 2) },
-            ]
-          : desk.rotation === 2
-            ? [
-                { x: desk.gridX, y: desk.gridY - 1 },
-                { x: desk.gridX + 1, y: desk.gridY - 1 },
-              ]
-            : desk.rotation === 1
-              ? [
-                  { x: desk.gridX - 1, y: desk.gridY },
-                  { x: desk.gridX - 1, y: desk.gridY + 1 },
-                ]
-              : [
-                  { x: desk.gridX + 1, y: desk.gridY },
-                  { x: desk.gridX + 1, y: desk.gridY + 1 },
-                ]
+        ? getReceptionDeskPose(desk).checkinCandidates
         : [
             { x: 15, y: 13 },
             { x: 14, y: 13 },
             { x: 15, y: 14 },
           ];
       const spots = rawSpots.filter((s) => isTileWalkable(s.x, s.y, 0.22, obstacleBoxes));
-      const pool = spots.length > 0 ? spots : [{ x: 15, y: 14 }, { x: 16, y: 14 }];
-      const occupied = new Set(
-        currentPatients
-          .filter((p) => p.state === 'arriving' || p.state === 'checkin_at_desk')
-          .map((p) => `${Math.round(p.targetX)},${Math.round(p.targetY)}`)
+      const pool =
+        spots.length > 0
+          ? spots
+          : [findNearestWalkableTile(rawSpots[0].x, rawSpots[0].y, 0.22, obstacleBoxes)];
+      const activeAtReception = currentPatients.filter(
+        (p) => p.state === 'arriving' || p.state === 'checkin_at_desk'
       );
-      return pool.find((s) => !occupied.has(`${s.x},${s.y}`)) || pool[0];
+      return (
+        pool.find(
+          (s) =>
+            !activeAtReception.some(
+              (p) => Math.hypot(p.targetX - s.x, p.targetY - s.y) < 0.42
+            )
+        ) || pool[0]
+      );
     },
     [clinic.placedItems, obstacleBoxes]
   );
@@ -461,10 +486,10 @@ export default function App() {
         if (item.catalogId !== 'water_cooler' || busyIds.has(item.instanceId)) continue;
         const room = clinic.rooms.find(
           (r) =>
-            item.gridX >= r.minX &&
-            item.gridX <= r.maxX &&
-            item.gridY >= r.minY &&
-            item.gridY <= r.maxY
+            item.gridX >= r.minX - 0.05 &&
+            item.gridX < r.maxX + 1 &&
+            item.gridY >= r.minY - 0.05 &&
+            item.gridY < r.maxY + 1
         );
         if (room && !room.unlocked) continue;
 
@@ -612,28 +637,35 @@ export default function App() {
         let hasHijab = false;
         let hasTurban = false;
 
+        const activeOutfits = new Set(prev.map((p) => `${p.shirtColor}_${p.pantsColor}`));
+        const pickDistinct = <T,>(items: T[], getKey: (x: T) => string): T => {
+          const fresh = items.filter((item) => !activeOutfits.has(getKey(item)));
+          const pool = fresh.length > 0 ? fresh : items;
+          return pool[Math.floor(Math.random() * pool.length)];
+        };
+
         if (isFemale) {
           hasHijab = true; // All women wear a Tarha/Hijab cleanly
           const roll = Math.random();
-          if (roll < 0.45) {
+          if (roll < 0.4) {
             outfitStyle = 'abaya';
-            shirtColor =
-              FEMALE_ABAYA_COLORS[Math.floor(Math.random() * FEMALE_ABAYA_COLORS.length)];
+            shirtColor = pickDistinct(FEMALE_ABAYA_COLORS, (c) => `${c}_${c}`);
             pantsColor = shirtColor;
-          } else if (roll < 0.72) {
+          } else if (roll < 0.68) {
             outfitStyle = 'abaya_open';
-            const openLook =
-              FEMALE_OPEN_ABAYA_LOOKS[Math.floor(Math.random() * FEMALE_OPEN_ABAYA_LOOKS.length)];
+            const openLook = pickDistinct(
+              FEMALE_OPEN_ABAYA_LOOKS,
+              (l) => `${l.outer}_${l.inner}`
+            );
             shirtColor = openLook.outer;
             pantsColor = openLook.inner;
-          } else if (roll < 0.86) {
+          } else if (roll < 0.85) {
             outfitStyle = 'dress';
-            shirtColor =
-              FEMALE_DRESS_COLORS[Math.floor(Math.random() * FEMALE_DRESS_COLORS.length)];
+            shirtColor = pickDistinct(FEMALE_DRESS_COLORS, (c) => `${c}_${c}`);
             pantsColor = shirtColor;
           } else {
             outfitStyle = 'casual';
-            const c = FEMALE_CASUAL_LOOKS[Math.floor(Math.random() * FEMALE_CASUAL_LOOKS.length)];
+            const c = pickDistinct(FEMALE_CASUAL_LOOKS, (l) => `${l.shirt}_${l.pants}`);
             shirtColor = c.shirt;
             pantsColor = c.pants;
           }
@@ -643,12 +675,12 @@ export default function App() {
           const wearJalabiya = Math.random() < jalabiyaChance;
           outfitStyle = wearJalabiya ? 'jalabiya' : 'casual';
           if (wearJalabiya) {
-            const jTones = ['#f3f0e8', '#ebe3d3', '#e6edf2', '#dfd5c2'];
-            shirtColor = jTones[Math.floor(Math.random() * jTones.length)];
+            const jTones = ['#f8fafc', '#efe2c9', '#dbe8f4', '#dce6db', '#e6d3b3', '#e2e8f0'];
+            shirtColor = pickDistinct(jTones, (c) => `${c}_${c}`);
             pantsColor = shirtColor;
             hasTurban = chosenCase.age >= 40 ? Math.random() < 0.72 : Math.random() < 0.45;
           } else {
-            const c = MALE_CASUAL_LOOKS[Math.floor(Math.random() * MALE_CASUAL_LOOKS.length)];
+            const c = pickDistinct(MALE_CASUAL_LOOKS, (l) => `${l.shirt}_${l.pants}`);
             shirtColor = c.shirt;
             pantsColor = c.pants;
             shirtStyle = c.shirtStyle;
@@ -1059,7 +1091,7 @@ export default function App() {
 
     const tick = setInterval(() => {
       const nowMs = performance.now();
-      const dtSec = Math.min(0.15, Math.max(0.03, (nowMs - lastTickMs) / 1000));
+      const dtSec = Math.min(0.12, Math.max(0.016, (nowMs - lastTickMs) / 1000));
       const dtMs = dtSec * 1000;
       lastTickMs = nowMs;
 
@@ -1103,19 +1135,34 @@ export default function App() {
             if (
               !preserveSeatApproach &&
               activePath.length >= 2 &&
-              !isDoorwayThreshold(activePath[0].x, activePath[0].y) &&
-              hasContinuousLineOfSight(
-                updated.gridX,
-                updated.gridY,
-                activePath[1].x,
-                activePath[1].y,
-                0.26,
-                obstacleBoxes,
-                undefined
-              )
+              !isDoorwayThreshold(activePath[0].x, activePath[0].y)
             ) {
-              activePath = activePath.slice(1);
-              updated.path = activePath;
+              const maxProbe =
+                updated.state === 'walking_to_wait' && updated.isSeatedWait !== false
+                  ? Math.max(0, activePath.length - 3)
+                  : activePath.length - 1;
+              let jumpIdx = 0;
+              for (let probe = maxProbe; probe >= 1; probe--) {
+                if (isDoorwayThreshold(activePath[probe - 1].x, activePath[probe - 1].y)) break;
+                if (
+                  hasContinuousLineOfSight(
+                    updated.gridX,
+                    updated.gridY,
+                    activePath[probe].x,
+                    activePath[probe].y,
+                    0.26,
+                    obstacleBoxes,
+                    undefined
+                  )
+                ) {
+                  jumpIdx = probe;
+                  break;
+                }
+              }
+              if (jumpIdx > 0) {
+                activePath = activePath.slice(jumpIdx);
+                updated.path = activePath;
+              }
             }
 
             const nextNode = activePath[0];
@@ -1127,7 +1174,15 @@ export default function App() {
               updated.gridX + 0.5 <= 23.6 &&
               updated.gridY + 0.5 >= 13.7 &&
               updated.gridY + 0.5 <= 16.3;
-            const speedStep = (onEntranceStairs ? 0.72 : 0.94) * dtSec;
+            const idSeed =
+              (updated.id.charCodeAt(updated.id.length - 1) + updated.id.length * 7) % 11;
+            const hasAid =
+              Boolean(updated.clinicalCase.mobilityAid) &&
+              updated.clinicalCase.mobilityAid !== 'none';
+            const baseWalkSpeed = hasAid
+              ? 0.96 + idSeed * 0.008
+              : 1.20 + idSeed * 0.013;
+            const speedStep = (onEntranceStairs ? Math.min(0.92, baseWalkSpeed * 0.78) : baseWalkSpeed) * dtSec;
             const advanceThresh = isDoorwayThreshold(nextNode.x, nextNode.y) ? 0.16 : 0.28;
 
             if (activePath.length > 1 && dist <= advanceThresh) {
@@ -1253,18 +1308,41 @@ export default function App() {
               }
             }
 
-            updated.walkPhase += speedStep * 4.4;
+            updated.walkPhase += speedStep * (7.2 / Math.max(0.82, updated.heightScale || 1));
             changed = true;
           } else {
             // Reached current waypoint
             if (updated.state === 'arriving') {
-              updated.state = 'checkin_at_desk';
-              updated.waitTimer = 0;
+              if (Math.hypot(updated.targetX - updated.gridX, updated.targetY - updated.gridY) > 0.58) {
+                const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                const spot = getReceptionCheckinSpot(claimedSoFar);
+                const rerouted = buildPatientPath(updated, spot.x, spot.y);
+                updated.targetX = spot.x;
+                updated.targetY = spot.y;
+                if (rerouted.length > 0) {
+                  updated.path = rerouted;
+                } else {
+                  updated.state = 'checkin_at_desk';
+                  updated.waitTimer = 0;
+                }
+              } else {
+                updated.state = 'checkin_at_desk';
+                updated.waitTimer = 0;
+              }
               changed = true;
             } else if (updated.state === 'checkin_at_desk') {
               updated.waitTimer += dtMs;
-              const checkinMs = receptionistHired ? 780 : 1200;
-              if (updated.waitTimer >= checkinMs) {
+              const hasDesk = clinic.placedItems.some((it) => it.catalogId === 'reception_desk');
+              const hasCabinet = clinic.placedItems.some((it) => it.catalogId === 'file_cabinet');
+              const checkedByRec = receptionCheckedInIdsRef.current.has(updated.id);
+              const maxCheckinMs =
+                receptionistHired && hasDesk && hasCabinet
+                  ? 9000
+                  : receptionistHired && hasDesk
+                    ? 2600
+                    : 1800;
+              if ((checkedByRec && updated.waitTimer >= 1600) || updated.waitTimer >= maxCheckinMs) {
+                receptionCheckedInIdsRef.current.delete(updated.id);
                 const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
                 const coolerSpot =
                   Math.random() < 0.46
@@ -1294,7 +1372,7 @@ export default function App() {
               changed = true;
             } else if (updated.state === 'drinking_water') {
               updated.waitTimer += dtMs;
-              if (updated.waitTimer >= 3650) {
+              if (updated.waitTimer >= 3850) {
                 const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
                 assignWaitingDestination(updated, claimedSoFar);
                 changed = true;
@@ -1496,7 +1574,7 @@ export default function App() {
 
         return changed ? nextList : prev;
       });
-    }, 95);
+    }, 40);
 
     return () => clearInterval(tick);
   }, [
@@ -1810,9 +1888,13 @@ export default function App() {
         if (!cat || cat.isWallDecor) continue;
         const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
         const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
-        for (let dx = 0; dx < ew; dx++) {
-          for (let dy = 0; dy < ed; dy++) {
-            occupiedTiles.add(`${existing.gridX + dx},${existing.gridY + dy}`);
+        const minTx = Math.floor(existing.gridX + 0.05);
+        const maxTx = Math.floor(existing.gridX + ew - 0.05);
+        const minTy = Math.floor(existing.gridY + 0.05);
+        const maxTy = Math.floor(existing.gridY + ed - 0.05);
+        for (let tx = minTx; tx <= maxTx; tx++) {
+          for (let ty = minTy; ty <= maxTy; ty++) {
+            occupiedTiles.add(`${tx},${ty}`);
           }
         }
       }
@@ -1870,9 +1952,13 @@ export default function App() {
         if (!cat || cat.isWallDecor) continue;
         const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
         const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
-        for (let dx = 0; dx < ew; dx++) {
-          for (let dy = 0; dy < ed; dy++) {
-            occupiedIndoor.add(`${existing.gridX + dx},${existing.gridY + dy}`);
+        const minTx = Math.floor(existing.gridX + 0.05);
+        const maxTx = Math.floor(existing.gridX + ew - 0.05);
+        const minTy = Math.floor(existing.gridY + 0.05);
+        const maxTy = Math.floor(existing.gridY + ed - 0.05);
+        for (let tx = minTx; tx <= maxTx; tx++) {
+          for (let ty = minTy; ty <= maxTy; ty++) {
+            occupiedIndoor.add(`${tx},${ty}`);
           }
         }
       }
@@ -1913,9 +1999,13 @@ export default function App() {
         if (!cat || cat.isWallDecor) continue;
         const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
         const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
-        for (let dx = 0; dx < ew; dx++) {
-          for (let dy = 0; dy < ed; dy++) {
-            occupiedOutdoor.add(`${existing.gridX + dx},${existing.gridY + dy}`);
+        const minTx = Math.floor(existing.gridX + 0.05);
+        const maxTx = Math.floor(existing.gridX + ew - 0.05);
+        const minTy = Math.floor(existing.gridY + 0.05);
+        const maxTy = Math.floor(existing.gridY + ed - 0.05);
+        for (let tx = minTx; tx <= maxTx; tx++) {
+          for (let ty = minTy; ty <= maxTy; ty++) {
+            occupiedOutdoor.add(`${tx},${ty}`);
           }
         }
       }
@@ -1971,7 +2061,7 @@ export default function App() {
 
     const finalRotation = rotation ?? placementDraft.rotation;
     const room = clinic.rooms.find(
-      (r) => gx >= r.minX && gx <= r.maxX && gy >= r.minY && gy <= r.maxY
+      (r) => gx >= r.minX - 0.05 && gx < r.maxX + 1 && gy >= r.minY - 0.05 && gy < r.maxY + 1
     );
     const roomId = room ? room.id : 'outdoor';
 
@@ -2273,6 +2363,7 @@ export default function App() {
         lightingMode={lightingMode}
         removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
         selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
+        onReceptionCheckinDone={handleReceptionCheckinDone}
         onTapPatient={handleTapPatient}
         onTapLockedRoom={(room) => {
           if (!visitingFriend) {
@@ -2333,10 +2424,10 @@ export default function App() {
             const prev = placementDraft;
             const targetRoom = clinic.rooms.find(
               (r) =>
-                prev.hoverX >= r.minX &&
-                prev.hoverX <= r.maxX &&
-                prev.hoverY >= r.minY &&
-                prev.hoverY <= r.maxY
+                prev.hoverX >= r.minX - 0.05 &&
+                prev.hoverX < r.maxX + 1 &&
+                prev.hoverY >= r.minY - 0.05 &&
+                prev.hoverY < r.maxY + 1
             );
             const nextRoomId = targetRoom ? targetRoom.id : 'outdoor';
             const isMoved = clinic.placedItems.some(
@@ -2407,8 +2498,8 @@ export default function App() {
             if (!prev) return null;
             if (prev.catalogItem.isWallDecor || isWallDecorId(prev.catalogItem.id)) {
               const validRots = getValidWallRotationsForTile(
-                prev.hoverX,
-                prev.hoverY,
+                Math.floor(prev.hoverX + 0.05),
+                Math.floor(prev.hoverY + 0.05),
                 clinic.rooms
               );
               if (validRots.length > 1) {

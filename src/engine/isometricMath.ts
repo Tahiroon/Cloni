@@ -231,17 +231,16 @@ export function overlapsActiveWorldTree(
   removedTreeIds: string[] = []
 ): boolean {
   const removedSet = new Set(removedTreeIds);
+  const x0 = gx;
+  const x1 = gx + effW;
+  const z0 = gy;
+  const z1 = gy + effD;
   for (const tree of WORLD_TREES) {
     if (removedSet.has(tree.id)) continue;
-    const tx = Math.floor(tree.x);
-    const ty = Math.floor(tree.z);
-    for (let dx = 0; dx < effW; dx++) {
-      for (let dy = 0; dy < effD; dy++) {
-        const cx = gx + dx;
-        const cy = gy + dy;
-        if (cx === tx && cy === ty) return true;
-        if (Math.hypot(cx + 0.5 - tree.x, cy + 0.5 - tree.z) < 0.72) return true;
-      }
+    const nearestX = Math.max(x0, Math.min(tree.x, x1));
+    const nearestZ = Math.max(z0, Math.min(tree.z, z1));
+    if (Math.hypot(nearestX - tree.x, nearestZ - tree.z) < 0.72) {
+      return true;
     }
   }
   return false;
@@ -292,7 +291,27 @@ export function isValidWallMount(
   rotation: 0 | 1 | 2 | 3,
   rooms: ClinicRoom[]
 ): boolean {
-  return getValidWallRotationsForTile(gx, gy, rooms).includes(rotation);
+  if (rotation === 0) {
+    if (Math.abs(gx - 2) > 0.02 && Math.abs(gx - 12) > 0.02) return false;
+    const wallX = Math.round(gx);
+    const minTy = Math.floor(gy + 0.03);
+    const maxTy = Math.floor(gy + 0.96);
+    for (let ty = minTy; ty <= maxTy; ty++) {
+      if (!getValidWallRotationsForTile(wallX, ty, rooms).includes(0)) return false;
+    }
+    return minTy <= maxTy;
+  }
+  if (rotation === 1) {
+    if (Math.abs(gy - 2) > 0.02 && Math.abs(gy - 10) > 0.02) return false;
+    const wallY = Math.round(gy);
+    const minTx = Math.floor(gx + 0.03);
+    const maxTx = Math.floor(gx + 0.96);
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      if (!getValidWallRotationsForTile(tx, wallY, rooms).includes(1)) return false;
+    }
+    return minTx <= maxTx;
+  }
+  return false;
 }
 
 export function getWallMountEdgeCenter(
@@ -467,23 +486,51 @@ export function buildObstacleBoxes(
     const fp = itemFootprints.get(item.catalogId) || { w: 1, d: 1 };
     const w = item.rotation % 2 === 0 ? fp.w : fp.d;
     const d = item.rotation % 2 === 0 ? fp.d : fp.w;
+    if (item.catalogId === 'file_cabinet') {
+      // bookshelf.glb is wide & shallow (~0.68m x 0.22m); keep collider tight along its facing depth
+      // so staff can step right up to the open shelf to pick medical charts.
+      const insetX = item.rotation % 2 === 0 ? 0.15 : 0.33;
+      const insetZ = item.rotation % 2 === 0 ? 0.33 : 0.15;
+      boxes.push({
+        minX: item.gridX + insetX,
+        maxX: item.gridX + w - insetX,
+        minZ: item.gridY + insetZ,
+        maxZ: item.gridY + d - insetZ,
+        itemId: item.instanceId,
+      });
+      continue;
+    }
     const inset =
       item.catalogId === 'exercise_mat'
         ? 0.24
         : item.catalogId === 'waste_bin' ||
             item.catalogId === 'doctor_stool' ||
-            item.catalogId === 'sanitizing_kiosk'
-          ? 0.22
-          : item.catalogId === 'waiting_chairs' ||
-              item.catalogId === 'lounge_chair' ||
-              item.catalogId === 'luxury_chair' ||
-              item.catalogId === 'park_bench'
-            ? 0.08
-            : item.catalogId === 'flower_bed' ||
-                item.catalogId === 'garden_lamp' ||
-                item.catalogId === 'garden_spot_lamp'
-              ? 0.14
-              : 0.09;
+            item.catalogId === 'sanitizing_kiosk' ||
+            item.catalogId === 'water_cooler'
+          ? 0.23
+          : item.catalogId === 'wheelchair_bay' ||
+              item.catalogId === 'exercise_bike' ||
+              item.catalogId === 'tens_unit' ||
+              item.catalogId === 'ultrasound_unit' ||
+              item.catalogId === 'laser_hilt' ||
+              item.catalogId === 'swd_unit' ||
+              item.catalogId === 'shockwave_eswt' ||
+              item.catalogId === 'emg_biofeedback' ||
+              item.catalogId === 'cryo_unit' ||
+              item.catalogId === 'paraffin_bath' ||
+              item.catalogId === 'pt_toolkit_cart' ||
+              item.catalogId === 'infrared_lamp'
+            ? 0.16
+            : item.catalogId === 'waiting_chairs' ||
+                item.catalogId === 'lounge_chair' ||
+                item.catalogId === 'luxury_chair' ||
+                item.catalogId === 'park_bench'
+              ? 0.1
+              : item.catalogId === 'flower_bed' ||
+                  item.catalogId === 'garden_lamp' ||
+                  item.catalogId === 'garden_spot_lamp'
+                ? 0.14
+                : 0.1;
     boxes.push({
       minX: item.gridX + inset,
       maxX: item.gridX + w - inset,
@@ -582,6 +629,133 @@ export interface WaitSeatSlot {
   isOutdoor: boolean;
 }
 
+export function rotateItemLocalPoint(
+  item: Pick<PlacedItem, 'gridX' | 'gridY' | 'rotation'>,
+  baseWidth: number,
+  baseDepth: number,
+  lx: number,
+  lz: number
+): { x: number; z: number } {
+  const effW = item.rotation % 2 === 0 ? baseWidth : baseDepth;
+  const effD = item.rotation % 2 === 0 ? baseDepth : baseWidth;
+  const cx = item.gridX + effW / 2;
+  const cz = item.gridY + effD / 2;
+  const ry = (-item.rotation * Math.PI) / 2;
+  return {
+    x: cx + Math.cos(ry) * lx + Math.sin(ry) * lz,
+    z: cz - Math.sin(ry) * lx + Math.cos(ry) * lz,
+  };
+}
+
+export const RECEPTION_CHAIR_LOCAL_X = -0.23;
+export const RECEPTION_CHAIR_LOCAL_Z = -0.34;
+export const RECEPTION_CHAIR_SEAT_HEIGHT = 0.37;
+
+export interface ReceptionDeskPose {
+  seatWorldX: number;
+  seatWorldZ: number;
+  seatTileX: number;
+  seatTileY: number;
+  seatFacingRad: number;
+  seatHeight: number;
+  deskFileWorldX: number;
+  deskFileWorldZ: number;
+  approachCandidates: Array<{ x: number; y: number }>;
+  placeCandidates: Array<{ x: number; y: number }>;
+  checkinCandidates: Array<{ x: number; y: number }>;
+}
+
+/**
+ * Shared exact coordinate & facing solver for the reception desk chair, staff approach,
+ * file placement spots, and patient check-in spots across all 4 rotations and fractional placements.
+ */
+export function getReceptionDeskPose(desk: PlacedItem): ReceptionDeskPose {
+  const seatPt = rotateItemLocalPoint(
+    desk,
+    2,
+    1,
+    RECEPTION_CHAIR_LOCAL_X,
+    RECEPTION_CHAIR_LOCAL_Z
+  );
+  const deskFilePt = rotateItemLocalPoint(
+    desk,
+    2,
+    1,
+    RECEPTION_CHAIR_LOCAL_X - 0.3,
+    0.08
+  );
+  const seatFacingRad = (-desk.rotation * Math.PI) / 2;
+  const localApproaches: Array<[number, number]> = [
+    [-0.23, -0.78],
+    [-1.16, -0.32],
+    [1.16, -0.32],
+    [0.42, -0.78],
+    [-1.16, 0.32],
+    [1.16, 0.32],
+  ];
+  const localPlaceSpots: Array<[number, number]> = [
+    [-1.12, 0.06],
+    [-1.12, -0.26],
+    [-0.48, -0.78],
+    [-0.23, -0.78],
+    [1.12, 0.06],
+  ];
+  const localCheckins: Array<[number, number]> = [
+    [0.0, 0.86],
+    [-0.48, 0.86],
+    [0.52, 0.86],
+  ];
+
+  return {
+    seatWorldX: seatPt.x,
+    seatWorldZ: seatPt.z,
+    seatTileX: seatPt.x - 0.5,
+    seatTileY: seatPt.z - 0.5,
+    seatFacingRad,
+    seatHeight: RECEPTION_CHAIR_SEAT_HEIGHT,
+    deskFileWorldX: deskFilePt.x,
+    deskFileWorldZ: deskFilePt.z,
+    approachCandidates: localApproaches.map(([lx, lz]) => {
+      const p = rotateItemLocalPoint(desk, 2, 1, lx, lz);
+      return { x: p.x - 0.5, y: p.z - 0.5 };
+    }),
+    placeCandidates: localPlaceSpots.map(([lx, lz]) => {
+      const p = rotateItemLocalPoint(desk, 2, 1, lx, lz);
+      return { x: p.x - 0.5, y: p.z - 0.5 };
+    }),
+    checkinCandidates: localCheckins.map(([lx, lz]) => {
+      const p = rotateItemLocalPoint(desk, 2, 1, lx, lz);
+      return { x: p.x - 0.5, y: p.z - 0.5 };
+    }),
+  };
+}
+
+export function getCabinetApproachPoints(cabinet: PlacedItem): Array<{
+  x: number;
+  y: number;
+  facingRad: number;
+}> {
+  // Stand right in front of the slim shelf face (+Z local) with reachable side fallbacks
+  const localSpots: Array<[number, number]> = [
+    [0, 0.42],
+    [0.2, 0.42],
+    [-0.2, 0.42],
+    [0.58, 0],
+    [-0.58, 0],
+    [0, -0.42],
+  ];
+  const cabCenterX = cabinet.gridX + 0.5;
+  const cabCenterZ = cabinet.gridY + 0.5;
+  return localSpots.map(([lx, lz]) => {
+    const pt = rotateItemLocalPoint(cabinet, 1, 1, lx, lz);
+    return {
+      x: pt.x - 0.5,
+      y: pt.z - 0.5,
+      facingRad: Math.atan2(cabCenterX - pt.x, cabCenterZ - pt.z),
+    };
+  });
+}
+
 function rotateLocalSeatPoint(
   cx: number,
   cz: number,
@@ -609,10 +783,10 @@ export function buildWaitSeatSlots(
   for (const item of placedItems) {
     const room = rooms.find(
       (r) =>
-        item.gridX >= r.minX &&
-        item.gridX <= r.maxX &&
-        item.gridY >= r.minY &&
-        item.gridY <= r.maxY
+        item.gridX >= r.minX - 0.05 &&
+        item.gridX < r.maxX + 1 &&
+        item.gridY >= r.minY - 0.05 &&
+        item.gridY < r.maxY + 1
     );
     if (room && !room.unlocked) continue;
 
@@ -667,8 +841,8 @@ export function buildWaitSeatSlots(
       const cz = item.gridY + 0.5;
       const facingRad = (-item.rotation * Math.PI) / 2;
       const isLux = item.catalogId === 'luxury_chair';
-      const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, isLux ? 0.07 : 0.04);
-      const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.74);
+      const seatPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, isLux ? 0.062 : 0.037);
+      const appPt = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.72);
       seats.push({
         seatKey: `${item.instanceId}_0`,
         itemId: item.instanceId,
@@ -678,7 +852,7 @@ export function buildWaitSeatSlots(
         approachTileX: appPt.x - 0.5,
         approachTileY: appPt.z - 0.5,
         facingRad,
-        seatHeight: isLux ? 0.445 : 0.41,
+        seatHeight: isLux ? 0.396 : 0.377,
         isOutdoor: !room,
       });
     }
@@ -936,7 +1110,7 @@ function hasLineOfSight(
     const fx = x0 + (x1 - x0) * t;
     const fy = y0 + (y1 - y0) * t;
     if (boxes && i < steps) {
-      if (!isWorldWalkable(fx + 0.5, fy + 0.5, 0.27, boxes, segIgnore)) {
+      if (!isWorldWalkable(fx + 0.5, fy + 0.5, 0.215, boxes, segIgnore)) {
         return false;
       }
     }
@@ -981,15 +1155,13 @@ export function findGridPath(
     effStartY = safe.y;
   }
 
+  const directDist = Math.hypot(goalX - effStartX, goalY - effStartY);
+  if (directDist < 0.22) return [];
+
   let sx = Math.round(effStartX);
   let sy = Math.round(effStartY);
   const gx = Math.round(goalX);
   const gy = Math.round(goalY);
-
-  if (Math.hypot(goalX - effStartX, goalY - effStartY) < 0.22) return [];
-  if (sx === gx && sy === gy) {
-    return [{ x: goalX, y: goalY }];
-  }
 
   // Build blocked set for furniture, courtyard shrubs, and exterior doctor villa pad
   const blocked = new Set<string>([
@@ -1014,16 +1186,42 @@ export function findGridPath(
     const fp = itemFootprints.get(item.catalogId) || { w: 1, d: 1 };
     const w = item.rotation % 2 === 0 ? fp.w : fp.d;
     const d = item.rotation % 2 === 0 ? fp.d : fp.w;
-    for (let dx = 0; dx < w; dx++) {
-      for (let dy = 0; dy < d; dy++) {
-        const tx = item.gridX + dx;
-        const ty = item.gridY + dy;
-        const isGoalCell = tx === gx && ty === gy && Boolean(ignoreGoalItemId && item.instanceId === ignoreGoalItemId);
+    const minTx = Math.floor(item.gridX + 0.15);
+    const maxTx = Math.floor(item.gridX + w - 0.15);
+    const minTy = Math.floor(item.gridY + 0.15);
+    const maxTy = Math.floor(item.gridY + d - 0.15);
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      for (let ty = minTy; ty <= maxTy; ty++) {
+        const isGoalCell =
+          tx === gx &&
+          ty === gy &&
+          Boolean(ignoreGoalItemId && item.instanceId === ignoreGoalItemId);
         if (!isGoalCell && !(tx === sx && ty === sy)) {
           blocked.add(`${tx},${ty}`);
         }
       }
     }
+  }
+
+  // Always prefer exact straight-line shortest path whenever unobstructed
+  if (
+    hasLineOfSight(
+      effStartX,
+      effStartY,
+      goalX,
+      goalY,
+      rooms,
+      blocked,
+      boxes,
+      ignoreGoalItemId,
+      Boolean(ignoreGoalItemId && directDist < 1.35)
+    )
+  ) {
+    return [{ x: goalX, y: goalY }];
+  }
+
+  if (sx === gx && sy === gy) {
+    return [{ x: goalX, y: goalY }];
   }
 
   // If rounded start cell is inside an obstacle tile, nudge sx/sy to best adjacent free tile
@@ -1037,41 +1235,84 @@ export function findGridPath(
     }
   }
 
-  const queue: Array<{ x: number; y: number }> = [{ x: sx, y: sy }];
-  const visited = new Set<string>([`${sx},${sy}`]);
+  const startKey = `${sx},${sy}`;
+  const gScore = new Map<string, number>([[startKey, 0]]);
   const parent = new Map<string, string>();
-  const dirs = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-    [1, 1],
-    [1, -1],
-    [-1, 1],
-    [-1, -1],
+  const closed = new Set<string>();
+  const heap: Array<{ x: number; y: number; g: number; f: number; key: string }> = [
+    { x: sx, y: sy, g: 0, f: Math.hypot(gx - sx, gy - sy), key: startKey },
+  ];
+  const heapPush = (node: { x: number; y: number; g: number; f: number; key: string }) => {
+    heap.push(node);
+    let idx = heap.length - 1;
+    while (idx > 0) {
+      const pIdx = (idx - 1) >> 1;
+      if (heap[pIdx].f <= heap[idx].f) break;
+      const tmp = heap[pIdx];
+      heap[pIdx] = heap[idx];
+      heap[idx] = tmp;
+      idx = pIdx;
+    }
+  };
+  const heapPop = () => {
+    const top = heap[0];
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      let idx = 0;
+      const len = heap.length;
+      while (true) {
+        let best = idx;
+        const l = idx * 2 + 1;
+        const r = l + 1;
+        if (l < len && heap[l].f < heap[best].f) best = l;
+        if (r < len && heap[r].f < heap[best].f) best = r;
+        if (best === idx) break;
+        const tmp = heap[idx];
+        heap[idx] = heap[best];
+        heap[best] = tmp;
+        idx = best;
+      }
+    }
+    return top;
+  };
+
+  const dirs: Array<[number, number, number]> = [
+    [1, 0, 1],
+    [-1, 0, 1],
+    [0, 1, 1],
+    [0, -1, 1],
+    [1, 1, Math.SQRT2],
+    [1, -1, Math.SQRT2],
+    [-1, 1, Math.SQRT2],
+    [-1, -1, Math.SQRT2],
   ];
 
   let found = false;
-  let bestFallbackKey = `${sx},${sy}`;
+  let bestFallbackKey = startKey;
   let bestFallbackDist = Math.hypot(sx - gx, sy - gy);
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
+  let expansions = 0;
+  while (heap.length > 0 && expansions < 4200) {
+    const cur = heapPop();
+    if (closed.has(cur.key)) continue;
+    closed.add(cur.key);
+    expansions++;
+
     const curDist = Math.hypot(cur.x - gx, cur.y - gy);
     if (curDist < bestFallbackDist) {
       bestFallbackDist = curDist;
-      bestFallbackKey = `${cur.x},${cur.y}`;
+      bestFallbackKey = cur.key;
     }
     if (cur.x === gx && cur.y === gy) {
       found = true;
       break;
     }
 
-    for (const [dx, dy] of dirs) {
+    for (const [dx, dy, stepCost] of dirs) {
       const nx = cur.x + dx;
       const ny = cur.y + dy;
       const key = `${nx},${ny}`;
-      if (visited.has(key)) continue;
-      if (blocked.has(key)) continue;
+      if (closed.has(key) || blocked.has(key)) continue;
       // Strictly forbid cutting diagonally across a blocked furniture/wall corner
       if (dx !== 0 && dy !== 0) {
         if (blocked.has(`${cur.x + dx},${cur.y}`) || blocked.has(`${cur.x},${cur.y + dy}`)) {
@@ -1081,9 +1322,17 @@ export function findGridPath(
       if (!canStepBetween(cur.x, cur.y, nx, ny, rooms)) continue;
       if (!(nx === gx && ny === gy) && !isTileWalkable(nx, ny, 0.18, boxes)) continue;
 
-      visited.add(key);
-      parent.set(key, `${cur.x},${cur.y}`);
-      queue.push({ x: nx, y: ny });
+      const tentativeG = cur.g + stepCost;
+      const prevBestG = gScore.get(key);
+      if (prevBestG !== undefined && tentativeG >= prevBestG - 1e-6) continue;
+
+      gScore.set(key, tentativeG);
+      parent.set(key, cur.key);
+      const h = Math.hypot(gx - nx, gy - ny);
+      // Slight cross-product tie-breaker favors clean straight lines over unnecessary stair-stepping
+      const crossTie =
+        Math.abs((nx - gx) * (sy - gy) - (sx - gx) * (ny - gy)) * 0.0005;
+      heapPush({ x: nx, y: ny, g: tentativeG, f: tentativeG + h * 1.001 + crossTie, key });
     }
   }
 

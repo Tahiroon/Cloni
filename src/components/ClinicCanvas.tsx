@@ -13,6 +13,8 @@ import {
   CLINIC_FLOOR_ELEV,
   findGridPath,
   findNearestWalkableTile,
+  getCabinetApproachPoints,
+  getReceptionDeskPose,
   getSurfaceElevation,
   getValidWallRotationsForTile,
   hasContinuousLineOfSight,
@@ -42,6 +44,7 @@ import {
   createCatalogMesh3D,
   disposeObject3D,
   DoorActorInput,
+  ReceptionDeskRigMeta,
   SmartLightMeta,
   updateDoors3D,
   WaterCoolerRigMeta,
@@ -97,6 +100,7 @@ interface ClinicCanvasProps {
   onCancelPlacement: () => void;
   onRotatePlacement: () => void;
   onSellMovingDraft?: (instanceId: string) => void;
+  onReceptionCheckinDone?: (patientId: string) => void;
 }
 
 function probeSoftwareWebGL(): boolean {
@@ -154,14 +158,14 @@ function computeDoorPushTarget(
     const dz = z - door.centerZ;
     const perpDist = door.kind === 'swing_z' ? Math.abs(dx) : Math.abs(dz);
     const alongDist = door.kind === 'swing_z' ? Math.abs(dz) : Math.abs(dx);
-    if (alongDist > 0.52 || perpDist > 0.65) continue;
+    if (alongDist > 0.6 || perpDist > 0.82) continue;
 
     const approachDot =
       door.kind === 'swing_z'
         ? -Math.sign(dx || 1) * (vx / speed)
         : -Math.sign(dz || 1) * (vz / speed);
-    if (approachDot > 0.25 && perpDist >= 0.12) {
-      const reach = 1 - Math.abs(perpDist - 0.36) / 0.34;
+    if (approachDot > 0.18 && perpDist >= 0.1) {
+      const reach = 1 - Math.abs(perpDist - 0.44) / 0.42;
       if (reach > best) best = reach;
     }
   }
@@ -175,6 +179,7 @@ const PAN_MIN_X = 1.5;
 const PAN_MAX_X = 21.5;
 const PAN_MIN_Z = 4.0;
 const PAN_MAX_Z = 19.5;
+const snapFine = (v: number): number => Math.round(v * 20) / 20;
 
 export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   rooms,
@@ -205,6 +210,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   onCancelPlacement,
   onRotatePlacement,
   onSellMovingDraft,
+  onReceptionCheckinDone,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pointerSurfaceRef = useRef<HTMLDivElement | null>(null);
@@ -226,12 +232,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     if (draft.catalogItem.isWallDecor) {
       if (!isValidWallMount(gx, gy, draft.rotation, rooms)) return false;
 
-      // Wall items only conflict with other wall items sharing the same wall tile & orientation
+      // Wall items only conflict with other wall items overlapping along the same wall face
       for (const existing of placedItems) {
         if (existing.instanceId === draft.movingInstanceId) continue;
         const cat = catalogMap.get(existing.catalogId);
         if (!cat?.isWallDecor) continue;
-        if (existing.gridX === gx && existing.gridY === gy && existing.rotation === draft.rotation) {
+        if (
+          existing.rotation === draft.rotation &&
+          Math.abs(existing.gridX - gx) < 0.94 &&
+          Math.abs(existing.gridY - gy) < 0.94
+        ) {
           return false;
         }
       }
@@ -240,6 +250,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
     const effW = draft.rotation % 2 === 0 ? draft.catalogItem.width : draft.catalogItem.depth;
     const effD = draft.rotation % 2 === 0 ? draft.catalogItem.depth : draft.catalogItem.width;
+    const overlapTol = 0.03;
 
     if (draft.catalogItem.isSolarPanel || draft.catalogItem.id === 'solar_panel') {
       if (!isInSolarZone(gx, gy, effW, effD)) return false;
@@ -250,10 +261,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
         const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
         if (
-          gx < existing.gridX + ew &&
-          gx + effW > existing.gridX &&
-          gy < existing.gridY + ed &&
-          gy + effD > existing.gridY
+          gx + overlapTol < existing.gridX + ew &&
+          gx + effW - overlapTol > existing.gridX &&
+          gy + overlapTol < existing.gridY + ed &&
+          gy + effD - overlapTol > existing.gridY
         ) {
           return false;
         }
@@ -266,43 +277,59 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       draft.catalogItem.sprite === 'garden_lamp' ||
       draft.catalogItem.sprite === 'garden_spot_lamp';
 
-    for (let dx = 0; dx < effW; dx++) {
-      for (let dy = 0; dy < effD; dy++) {
-        const tx = gx + dx;
-        const ty = gy + dy;
+    const eps = 0.015;
+    const overlapsClinicInterior =
+      gx + effW > 2.02 && gx < 21.98 && gy + effD > 2.02 && gy < 21.98;
 
-        const room = rooms.find(
-          (r) => tx >= r.minX && tx <= r.maxX && ty >= r.minY && ty <= r.maxY
-        );
-
-        if (room) {
-          if (!room.unlocked) return false;
-          if (draft.catalogItem.indoorAllowed === false) return false;
-        } else {
-          if (draft.catalogItem.outdoorAllowed === false) return false;
-          if (!isTileInOutdoorGarden(tx, ty, isStreetOrGardenLamp)) return false;
-        }
-
-        const isFloorMat = (id: string) => id === 'floor_rug' || id === 'stone_pathway';
-        const draftIsMat = isFloorMat(draft.catalogItem.id);
-
-        for (const existing of placedItems) {
-          if (existing.instanceId === draft.movingInstanceId) continue;
-          const cat = catalogMap.get(existing.catalogId);
-          if (!cat || cat.isWallDecor) continue;
-          // Flat floor mats (rugs / stone pathways) sit cleanly underneath solid furniture & equipment
-          if (draftIsMat !== isFloorMat(existing.catalogId)) continue;
-          const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
-          const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
-          if (
-            tx >= existing.gridX &&
-            tx < existing.gridX + ew &&
-            ty >= existing.gridY &&
-            ty < existing.gridY + ed
-          ) {
+    if (overlapsClinicInterior) {
+      if (draft.catalogItem.indoorAllowed === false) return false;
+      // Must sit cleanly inside one unlocked room so partition walls and locked rooms remain respected
+      const fitsUnlockedRoom = rooms.some(
+        (r) =>
+          r.unlocked &&
+          gx >= r.minX - eps &&
+          gx + effW <= r.maxX + 1 + eps &&
+          gy >= r.minY - eps &&
+          gy + effD <= r.maxY + 1 + eps
+      );
+      if (!fitsUnlockedRoom) return false;
+    } else {
+      if (draft.catalogItem.outdoorAllowed === false) return false;
+      const minSx = gx + 0.04;
+      const maxSx = gx + effW - 0.04;
+      const minSy = gy + 0.04;
+      const maxSy = gy + effD - 0.04;
+      const xSteps = Math.max(1, Math.ceil((maxSx - minSx) / 0.45));
+      const ySteps = Math.max(1, Math.ceil((maxSy - minSy) / 0.45));
+      for (let ix = 0; ix <= xSteps; ix++) {
+        const sx = minSx + ((maxSx - minSx) * ix) / xSteps;
+        for (let iy = 0; iy <= ySteps; iy++) {
+          const sy = minSy + ((maxSy - minSy) * iy) / ySteps;
+          if (!isTileInOutdoorGarden(Math.floor(sx), Math.floor(sy), isStreetOrGardenLamp)) {
             return false;
           }
         }
+      }
+    }
+
+    const isFloorMat = (id: string) => id === 'floor_rug' || id === 'stone_pathway';
+    const draftIsMat = isFloorMat(draft.catalogItem.id);
+
+    for (const existing of placedItems) {
+      if (existing.instanceId === draft.movingInstanceId) continue;
+      const cat = catalogMap.get(existing.catalogId);
+      if (!cat || cat.isWallDecor) continue;
+      // Flat floor mats (rugs / stone pathways) sit cleanly underneath solid furniture & equipment
+      if (draftIsMat !== isFloorMat(existing.catalogId)) continue;
+      const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
+      const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
+      if (
+        gx + overlapTol < existing.gridX + ew &&
+        gx + effW - overlapTol > existing.gridX &&
+        gy + overlapTol < existing.gridY + ed &&
+        gy + effD - overlapTol > existing.gridY
+      ) {
+        return false;
       }
     }
 
@@ -337,6 +364,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     onTapWorldTree,
     onUpdatePlacementHover,
     onConfirmPlacement,
+    onReceptionCheckinDone,
   });
   latestRef.current = {
     rooms,
@@ -362,6 +390,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     onTapWorldTree,
     onUpdatePlacementHover,
     onConfirmPlacement,
+    onReceptionCheckinDone,
   };
 
   const camStateRef = useRef({
@@ -665,11 +694,28 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         facingRad: number;
         ignoreItemId?: string;
         actorSeed: number;
-        recMode?: 'desk' | 'leaving_seat' | 'to_cooler' | 'drinking' | 'to_desk';
+        recMode?:
+          | 'desk'
+          | 'leaving_seat'
+          | 'to_cabinet'
+          | 'at_cabinet'
+          | 'to_cooler'
+          | 'drinking'
+          | 'to_desk'
+          | 'placing_file';
+        recPurpose?: 'cooler' | 'cabinet';
         recStateTimer?: number;
         recDrinkTimer?: number;
+        recCabinetTimer?: number;
+        recPlaceTimer?: number;
         recCoolerId?: string;
         recCoolerFacing?: number;
+        recCabinetId?: string;
+        recCabinetFacing?: number;
+        recTargetPatientId?: string;
+        recHoldingFile?: boolean;
+        recDeskFileTimer?: number;
+        recHandledPatients?: Set<string>;
         recDeskApproachX?: number;
         recDeskApproachY?: number;
         recActivityTimer?: number;
@@ -753,7 +799,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         kind: 'promenade',
         gx: 28,
         gy: 4,
-        speed: 0.78,
+        speed: 1.12,
         appearance: {
           skinTone: '#653920',
           hairColor: '#17100c',
@@ -770,12 +816,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         kind: 'promenade',
         gx: 32,
         gy: 19,
-        speed: 0.74,
+        speed: 1.06,
         appearance: {
           skinTone: '#a66e49',
           hairColor: '#17100c',
-          shirtColor: '#114247',
-          pantsColor: '#dfd7cc',
+          shirtColor: '#6d28d9',
+          pantsColor: '#f3ede2',
           isFemale: true,
           outfitStyle: 'abaya_open',
           hasHijab: true,
@@ -787,12 +833,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         kind: 'visitor',
         gx: 28,
         gy: 17,
-        speed: 0.76,
+        speed: 1.15,
         appearance: {
           skinTone: '#8f5938',
           hairColor: '#17100c',
-          shirtColor: '#0369a1',
-          pantsColor: '#1e293b',
+          shirtColor: '#ea580c',
+          pantsColor: '#d6cfc2',
           isFemale: false,
           outfitStyle: 'casual',
           shirtStyle: 'tshirt',
@@ -804,12 +850,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         kind: 'visitor',
         gx: 25,
         gy: 11,
-        speed: 0.72,
+        speed: 1.08,
         appearance: {
           skinTone: '#522c18',
           hairColor: '#17100c',
-          shirtColor: '#8b4958',
-          pantsColor: '#8b4958',
+          shirtColor: '#0f766e',
+          pantsColor: '#0f766e',
           isFemale: true,
           outfitStyle: 'dress',
           hasHijab: true,
@@ -1207,8 +1253,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       let wy = baseY;
       let wz = gy + effD / 2;
       if (cat.isWallDecor) {
-        const onOuterWest = rot === 0 && gx === 2;
-        const onOuterNorth = rot === 1 && gy === 2;
+        const onOuterWest = rot === 0 && Math.abs(gx - 2) < 0.05;
+        const onOuterNorth = rot === 1 && Math.abs(gy - 2) < 0.05;
         if (onOuterWest) wx += 0.05;
         if (onOuterNorth) wz += 0.05;
         if (onOuterWest || onOuterNorth) {
@@ -1222,7 +1268,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     let hasDraftDisplayKiosk = false;
 
     const isInsideClinicTile = (gx: number, gy: number) =>
-      gx >= 2 && gx <= 21 && gy >= 2 && gy <= 21;
+      gx >= 1.98 && gx < 22 && gy >= 1.98 && gy < 22;
 
     const syncItems = (nextItems: PlacedItem[], movingId?: string) => {
       const keepIds = new Set<string>();
@@ -1470,9 +1516,31 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         if (!hit) return null;
         if (hit.y < CLINIC_FLOOR_ELEV - 0.12 || hit.y > maxH + CLINIC_FLOOR_ELEV + 0.45) return null;
         if (hit.x < 1.7 || hit.x >= 22.3 || hit.z < 1.7 || hit.z >= 22.3) return null;
-        const gx = isAlongZ ? (Math.abs(hit.x - 2.15) < 0.6 ? 2 : 12) : Math.max(2, Math.min(21, Math.floor(hit.x)));
-        const gy = isAlongZ ? Math.max(2, Math.min(21, Math.floor(hit.z))) : (Math.abs(hit.z - 2.15) < 0.6 ? 2 : 10);
-        if (!getValidWallRotationsForTile(gx, gy, curRooms).includes(rot)) return null;
+        let gx: number;
+        let gy: number;
+        if (isAlongZ) {
+          gx = Math.abs(hit.x - 2.15) < 0.6 ? 2 : 12;
+          const fineGy = snapFine(Math.max(2, Math.min(21, hit.z - 0.5)));
+          const fallbackGy = Math.max(2, Math.min(21, Math.floor(hit.z)));
+          if (isValidWallMount(gx, fineGy, rot, curRooms)) {
+            gy = fineGy;
+          } else if (getValidWallRotationsForTile(gx, fallbackGy, curRooms).includes(rot)) {
+            gy = fallbackGy;
+          } else {
+            return null;
+          }
+        } else {
+          gy = Math.abs(hit.z - 2.15) < 0.6 ? 2 : 10;
+          const fineGx = snapFine(Math.max(2, Math.min(21, hit.x - 0.5)));
+          const fallbackGx = Math.max(2, Math.min(21, Math.floor(hit.x)));
+          if (isValidWallMount(fineGx, gy, rot, curRooms)) {
+            gx = fineGx;
+          } else if (getValidWallRotationsForTile(fallbackGx, gy, curRooms).includes(rot)) {
+            gx = fallbackGx;
+          } else {
+            return null;
+          }
+        }
         const score = camera.position.distanceToSquared(hit) - (rot === preferredRot ? 0.05 : 0);
         return { gx, gy, rotation: rot, score };
       };
@@ -1833,8 +1901,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       }
 
-      // Reset interactive water cooler parts each frame before active drinkers update them
+      // Reset interactive water cooler parts & reception desk placed file each frame before active actors update them
+      let showDeskPlacedFile = false;
+      for (const sr of staffRigs.values()) {
+        if (
+          sr.recMode !== undefined &&
+          ((sr.recDeskFileTimer ?? 0) > 0 || (sr.recMode === 'placing_file' && !sr.recHoldingFile))
+        ) {
+          showDeskPlacedFile = true;
+          break;
+        }
+      }
       for (const [itemId, entryItem] of itemMeshes.entries()) {
+        const rd = entryItem.mesh.userData.receptionDesk as ReceptionDeskRigMeta | undefined;
+        if (rd) {
+          rd.deskFile.visible = showDeskPlacedFile;
+        }
         const wc = entryItem.mesh.userData.waterCooler as WaterCoolerRigMeta | undefined;
         if (!wc) continue;
         wc.alcoveCup.visible = false;
@@ -1909,18 +1991,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           spr === 'exercise_mat'
             ? 0.066
             : spr === 'traction_table'
-              ? 0.59
+              ? 0.46
               : spr === 'magnetotherapy'
-                ? 0.535
+                ? 0.45
                 : spr === 'tilt_table'
-                  ? 0.65
+                  ? 0.6
                   : glbRegistry.ready
                     ? 0.365
                     : 0.575;
         const lyingHeight =
-          spr === 'tilt_table' ? 0.89 : bedMattressTop + 0.145;
+          spr === 'tilt_table' ? 0.82 : bedMattressTop + 0.145;
         const bedBodyZOffset =
-          spr === 'tilt_table' ? 0.58 * hScale : undefined;
+          spr === 'tilt_table' ? 0.53 * hScale : undefined;
         const tiltPitch = spr === 'tilt_table' ? -Math.PI / 2 + 0.52 : -Math.PI / 2;
         const isBikeStation = Boolean(isAtStation && station && spr === 'exercise_bike');
         const isActiveGaitStation = Boolean(
@@ -1996,9 +2078,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
             const bedCenterPt =
               spr === 'tilt_table'
-                ? rotLocal(0.08, 0)
+                ? rotLocal(0.074, 0)
                 : spr === 'traction_table'
-                  ? rotLocal(-0.07, 0)
+                  ? rotLocal(-0.066, 0)
                   : { x: cx, z: cz };
 
             if (entry.bedStationId !== station.instanceId) {
@@ -2093,12 +2175,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               bedTargetLie = 1;
             }
           } else if (isBikeStation) {
-            const pt = rotLocal(-0.22, 0);
+            const pt = rotLocal(-0.18, 0);
             targetX = pt.x;
             targetZ = pt.z;
             stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
           } else if (spr === 'treadmill') {
-            const pt = rotLocal(-0.14, 0);
+            const pt = rotLocal(-0.125, 0);
             targetX = pt.x;
             targetZ = pt.z;
             stationFacing = Math.PI / 2 - (station.rotation * Math.PI) / 2;
@@ -2174,16 +2256,24 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             : isSeatedWait
               ? 9.0
               : p.path.length > 0
-                ? 11.5
+                ? 14.0
                 : 9.5;
         let nextVisX = bedDirectPos ? bedDirectX : THREE.MathUtils.damp(entry.visX, targetX, dampRate, dt);
         let nextVisZ = bedDirectPos ? bedDirectZ : THREE.MathUtils.damp(entry.visZ, targetZ, dampRate, dt);
-        // Prevent brisk rocket catch-up right after rising from a bed/chair by pacing stride speed naturally
+        // Prevent brisk rocket catch-up and sideways sliding on sharp turns
         if (!bedDirectPos && !isAtStation && !isSeatedWait && !risingFromBed && !risingFromChair && p.path.length > 0) {
           const rawStepDx = nextVisX - prevVisX;
           const rawStepDz = nextVisZ - prevVisZ;
           const rawStepD = Math.hypot(rawStepDx, rawStepDz);
-          const maxStepD = Math.max(0.01, dt * 1.28);
+          let turnScale = 1.0;
+          if (rawStepD > 0.002) {
+            const desiredMoveAng = Math.atan2(rawStepDx, rawStepDz);
+            const tDiff = angleDiffAbs(entry.facingRad, desiredMoveAng);
+            if (tDiff > 0.35) {
+              turnScale = THREE.MathUtils.clamp(Math.cos(tDiff * 0.75), 0.35, 1.0);
+            }
+          }
+          const maxStepD = Math.max(0.01, dt * 1.55 * turnScale);
           if (rawStepD > maxStepD && rawStepD < 2.5) {
             const scaleStep = maxStepD / rawStepD;
             nextVisX = prevVisX + rawStepDx * scaleStep;
@@ -2307,7 +2397,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const effectiveSeatHeight = isLyingStation
           ? bedSeatH
           : isBikeStation
-            ? 0.66
+            ? 0.51
             : risingFromBed && entry.lastBedHeight !== undefined
               ? entry.lastBedHeight
               : risingFromChair && entry.lastSeatHeight !== undefined
@@ -2376,7 +2466,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const nearChairTurnZone =
           Boolean(headingToChair) && Math.hypot(seatWorldX - entry.visX, seatWorldZ - entry.visZ) < 1.05;
         if (stepDist > 0.0005 && (isMoving || entry.walkBlend > 0.04)) {
-          entry.walkPhase += stepDist * (surfPt.onStairs ? 5.6 : 4.4);
+          const hScalePt = Math.max(0.82, p.heightScale || 1);
+          entry.walkPhase += (stepDist * (surfPt.onStairs ? 8.5 : 7.2)) / hScalePt;
           if (
             stepDist > 0.0008 &&
             isMoving &&
@@ -2384,7 +2475,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             !(isLyingStation && bedDesiredFacing !== null)
           ) {
             const targetAngle = Math.atan2(mdx, mdz);
-            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 9.0));
+            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 12.5));
           }
         }
 
@@ -2397,10 +2488,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           entry.facingRad = lerpAngle(entry.facingRad, entry.lastBedEdgeFacing, Math.min(1, dt * 7.5));
         } else if (!isMoving || nearChairTurnZone || inPreSitTurnZone) {
           if (p.state === 'checkin_at_desk') {
+            const recStaff = curStaff.find((st) => st.role === 'receptionist' && st.hired);
+            const recRig = recStaff ? staffRigs.get(recStaff.id) : undefined;
             const desk = curItems.find((it) => it.catalogId === 'reception_desk');
-            const lookAngle = desk
-              ? Math.atan2(desk.gridX + 1.0 - entry.visX, desk.gridY + 0.5 - entry.visZ)
-              : Math.PI;
+            let targetLookX = desk ? desk.gridX + 1.0 : entry.visX;
+            let targetLookZ = desk ? desk.gridY + 0.5 : entry.visZ - 1;
+            if (desk) {
+              const dp = getReceptionDeskPose(desk);
+              targetLookX = dp.seatWorldX;
+              targetLookZ = dp.seatWorldZ;
+            }
+            if (recRig && Math.hypot(recRig.visX - entry.visX, recRig.visZ - entry.visZ) < 4.5) {
+              targetLookX = recRig.visX;
+              targetLookZ = recRig.visZ;
+            }
+            const lookAngle = Math.atan2(targetLookX - entry.visX, targetLookZ - entry.visZ);
             entry.facingRad = lerpAngle(entry.facingRad, lookAngle, Math.min(1, dt * 8));
           } else if (p.state === 'drinking_water') {
             const cooler = p.waterCoolerId
@@ -2418,21 +2520,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             if (wt < 1450) {
               drinkStage = 'filling';
               if (wc) {
-                const fillFrac = THREE.MathUtils.clamp(wt / 1380, 0.05, 1);
-                wc.alcoveCup.visible = true;
+                const fillFrac = THREE.MathUtils.clamp(wt / 1220, 0.05, 1);
+                wc.alcoveCup.visible = wt < 1250;
                 wc.alcoveWater.scale.y = fillFrac;
                 wc.alcoveWater.position.y = 0.008 + fillFrac * 0.028;
-                wc.stream.visible = wt < 1380;
+                wc.stream.visible = wt < 1220;
                 wc.stream.scale.x = 0.85 + 0.18 * Math.sin(timeSec * 30);
                 wc.stream.scale.z = wc.stream.scale.x;
-                wc.bubble.visible = wt < 1380;
+                wc.bubble.visible = wt < 1220;
                 wc.bubble.position.y = 0.98 + ((timeSec * 0.36) % 0.26);
               }
-            } else if (wt < 2950) {
+            } else if (wt < 3450) {
               drinkStage = 'sipping';
             } else {
-              drinkStage = wt < 3280 ? 'returning' : 'none';
-              if (wt >= 3280 && p.waterCoolerId && wc) {
+              drinkStage = wt < 3850 ? 'returning' : 'none';
+              if (wt >= 3720 && p.waterCoolerId && wc) {
                 coolerReturnUntil.set(p.waterCoolerId, timeSec + 8.5);
                 wc.returnedCup.visible = true;
               }
@@ -2476,6 +2578,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           activeGait: p.state === 'in_treatment' && isActiveGaitStation,
           isDrinking: p.state === 'drinking_water',
           drinkStage,
+          drinkElapsedMs: p.state === 'drinking_water' ? p.waitTimer : undefined,
           actorSeed: entry.actorSeed,
           stairClimb: entry.stairClimb,
         });
@@ -2489,13 +2592,35 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       }
 
-      // Sync Staff (60fps local therapist patrol — zero React re-render/IndexedDB overhead!)
+      // Sync Staff (60fps local therapist patrol & receptionist workflow — zero React re-render/IndexedDB overhead!)
       const activeStaffIds = new Set<string>();
+      const trimLongestLOS = (
+        gx: number,
+        gy: number,
+        path: Array<{ x: number; y: number }>,
+        radius: number
+      ) => {
+        if (path.length < 2) return;
+        for (let probe = path.length - 1; probe >= 1; probe--) {
+          if (hasContinuousLineOfSight(gx, gy, path[probe].x, path[probe].y, radius, obstacles)) {
+            path.splice(0, probe);
+            break;
+          }
+        }
+      };
+
       for (const s of curStaff) {
         if (!s.hired) continue;
         activeStaffIds.add(s.id);
         let entry = staffRigs.get(s.id);
         if (!entry) {
+          const initialDesk =
+            s.role === 'receptionist'
+              ? curItems.find((it) => it.catalogId === 'reception_desk')
+              : undefined;
+          const initPose = initialDesk ? getReceptionDeskPose(initialDesk) : null;
+          const initGx = initPose ? initPose.seatTileX : s.gridX;
+          const initGy = initPose ? initPose.seatTileY : s.gridY;
           const rig = createHumanoid3D({
             skinTone: s.skinTone,
             hairColor: s.hairColor,
@@ -2511,11 +2636,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           actorsLayer.add(rig.root);
           entry = {
             rig,
-            gx: s.gridX,
-            gy: s.gridY,
-            visX: s.gridX + 0.5,
-            visZ: s.gridY + 0.5,
-            groundY: getSurfaceElevation(s.gridX + 0.5, s.gridY + 0.5).actorY,
+            gx: initGx,
+            gy: initGy,
+            visX: initGx + 0.5,
+            visZ: initGy + 0.5,
+            groundY: getSurfaceElevation(initGx + 0.5, initGy + 0.5).actorY,
             stairClimb: 0,
             vx: 0,
             vz: 0,
@@ -2526,12 +2651,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             walkBlend: 0,
             sitBlend: s.role === 'receptionist' ? 1 : 0,
             doorPush: 0,
-            facingRad: s.role === 'receptionist' ? 0 : Math.PI / 2,
+            facingRad: initPose ? initPose.seatFacingRad : Math.PI / 2,
             actorSeed:
               (s.id.split('').reduce((acc, ch) => acc * 31 + ch.charCodeAt(0), 13) & 0xffff) + 101,
             recMode: s.role === 'receptionist' ? 'desk' : undefined,
-            recStateTimer: s.role === 'receptionist' ? 10 + Math.random() * 9 : undefined,
+            recStateTimer: s.role === 'receptionist' ? 12 + Math.random() * 10 : undefined,
             recDrinkTimer: 0,
+            recCabinetTimer: 0,
+            recHoldingFile: false,
+            recDeskFileTimer: 0,
+            recHandledPatients: new Set<string>(),
             recActivityTimer: s.role === 'receptionist' ? 3.5 + Math.random() * 3.5 : undefined,
             recSeatedActivity: s.role === 'receptionist' ? 'typing' : undefined,
           };
@@ -2541,68 +2670,66 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         let targetX = entry.gx + 0.5;
         let targetZ = entry.gy + 0.5;
         let recSeatFacing = 0;
+        let recSeatHeight = 0.38;
         let recDrinkStage: 'none' | 'filling' | 'sipping' | 'returning' = 'none';
+        let recDrinkElapsedMs: number | undefined;
         let isMoving = false;
 
         if (s.role === 'receptionist') {
           const deskItem = curItems.find((it) => it.catalogId === 'reception_desk');
-          let seatX = s.gridX + 0.5;
-          let seatZ = s.gridY + 0.5;
-          const deskApproachCandidates: Array<[number, number]> = [];
-          if (deskItem) {
-            if (deskItem.rotation === 0) {
-              seatX = deskItem.gridX + 0.9;
-              seatZ = deskItem.gridY + 0.08;
-              recSeatFacing = 0;
-              deskApproachCandidates.push(
-                [deskItem.gridX, deskItem.gridY - 1],
-                [deskItem.gridX + 1, deskItem.gridY - 1],
-                [deskItem.gridX - 1, deskItem.gridY],
-                [deskItem.gridX + 2, deskItem.gridY]
-              );
-            } else if (deskItem.rotation === 2) {
-              seatX = deskItem.gridX + 1.1;
-              seatZ = deskItem.gridY + 0.92;
-              recSeatFacing = Math.PI;
-              deskApproachCandidates.push(
-                [deskItem.gridX + 1, deskItem.gridY + 1],
-                [deskItem.gridX, deskItem.gridY + 1],
-                [deskItem.gridX + 2, deskItem.gridY],
-                [deskItem.gridX - 1, deskItem.gridY]
-              );
-            } else if (deskItem.rotation === 1) {
-              seatX = deskItem.gridX + 0.92;
-              seatZ = deskItem.gridY + 0.9;
-              recSeatFacing = -Math.PI / 2;
-              deskApproachCandidates.push(
-                [deskItem.gridX + 1, deskItem.gridY + 1],
-                [deskItem.gridX + 1, deskItem.gridY],
-                [deskItem.gridX, deskItem.gridY + 2],
-                [deskItem.gridX, deskItem.gridY - 1]
-              );
-            } else {
-              seatX = deskItem.gridX + 0.08;
-              seatZ = deskItem.gridY + 1.1;
-              recSeatFacing = Math.PI / 2;
-              deskApproachCandidates.push(
-                [deskItem.gridX - 1, deskItem.gridY + 1],
-                [deskItem.gridX - 1, deskItem.gridY],
-                [deskItem.gridX, deskItem.gridY + 2],
-                [deskItem.gridX, deskItem.gridY - 1]
-              );
+          const deskPose = deskItem ? getReceptionDeskPose(deskItem) : null;
+          const seatX = deskPose ? deskPose.seatWorldX : s.gridX + 0.5;
+          const seatZ = deskPose ? deskPose.seatWorldZ : s.gridY + 0.5;
+          recSeatFacing = deskPose ? deskPose.seatFacingRad : 0;
+          recSeatHeight = deskPose ? deskPose.seatHeight : 0.38;
+
+          const findDeskApproach = (destX?: number, destY?: number) => {
+            if (deskPose) {
+              let bestCand: { x: number; y: number } | null = null;
+              let bestDist = Infinity;
+              for (const cand of deskPose.approachCandidates) {
+                if (!isTileWalkable(cand.x, cand.y, 0.21, obstacles)) continue;
+                if (destX === undefined || destY === undefined) return cand;
+                const d = Math.hypot(cand.x - destX, cand.y - destY);
+                if (d < bestDist) {
+                  bestDist = d;
+                  bestCand = cand;
+                }
+              }
+              if (bestCand) return bestCand;
+            }
+            return findNearestWalkableTile(seatX - 0.5, seatZ - 0.5, 0.21, obstacles, deskItem?.instanceId);
+          };
+
+          const findPlaceApproach = () => {
+            if (deskPose) {
+              for (const cand of deskPose.placeCandidates) {
+                if (isTileWalkable(cand.x, cand.y, 0.21, obstacles)) {
+                  return cand;
+                }
+              }
+            }
+            return findDeskApproach(entry.gx, entry.gy);
+          };
+
+          if (!entry.recHandledPatients) {
+            entry.recHandledPatients = new Set<string>();
+          } else if (entry.recHandledPatients.size > 16) {
+            const activeIds = new Set(curPatients.map((pt) => pt.id));
+            for (const oldId of entry.recHandledPatients) {
+              if (!activeIds.has(oldId)) entry.recHandledPatients.delete(oldId);
             }
           }
 
-          const findDeskApproach = () => {
-            for (const [cx, cy] of deskApproachCandidates) {
-              if (isTileWalkable(cx, cy, 0.22, obstacles)) {
-                return { x: cx, y: cy };
-              }
-            }
-            return findNearestWalkableTile(seatX - 0.5, seatZ - 0.5, 0.22, obstacles);
-          };
-
           const checkinPatient = curPatients.find((pt) => pt.state === 'checkin_at_desk');
+          const incomingPatient = curPatients.find(
+            (pt) =>
+              !entry!.recHandledPatients!.has(pt.id) &&
+              (pt.state === 'checkin_at_desk' ||
+                (pt.state === 'arriving' &&
+                  Math.hypot(pt.gridX + 0.5 - seatX, pt.gridY + 0.5 - seatZ) < 2.8))
+          );
+
           const mode = entry.recMode || 'desk';
 
           if (mode === 'desk') {
@@ -2611,126 +2738,239 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             targetX = seatX;
             targetZ = seatZ;
 
-            if (checkinPatient) {
+            if (entry.recDeskFileTimer && entry.recDeskFileTimer > 0) {
+              entry.recDeskFileTimer = Math.max(0, entry.recDeskFileTimer - dt);
+              entry.recSeatedActivity = 'writing';
+            } else if (checkinPatient) {
               entry.recSeatedActivity = 'glance';
             } else {
               entry.recActivityTimer = (entry.recActivityTimer ?? 4.0) - dt;
               if (entry.recActivityTimer <= 0) {
                 const r = Math.random();
                 entry.recSeatedActivity =
-                  r < 0.42 ? 'typing' : r < 0.68 ? 'writing' : r < 0.85 ? 'glance' : 'rest';
+                  r < 0.44 ? 'typing' : r < 0.7 ? 'writing' : r < 0.86 ? 'glance' : 'rest';
                 entry.recActivityTimer = 3.8 + Math.random() * 4.4;
               }
             }
 
-            entry.recStateTimer = (entry.recStateTimer ?? 18.0) - dt;
-            if (entry.recStateTimer <= 0 && !checkinPatient && deskItem) {
-              const busyCoolers = new Set(
-                curPatients
-                  .filter(
-                    (pt) =>
-                      (pt.state === 'walking_to_water' || pt.state === 'drinking_water') &&
-                      pt.waterCoolerId
-                  )
-                  .map((pt) => pt.waterCoolerId!)
-              );
-
-              const approach = findDeskApproach();
-              let chosenCooler: {
+            // Priority 1: When a patient arrives/checks in, get up cleanly and fetch their clinical file from the nearest file cabinet
+            if (incomingPatient && deskItem) {
+              entry.recHandledPatients.add(incomingPatient.id);
+              entry.recTargetPatientId = incomingPatient.id;
+              let bestCab: {
                 id: string;
-                x: number;
-                y: number;
+                approachX: number;
+                approachY: number;
                 facing: number;
                 path: Array<{ x: number; y: number }>;
+                len: number;
               } | null = null;
 
-              for (const item of curItems) {
-                if (item.catalogId !== 'water_cooler' || busyCoolers.has(item.instanceId)) continue;
+              for (const cab of curItems) {
+                if (cab.catalogId !== 'file_cabinet') continue;
                 const rm = curRooms.find(
                   (r) =>
-                    item.gridX >= r.minX &&
-                    item.gridX <= r.maxX &&
-                    item.gridY >= r.minY &&
-                    item.gridY <= r.maxY
+                    cab.gridX >= r.minX - 0.05 &&
+                    cab.gridX < r.maxX + 1 &&
+                    cab.gridY >= r.minY - 0.05 &&
+                    cab.gridY < r.maxY + 1
                 );
                 if (rm && !rm.unlocked) continue;
 
-                const pref =
-                  item.rotation === 0
-                    ? { dx: 0, dy: 0.68 }
-                    : item.rotation === 1
-                      ? { dx: -0.68, dy: 0 }
-                      : item.rotation === 2
-                        ? { dx: 0, dy: -0.68 }
-                        : { dx: 0.68, dy: 0 };
-
-                const cands = [
-                  pref,
-                  { dx: 0, dy: 0.68 },
-                  { dx: 0.68, dy: 0 },
-                  { dx: -0.68, dy: 0 },
-                  { dx: 0, dy: -0.68 },
-                ];
-                for (const c of cands) {
-                  const tx = item.gridX + c.dx;
-                  const ty = item.gridY + c.dy;
-                  if (!isTileWalkable(tx, ty, 0.22, obstacles)) continue;
+                const approach = findDeskApproach(cab.gridX, cab.gridY);
+                const spots = getCabinetApproachPoints(cab);
+                for (const sp of spots) {
+                  if (!isTileWalkable(sp.x, sp.y, 0.21, obstacles)) continue;
                   const pTest = findGridPath(
                     approach.x,
                     approach.y,
-                    tx,
-                    ty,
+                    sp.x,
+                    sp.y,
                     curRooms,
                     curItems,
                     walkerFootprints,
                     obstacles
                   );
-                  if (pTest.length > 0) {
-                    chosenCooler = {
-                      id: item.instanceId,
-                      x: tx,
-                      y: ty,
-                      facing: Math.atan2(item.gridX - tx, item.gridY - ty),
-                      path: pTest,
-                    };
-                    break;
+                  if (pTest.length > 0 || Math.hypot(sp.x - approach.x, sp.y - approach.y) < 0.45) {
+                    const estLen =
+                      Math.hypot(approach.x - entry.gx, approach.y - entry.gy) +
+                      pTest.reduce(
+                        (sum, n, idx) =>
+                          sum +
+                          Math.hypot(
+                            n.x - (idx === 0 ? approach.x : pTest[idx - 1].x),
+                            n.y - (idx === 0 ? approach.y : pTest[idx - 1].y)
+                          ),
+                        0
+                      );
+                    if (!bestCab || estLen < bestCab.len) {
+                      bestCab = {
+                        id: cab.instanceId,
+                        approachX: approach.x,
+                        approachY: approach.y,
+                        facing: sp.facingRad,
+                        path: pTest,
+                        len: estLen,
+                      };
+                    }
                   }
                 }
-                if (chosenCooler) break;
               }
 
-              if (chosenCooler) {
+              if (bestCab) {
                 entry.recMode = 'leaving_seat';
-                entry.recDeskApproachX = approach.x;
-                entry.recDeskApproachY = approach.y;
-                entry.recCoolerId = chosenCooler.id;
-                entry.recCoolerFacing = chosenCooler.facing;
-                entry.path = chosenCooler.path;
+                entry.recPurpose = 'cabinet';
+                entry.recHoldingFile = false;
+                entry.recDeskFileTimer = 0;
+                entry.recDeskApproachX = bestCab.approachX;
+                entry.recDeskApproachY = bestCab.approachY;
+                entry.recCabinetId = bestCab.id;
+                entry.recCabinetFacing = bestCab.facing;
+                entry.path = bestCab.path;
                 entry.stuckTimer = 0;
               } else {
-                entry.recStateTimer = 8 + Math.random() * 6;
+                entry.recDeskFileTimer = 3.2;
+                latestRef.current.onReceptionCheckinDone?.(incomingPatient.id);
+                entry.recTargetPatientId = undefined;
+              }
+            } else {
+              // Priority 2: Occasional natural hydration break at the water cooler when lobby is calm
+              entry.recStateTimer = (entry.recStateTimer ?? 18.0) - dt;
+              if (entry.recStateTimer <= 0 && !checkinPatient && deskItem) {
+                const busyCoolers = new Set(
+                  curPatients
+                    .filter(
+                      (pt) =>
+                        (pt.state === 'walking_to_water' || pt.state === 'drinking_water') &&
+                        pt.waterCoolerId
+                    )
+                    .map((pt) => pt.waterCoolerId!)
+                );
+
+                let chosenCooler: {
+                  id: string;
+                  approachX: number;
+                  approachY: number;
+                  facing: number;
+                  path: Array<{ x: number; y: number }>;
+                  len: number;
+                } | null = null;
+
+                for (const item of curItems) {
+                  if (item.catalogId !== 'water_cooler' || busyCoolers.has(item.instanceId)) continue;
+                  const rm = curRooms.find(
+                    (r) =>
+                      item.gridX >= r.minX - 0.05 &&
+                      item.gridX < r.maxX + 1 &&
+                      item.gridY >= r.minY - 0.05 &&
+                      item.gridY < r.maxY + 1
+                  );
+                  if (rm && !rm.unlocked) continue;
+
+                  const approach = findDeskApproach(item.gridX, item.gridY);
+                  const pref =
+                    item.rotation === 0
+                      ? { dx: 0, dy: 0.68 }
+                      : item.rotation === 1
+                        ? { dx: -0.68, dy: 0 }
+                        : item.rotation === 2
+                          ? { dx: 0, dy: -0.68 }
+                          : { dx: 0.68, dy: 0 };
+
+                  const cands = [
+                    pref,
+                    { dx: 0, dy: 0.68 },
+                    { dx: 0.68, dy: 0 },
+                    { dx: -0.68, dy: 0 },
+                    { dx: 0, dy: -0.68 },
+                  ];
+                  for (const c of cands) {
+                    const tx = item.gridX + c.dx;
+                    const ty = item.gridY + c.dy;
+                    if (!isTileWalkable(tx, ty, 0.21, obstacles)) continue;
+                    const pTest = findGridPath(
+                      approach.x,
+                      approach.y,
+                      tx,
+                      ty,
+                      curRooms,
+                      curItems,
+                      walkerFootprints,
+                      obstacles
+                    );
+                    if (pTest.length > 0) {
+                      const estLen =
+                        Math.hypot(approach.x - entry.gx, approach.y - entry.gy) +
+                        pTest.reduce(
+                          (sum, n, idx) =>
+                            sum +
+                            Math.hypot(
+                              n.x - (idx === 0 ? approach.x : pTest[idx - 1].x),
+                              n.y - (idx === 0 ? approach.y : pTest[idx - 1].y)
+                            ),
+                          0
+                        );
+                      if (!chosenCooler || estLen < chosenCooler.len) {
+                        chosenCooler = {
+                          id: item.instanceId,
+                          approachX: approach.x,
+                          approachY: approach.y,
+                          facing: Math.atan2(item.gridX - tx, item.gridY - ty),
+                          path: pTest,
+                          len: estLen,
+                        };
+                      }
+                    }
+                  }
+                }
+
+                if (chosenCooler) {
+                  entry.recMode = 'leaving_seat';
+                  entry.recPurpose = 'cooler';
+                  entry.recHoldingFile = false;
+                  entry.recDeskApproachX = chosenCooler.approachX;
+                  entry.recDeskApproachY = chosenCooler.approachY;
+                  entry.recCoolerId = chosenCooler.id;
+                  entry.recCoolerFacing = chosenCooler.facing;
+                  entry.path = chosenCooler.path;
+                  entry.stuckTimer = 0;
+                } else {
+                  entry.recStateTimer = 9 + Math.random() * 6;
+                }
               }
             }
           } else if (mode === 'leaving_seat') {
-            if (entry.sitBlend < 0.24) {
-              const ax = entry.recDeskApproachX ?? entry.gx;
-              const ay = entry.recDeskApproachY ?? entry.gy;
-              const dx = ax - entry.gx;
-              const dy = ay - entry.gy;
+            if (entry.sitBlend < 0.22) {
+              const goalNode = entry.path[entry.path.length - 1];
+              const app =
+                entry.recDeskApproachX !== undefined &&
+                entry.recDeskApproachY !== undefined &&
+                isTileWalkable(entry.recDeskApproachX, entry.recDeskApproachY, 0.21, obstacles)
+                  ? { x: entry.recDeskApproachX, y: entry.recDeskApproachY }
+                  : findDeskApproach(goalNode?.x, goalNode?.y);
+              entry.recDeskApproachX = app.x;
+              entry.recDeskApproachY = app.y;
+              const dx = app.x - entry.gx;
+              const dy = app.y - entry.gy;
               const dist = Math.hypot(dx, dy);
               const step = 1.38 * dt;
-              if (dist <= Math.max(0.08, step)) {
-                entry.gx = ax;
-                entry.gy = ay;
-                entry.recMode = 'to_cooler';
+              const nextMode = entry.recPurpose === 'cabinet' ? 'to_cabinet' : 'to_cooler';
+              const clearDirect =
+                entry.path.length > 0 &&
+                isTileWalkable(entry.gx, entry.gy, 0.21, obstacles) &&
+                hasContinuousLineOfSight(entry.gx, entry.gy, entry.path[0].x, entry.path[0].y, 0.21, obstacles);
+              if (dist <= Math.max(0.08, step) || clearDirect) {
+                if (!clearDirect) {
+                  entry.gx = app.x;
+                  entry.gy = app.y;
+                }
+                entry.recMode = nextMode;
               } else {
-                const candX = entry.gx + (dx / dist) * step;
-                const candY = entry.gy + (dy / dist) * step;
                 const res = resolveTileStep(
                   entry.gx,
                   entry.gy,
-                  candX,
-                  candY,
+                  entry.gx + (dx / dist) * step,
+                  entry.gy + (dy / dist) * step,
                   0.2,
                   obstacles,
                   deskItem?.instanceId
@@ -2738,22 +2978,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 entry.gx = res.x;
                 entry.gy = res.y;
                 if (res.blocked) {
-                  entry.recMode = 'to_cooler';
+                  entry.recMode = nextMode;
                 }
               }
             }
             targetX = entry.gx + 0.5;
             targetZ = entry.gy + 0.5;
-          } else if (mode === 'to_cooler') {
-            const coolerStillFree =
-              entry.recCoolerId &&
-              curItems.some((it) => it.instanceId === entry.recCoolerId) &&
-              !curPatients.some(
-                (pt) => pt.state === 'drinking_water' && pt.waterCoolerId === entry.recCoolerId
-              );
-
-            if (!coolerStillFree) {
-              const app = findDeskApproach();
+          } else if (mode === 'to_cabinet') {
+            const cabStillExists =
+              entry.recCabinetId && curItems.find((it) => it.instanceId === entry!.recCabinetId);
+            if (!cabStillExists) {
+              const app = findDeskApproach(entry.gx, entry.gy);
               entry.recDeskApproachX = app.x;
               entry.recDeskApproachY = app.y;
               entry.path = findGridPath(
@@ -2767,26 +3002,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 obstacles
               );
               entry.recMode = 'to_desk';
-              entry.recCoolerId = undefined;
+              entry.recCabinetId = undefined;
             } else if (entry.path.length > 0) {
-              if (
-                entry.path.length >= 2 &&
-                hasContinuousLineOfSight(
-                  entry.gx,
-                  entry.gy,
-                  entry.path[1].x,
-                  entry.path[1].y,
-                  0.22,
-                  obstacles
-                )
-              ) {
-                entry.path.shift();
-              }
+              trimLongestLOS(entry.gx, entry.gy, entry.path, 0.21);
               const nextNode = entry.path[0];
               const dx = nextNode.x - entry.gx;
               const dy = nextNode.y - entry.gy;
               const dist = Math.hypot(dx, dy);
-              const step = 0.9 * dt;
+              const turnDiff = dist > 0.01 ? angleDiffAbs(entry.facingRad, Math.atan2(dx, dy)) : 0;
+              const turnScale = turnDiff > 0.35 ? THREE.MathUtils.clamp(Math.cos(turnDiff * 0.75), 0.35, 1.0) : 1.0;
+              const step = 1.26 * turnScale * dt;
 
               let avoidX = 0;
               let avoidY = 0;
@@ -2795,17 +3020,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 const ox = entry.gx - pt.gridX;
                 const oy = entry.gy - pt.gridY;
                 const od = Math.hypot(ox, oy);
-                if (od > 0.01 && od < 0.68) {
-                  const push = (0.68 - od) * 0.25;
+                if (od > 0.01 && od < 0.62) {
+                  const push = (0.62 - od) * 0.22;
                   avoidX += (ox / od) * push;
                   avoidY += (oy / od) * push;
                 }
               }
 
-              if (entry.path.length > 1 && dist <= 0.24) {
+              if (entry.path.length > 1 && dist <= 0.22) {
                 entry.path.shift();
               } else if (dist <= Math.max(0.08, step)) {
-                const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.21, obstacles);
+                const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.2, obstacles);
                 entry.gx = res.x;
                 entry.gy = res.y;
                 entry.path.shift();
@@ -2819,7 +3044,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                   entry.gy,
                   entry.gx + (steerX / steerLen) * step,
                   entry.gy + (steerY / steerLen) * step,
-                  0.21,
+                  0.2,
                   obstacles
                 );
                 const movedDist = Math.hypot(res.x - entry.gx, res.y - entry.gy);
@@ -2827,7 +3052,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 entry.gy = res.y;
                 if (res.blocked && movedDist < step * 0.24) {
                   entry.stuckTimer += dt;
-                  if (entry.stuckTimer > 0.22) {
+                  if (entry.stuckTimer > 0.2) {
                     const dest = entry.path[entry.path.length - 1];
                     entry.path = dest
                       ? findGridPath(
@@ -2843,7 +3068,144 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                       : [];
                     entry.stuckTimer = 0;
                     if (entry.path.length === 0) {
-                      const app = findDeskApproach();
+                      const app = findDeskApproach(entry.gx, entry.gy);
+                      entry.recMode = 'to_desk';
+                      entry.recCabinetId = undefined;
+                      entry.path = findGridPath(
+                        entry.gx,
+                        entry.gy,
+                        app.x,
+                        app.y,
+                        curRooms,
+                        curItems,
+                        walkerFootprints,
+                        obstacles
+                      );
+                    }
+                  }
+                } else {
+                  entry.stuckTimer = 0;
+                }
+              }
+            } else {
+              entry.recMode = 'at_cabinet';
+              entry.recCabinetTimer = 0;
+            }
+            targetX = entry.gx + 0.5;
+            targetZ = entry.gy + 0.5;
+          } else if (mode === 'at_cabinet') {
+            entry.recCabinetTimer = (entry.recCabinetTimer ?? 0) + dt;
+            entry.recHoldingFile = entry.recCabinetTimer >= 0.55;
+            if (entry.recCabinetTimer >= 1.45) {
+              const placeApp = findPlaceApproach();
+              entry.recDeskApproachX = placeApp.x;
+              entry.recDeskApproachY = placeApp.y;
+              entry.recHoldingFile = true;
+              entry.path = findGridPath(
+                entry.gx,
+                entry.gy,
+                placeApp.x,
+                placeApp.y,
+                curRooms,
+                curItems,
+                walkerFootprints,
+                obstacles
+              );
+              entry.recMode = 'to_desk';
+              entry.recCabinetId = undefined;
+            }
+            targetX = entry.gx + 0.5;
+            targetZ = entry.gy + 0.5;
+          } else if (mode === 'to_cooler') {
+            const coolerStillFree =
+              entry.recCoolerId &&
+              curItems.some((it) => it.instanceId === entry.recCoolerId) &&
+              !curPatients.some(
+                (pt) => pt.state === 'drinking_water' && pt.waterCoolerId === entry.recCoolerId
+              );
+
+            if (!coolerStillFree) {
+              const app = findDeskApproach(entry.gx, entry.gy);
+              entry.recDeskApproachX = app.x;
+              entry.recDeskApproachY = app.y;
+              entry.path = findGridPath(
+                entry.gx,
+                entry.gy,
+                app.x,
+                app.y,
+                curRooms,
+                curItems,
+                walkerFootprints,
+                obstacles
+              );
+              entry.recMode = 'to_desk';
+              entry.recCoolerId = undefined;
+            } else if (entry.path.length > 0) {
+              trimLongestLOS(entry.gx, entry.gy, entry.path, 0.21);
+              const nextNode = entry.path[0];
+              const dx = nextNode.x - entry.gx;
+              const dy = nextNode.y - entry.gy;
+              const dist = Math.hypot(dx, dy);
+              const turnDiff = dist > 0.01 ? angleDiffAbs(entry.facingRad, Math.atan2(dx, dy)) : 0;
+              const turnScale = turnDiff > 0.35 ? THREE.MathUtils.clamp(Math.cos(turnDiff * 0.75), 0.35, 1.0) : 1.0;
+              const step = 1.24 * turnScale * dt;
+
+              let avoidX = 0;
+              let avoidY = 0;
+              for (const pt of curPatients) {
+                if (pt.state === 'in_treatment' || pt.state === 'ready_for_exam') continue;
+                const ox = entry.gx - pt.gridX;
+                const oy = entry.gy - pt.gridY;
+                const od = Math.hypot(ox, oy);
+                if (od > 0.01 && od < 0.62) {
+                  const push = (0.62 - od) * 0.22;
+                  avoidX += (ox / od) * push;
+                  avoidY += (oy / od) * push;
+                }
+              }
+
+              if (entry.path.length > 1 && dist <= 0.22) {
+                entry.path.shift();
+              } else if (dist <= Math.max(0.08, step)) {
+                const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.2, obstacles);
+                entry.gx = res.x;
+                entry.gy = res.y;
+                entry.path.shift();
+                entry.stuckTimer = 0;
+              } else {
+                const steerX = dx / dist + avoidX;
+                const steerY = dy / dist + avoidY;
+                const steerLen = Math.hypot(steerX, steerY) || 1;
+                const res = resolveTileStep(
+                  entry.gx,
+                  entry.gy,
+                  entry.gx + (steerX / steerLen) * step,
+                  entry.gy + (steerY / steerLen) * step,
+                  0.2,
+                  obstacles
+                );
+                const movedDist = Math.hypot(res.x - entry.gx, res.y - entry.gy);
+                entry.gx = res.x;
+                entry.gy = res.y;
+                if (res.blocked && movedDist < step * 0.24) {
+                  entry.stuckTimer += dt;
+                  if (entry.stuckTimer > 0.2) {
+                    const dest = entry.path[entry.path.length - 1];
+                    entry.path = dest
+                      ? findGridPath(
+                          entry.gx,
+                          entry.gy,
+                          dest.x,
+                          dest.y,
+                          curRooms,
+                          curItems,
+                          walkerFootprints,
+                          obstacles
+                        )
+                      : [];
+                    entry.stuckTimer = 0;
+                    if (entry.path.length === 0) {
+                      const app = findDeskApproach(entry.gx, entry.gy);
                       entry.recMode = 'to_desk';
                       entry.recCoolerId = undefined;
                       entry.path = findGridPath(
@@ -2871,32 +3233,33 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           } else if (mode === 'drinking') {
             entry.recDrinkTimer = (entry.recDrinkTimer ?? 0) + dt;
             const wtMs = entry.recDrinkTimer * 1000;
+            recDrinkElapsedMs = wtMs;
             const coolerEntry = entry.recCoolerId ? itemMeshes.get(entry.recCoolerId) : undefined;
             const wc = coolerEntry?.mesh.userData.waterCooler as WaterCoolerRigMeta | undefined;
 
             if (wtMs < 1450) {
               recDrinkStage = 'filling';
               if (wc) {
-                const fillFrac = THREE.MathUtils.clamp(wtMs / 1380, 0.05, 1);
-                wc.alcoveCup.visible = true;
+                const fillFrac = THREE.MathUtils.clamp(wtMs / 1220, 0.05, 1);
+                wc.alcoveCup.visible = wtMs < 1250;
                 wc.alcoveWater.scale.y = fillFrac;
                 wc.alcoveWater.position.y = 0.008 + fillFrac * 0.028;
-                wc.stream.visible = wtMs < 1380;
+                wc.stream.visible = wtMs < 1220;
                 wc.stream.scale.x = 0.85 + 0.18 * Math.sin(timeSec * 30);
                 wc.stream.scale.z = wc.stream.scale.x;
-                wc.bubble.visible = wtMs < 1380;
+                wc.bubble.visible = wtMs < 1220;
                 wc.bubble.position.y = 0.98 + ((timeSec * 0.36) % 0.26);
               }
-            } else if (wtMs < 2950) {
+            } else if (wtMs < 3450) {
               recDrinkStage = 'sipping';
-            } else if (wtMs < 3350) {
+            } else if (wtMs < 3850) {
               recDrinkStage = 'returning';
-              if (entry.recCoolerId && wc) {
+              if (wtMs >= 3720 && entry.recCoolerId && wc) {
                 coolerReturnUntil.set(entry.recCoolerId, timeSec + 8.5);
                 wc.returnedCup.visible = true;
               }
             } else {
-              const app = findDeskApproach();
+              const app = findDeskApproach(entry.gx, entry.gy);
               entry.recDeskApproachX = app.x;
               entry.recDeskApproachY = app.y;
               entry.path = findGridPath(
@@ -2914,31 +3277,81 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             }
             targetX = entry.gx + 0.5;
             targetZ = entry.gy + 0.5;
-          } else {
-            // recMode === 'to_desk': walk back cleanly to approach tile, then step into desk chair
-            if (entry.path.length > 0) {
-              if (
-                entry.path.length >= 2 &&
-                hasContinuousLineOfSight(
+          } else if (mode === 'placing_file') {
+            if (!deskItem || !deskPose) {
+              entry.recHoldingFile = false;
+              entry.recMode = 'desk';
+              if (entry.recTargetPatientId) {
+                latestRef.current.onReceptionCheckinDone?.(entry.recTargetPatientId);
+                entry.recTargetPatientId = undefined;
+              }
+            } else {
+              entry.recPlaceTimer = (entry.recPlaceTimer ?? 0) + dt;
+              if (entry.recPlaceTimer >= 0.52 && entry.recHoldingFile) {
+                entry.recHoldingFile = false;
+                entry.recDeskFileTimer = 6.2;
+                if (entry.recTargetPatientId) {
+                  latestRef.current.onReceptionCheckinDone?.(entry.recTargetPatientId);
+                  entry.recTargetPatientId = undefined;
+                }
+              }
+              if (entry.recPlaceTimer >= 0.9) {
+                const app = findDeskApproach(entry.gx, entry.gy);
+                entry.recDeskApproachX = app.x;
+                entry.recDeskApproachY = app.y;
+                entry.path = findGridPath(
                   entry.gx,
                   entry.gy,
-                  entry.path[1].x,
-                  entry.path[1].y,
-                  0.22,
+                  app.x,
+                  app.y,
+                  curRooms,
+                  curItems,
+                  walkerFootprints,
                   obstacles
-                )
-              ) {
-                entry.path.shift();
+                );
+                entry.recMode = 'to_desk';
               }
+            }
+            targetX = entry.gx + 0.5;
+            targetZ = entry.gy + 0.5;
+          } else {
+            // recMode === 'to_desk': walk to file placement spot if carrying file, else return smoothly to chair
+            const carryingForPlace = Boolean(entry.recHoldingFile && deskItem && deskPose);
+            const latestApp = carryingForPlace
+              ? findPlaceApproach()
+              : findDeskApproach(entry.gx, entry.gy);
+            if (
+              entry.recDeskApproachX === undefined ||
+              entry.recDeskApproachY === undefined ||
+              Math.hypot(latestApp.x - entry.recDeskApproachX, latestApp.y - entry.recDeskApproachY) > 0.35
+            ) {
+              entry.recDeskApproachX = latestApp.x;
+              entry.recDeskApproachY = latestApp.y;
+              entry.path = findGridPath(
+                entry.gx,
+                entry.gy,
+                latestApp.x,
+                latestApp.y,
+                curRooms,
+                curItems,
+                walkerFootprints,
+                obstacles
+              );
+            }
+
+            if (entry.path.length > 0) {
+              trimLongestLOS(entry.gx, entry.gy, entry.path, 0.21);
               const nextNode = entry.path[0];
               const dx = nextNode.x - entry.gx;
               const dy = nextNode.y - entry.gy;
               const dist = Math.hypot(dx, dy);
-              const step = 0.92 * dt;
-              if (entry.path.length > 1 && dist <= 0.24) {
+              const turnDiff = dist > 0.01 ? angleDiffAbs(entry.facingRad, Math.atan2(dx, dy)) : 0;
+              const turnScale = turnDiff > 0.35 ? THREE.MathUtils.clamp(Math.cos(turnDiff * 0.75), 0.35, 1.0) : 1.0;
+              const step = 1.26 * turnScale * dt;
+              if (entry.path.length > 1 && dist <= 0.22) {
                 entry.path.shift();
               } else if (dist <= Math.max(0.08, step)) {
-                const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.21, obstacles);
+                const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.2, obstacles);
                 entry.gx = res.x;
                 entry.gy = res.y;
                 entry.path.shift();
@@ -2949,7 +3362,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                   entry.gy,
                   entry.gx + (dx / dist) * step,
                   entry.gy + (dy / dist) * step,
-                  0.21,
+                  0.2,
                   obstacles
                 );
                 const movedDist = Math.hypot(res.x - entry.gx, res.y - entry.gy);
@@ -2957,7 +3370,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 entry.gy = res.y;
                 if (res.blocked && movedDist < step * 0.24) {
                   entry.stuckTimer += dt;
-                  if (entry.stuckTimer > 0.22) {
+                  if (entry.stuckTimer > 0.2) {
                     const dest = entry.path[entry.path.length - 1];
                     entry.path = dest
                       ? findGridPath(
@@ -2979,19 +3392,27 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               }
               targetX = entry.gx + 0.5;
               targetZ = entry.gy + 0.5;
+            } else if (carryingForPlace) {
+              // Arrived right beside the reception desk carrying the chart -> place it cleanly on the table
+              entry.recMode = 'placing_file';
+              entry.recPlaceTimer = 0;
+              targetX = entry.gx + 0.5;
+              targetZ = entry.gy + 0.5;
             } else {
               const goalGx = seatX - 0.5;
               const goalGy = seatZ - 0.5;
               const dx = goalGx - entry.gx;
               const dy = goalGy - entry.gy;
               const dist = Math.hypot(dx, dy);
-              const step = 0.86 * dt;
-              if (dist <= Math.max(0.12, step)) {
+              const step = 1.18 * dt;
+              const hasDeskFile = (entry.recDeskFileTimer ?? 0) > 0;
+              if (dist <= Math.max(0.1, step)) {
                 entry.gx = goalGx;
                 entry.gy = goalGy;
                 entry.recMode = 'desk';
-                entry.recStateTimer = 19 + Math.random() * 14;
-                entry.recSeatedActivity = 'typing';
+                entry.recHoldingFile = false;
+                entry.recStateTimer = 18 + Math.random() * 14;
+                entry.recSeatedActivity = hasDeskFile ? 'writing' : 'typing';
                 entry.recActivityTimer = 4 + Math.random() * 4;
               } else {
                 const res = resolveTileStep(
@@ -2999,17 +3420,19 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                   entry.gy,
                   entry.gx + (dx / dist) * step,
                   entry.gy + (dy / dist) * step,
-                  0.19,
+                  0.18,
                   obstacles,
                   deskItem?.instanceId
                 );
+                const moved = Math.hypot(res.x - entry.gx, res.y - entry.gy);
                 entry.gx = res.x;
                 entry.gy = res.y;
-                if (res.blocked && Math.hypot(res.x - entry.gx, res.y - entry.gy) < step * 0.15) {
+                if (res.blocked && moved < step * 0.15) {
                   entry.gx = goalGx;
                   entry.gy = goalGy;
                   entry.recMode = 'desk';
-                  entry.recStateTimer = 19 + Math.random() * 14;
+                  entry.recHoldingFile = false;
+                  entry.recStateTimer = 18 + Math.random() * 14;
                 }
               }
               targetX = entry.gx + 0.5;
@@ -3019,25 +3442,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         } else {
           // Therapist autonomous smooth patrol across unlocked rooms & near active patients
           if (entry.path.length > 0) {
-            if (
-              entry.path.length >= 2 &&
-              hasContinuousLineOfSight(
-                entry.gx,
-                entry.gy,
-                entry.path[1].x,
-                entry.path[1].y,
-                0.24,
-                obstacles
-              )
-            ) {
-              entry.path.shift();
-            }
+            trimLongestLOS(entry.gx, entry.gy, entry.path, 0.24);
 
             const nextNode = entry.path[0];
             const dx = nextNode.x - entry.gx;
             const dy = nextNode.y - entry.gy;
             const dist = Math.hypot(dx, dy);
-            const step = 0.94 * dt;
+            const turnDiff = dist > 0.01 ? angleDiffAbs(entry.facingRad, Math.atan2(dx, dy)) : 0;
+            const turnScale = turnDiff > 0.35 ? THREE.MathUtils.clamp(Math.cos(turnDiff * 0.75), 0.35, 1.0) : 1.0;
+            const step = 1.20 * turnScale * dt;
 
             const isNearStaffDoor =
               Math.hypot(entry.gx - 11.5, entry.gy - 14) < 0.8 ||
@@ -3053,15 +3466,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 const ox = entry.gx - pt.gridX;
                 const oy = entry.gy - pt.gridY;
                 const od = Math.hypot(ox, oy);
-                if (od > 0.01 && od < 0.72) {
-                  const push = (0.72 - od) * 0.28;
+                if (od > 0.01 && od < 0.68) {
+                  const push = (0.68 - od) * 0.24;
                   avoidX += (ox / od) * push;
                   avoidY += (oy / od) * push;
                 }
               }
             }
 
-            if (entry.path.length > 1 && dist <= 0.24) {
+            if (entry.path.length > 1 && dist <= 0.22) {
               entry.path.shift();
             } else if (dist <= Math.max(0.08, step)) {
               const res = resolveTileStep(entry.gx, entry.gy, nextNode.x, nextNode.y, 0.22, obstacles);
@@ -3194,12 +3607,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         const prevVisX = entry.visX;
         const prevVisZ = entry.visZ;
+        const recActiveMode = entry.recMode || 'desk';
         if (s.role === 'receptionist') {
-          const dampSpeed = (entry.recMode || 'desk') === 'desk' ? 13.5 : 18.0;
-          entry.visX = THREE.MathUtils.damp(entry.visX, targetX, dampSpeed, dt);
-          entry.visZ = THREE.MathUtils.damp(entry.visZ, targetZ, dampSpeed, dt);
+          const isSeatTransition =
+            recActiveMode === 'desk' ||
+            recActiveMode === 'leaving_seat' ||
+            (recActiveMode === 'to_desk' && entry.path.length === 0);
+          if (isSeatTransition) {
+            entry.visX = THREE.MathUtils.damp(entry.visX, targetX, 15.0, dt);
+            entry.visZ = THREE.MathUtils.damp(entry.visZ, targetZ, 15.0, dt);
+          } else {
+            // Walking path already moves cleanly via resolveTileStep (zero corner lag snag!)
+            entry.visX = targetX;
+            entry.visZ = targetZ;
+          }
         } else {
-          // Therapist already integrates gx/gy continuously every frame via resolveTileStep (zero lag-corner snag!)
           entry.visX = targetX;
           entry.visZ = targetZ;
         }
@@ -3212,25 +3634,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const stepDist = Math.hypot(mdx, mdz);
         const realSpeed = stepDist * invDt;
         const distRem = Math.hypot(targetX - entry.visX, targetZ - entry.visZ);
-        const recActiveMode = entry.recMode || 'desk';
         const recWalking =
           s.role === 'receptionist' &&
           recActiveMode !== 'desk' &&
           recActiveMode !== 'drinking' &&
-          !(recActiveMode === 'leaving_seat' && entry.sitBlend >= 0.24);
+          recActiveMode !== 'at_cabinet' &&
+          recActiveMode !== 'placing_file' &&
+          !(recActiveMode === 'leaving_seat' && entry.sitBlend >= 0.22);
         const logicalMoving =
           s.role === 'receptionist'
             ? recWalking && (entry.path.length > 0 || distRem > 0.04)
             : entry.path.length > 0 || distRem > 0.05;
         isMoving =
           s.role === 'receptionist'
-            ? recWalking && (realSpeed > 0.11 || (logicalMoving && stepDist > 0.0018))
+            ? recWalking && (realSpeed > 0.1 || (logicalMoving && stepDist > 0.0016))
             : realSpeed > 0.12 || (logicalMoving && stepDist > 0.0018);
 
         entry.walkBlend = THREE.MathUtils.damp(entry.walkBlend, isMoving ? 1 : 0, 12.0, dt);
         const shouldStaffSit =
           s.role === 'receptionist' && recActiveMode === 'desk' && distRem < 0.25;
-        entry.sitBlend = THREE.MathUtils.damp(entry.sitBlend, shouldStaffSit ? 1 : 0, 7.5, dt);
+        entry.sitBlend = THREE.MathUtils.damp(entry.sitBlend, shouldStaffSit ? 1 : 0, 7.8, dt);
 
         const staffPushTarget = computeDoorPushTarget(
           entry.visX,
@@ -3260,10 +3683,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         entry.stairClimb = THREE.MathUtils.damp(entry.stairClimb, rawStairClimbSt, 11.0, dt);
 
         if (stepDist > 0.0005 && (isMoving || entry.walkBlend > 0.04)) {
-          entry.walkPhase += stepDist * (surfSt.onStairs ? 5.6 : 4.4);
+          entry.walkPhase += stepDist * (surfSt.onStairs ? 8.5 : 7.2);
           if (stepDist > 0.0008 && isMoving) {
             const targetAngle = Math.atan2(mdx, mdz);
-            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 8.8));
+            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 12.5));
           }
         }
 
@@ -3271,6 +3694,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           if (s.role === 'receptionist') {
             if (recActiveMode === 'drinking' && entry.recCoolerFacing !== undefined) {
               entry.facingRad = lerpAngle(entry.facingRad, entry.recCoolerFacing, Math.min(1, dt * 10));
+            } else if (recActiveMode === 'at_cabinet' && entry.recCabinetFacing !== undefined) {
+              entry.facingRad = lerpAngle(entry.facingRad, entry.recCabinetFacing, Math.min(1, dt * 10));
+            } else if (recActiveMode === 'placing_file') {
+              const deskObj = curItems.find((it) => it.catalogId === 'reception_desk');
+              if (deskObj) {
+                const dp = getReceptionDeskPose(deskObj);
+                const placeLook = Math.atan2(
+                  dp.deskFileWorldX - entry.visX,
+                  dp.deskFileWorldZ - entry.visZ
+                );
+                entry.facingRad = lerpAngle(entry.facingRad, placeLook, Math.min(1, dt * 14));
+              }
             } else if (recActiveMode === 'desk') {
               const checkinPt = curPatients.find((pt) => pt.state === 'checkin_at_desk');
               let desiredFacing = recSeatFacing;
@@ -3284,7 +3719,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 while (delta < -Math.PI) delta += Math.PI * 2;
                 desiredFacing = recSeatFacing + THREE.MathUtils.clamp(delta, -0.55, 0.55);
               }
-              entry.facingRad = lerpAngle(entry.facingRad, desiredFacing, Math.min(1, dt * 7));
+              entry.facingRad = lerpAngle(entry.facingRad, desiredFacing, Math.min(1, dt * 8));
             }
           } else {
             const watchPatient =
@@ -3309,12 +3744,24 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           walkBlend: entry.walkBlend,
           sitBlend: entry.sitBlend,
           doorPush: entry.doorPush,
-          seatHeight: 0.42,
+          seatHeight: recSeatHeight,
           facingRad: entry.facingRad,
           timeSec,
           isSelected: false,
           isDrinking: recActiveMode === 'drinking',
           drinkStage: recActiveMode === 'drinking' ? recDrinkStage : 'none',
+          drinkElapsedMs: recActiveMode === 'drinking' ? recDrinkElapsedMs : undefined,
+          holdingFile: s.role === 'receptionist' && Boolean(entry.recHoldingFile),
+          pickingFile: s.role === 'receptionist' && recActiveMode === 'at_cabinet',
+          pickElapsedMs:
+            s.role === 'receptionist' && recActiveMode === 'at_cabinet'
+              ? (entry.recCabinetTimer ?? 0) * 1000
+              : undefined,
+          placingFile: s.role === 'receptionist' && recActiveMode === 'placing_file',
+          placeElapsedMs:
+            s.role === 'receptionist' && recActiveMode === 'placing_file'
+              ? (entry.recPlaceTimer ?? 0) * 1000
+              : undefined,
           actorSeed: entry.actorSeed,
           seatedActivity:
             s.role === 'receptionist' && shouldStaffSit
@@ -3443,7 +3890,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               }
             }
 
-            const step = w.speed * dt;
+            const turnDiffW =
+              dist > 0.01 && !(isFinalNow && w.seatedMode)
+                ? angleDiffAbs(w.facingRad, Math.atan2(dx, dy))
+                : 0;
+            const turnScaleW =
+              turnDiffW > 0.35 ? THREE.MathUtils.clamp(Math.cos(turnDiffW * 0.75), 0.35, 1.0) : 1.0;
+            const step = w.speed * turnScaleW * dt;
             const waitTurnBeforeBench =
               isFinalNow &&
               w.seatedMode &&
@@ -3760,10 +4213,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         w.stairClimb = THREE.MathUtils.damp(w.stairClimb, rawStairClimbW, 11.0, dt);
 
         if (stepDist > 0.0005 && (isMoving || w.walkBlend > 0.04)) {
-          w.walkPhase += stepDist * (surfW.onStairs ? 5.6 : 4.4);
+          w.walkPhase += stepDist * (surfW.onStairs ? 8.5 : 7.2);
           const backingIntoBench = w.seatedMode && w.path.length <= 1;
           if (stepDist > 0.0008 && isMoving && !backingIntoBench) {
-            w.facingRad = lerpAngle(w.facingRad, Math.atan2(mdx, mdz), Math.min(1, dt * 8.2));
+            w.facingRad = lerpAngle(w.facingRad, Math.atan2(mdx, mdz), Math.min(1, dt * 11.0));
           }
         }
         if ((!isMoving || (w.seatedMode && w.path.length <= 1)) && w.seatedMode && w.seatFacingRad !== undefined) {
@@ -3950,8 +4403,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             const dotY =
               getSurfaceElevation(curDraft.hoverX + 0.5, curDraft.hoverY + 0.5).floorY + 0.015;
             ctx.fillStyle = 'rgba(255, 255, 255, 0.34)';
-            for (let gx = curDraft.hoverX - 1; gx <= curDraft.hoverX + effW + 1; gx++) {
-              for (let gz = curDraft.hoverY - 1; gz <= curDraft.hoverY + effD + 1; gz++) {
+            for (
+              let gx = Math.floor(curDraft.hoverX) - 1;
+              gx <= Math.ceil(curDraft.hoverX + effW) + 1;
+              gx++
+            ) {
+              for (
+                let gz = Math.floor(curDraft.hoverY) - 1;
+                gz <= Math.ceil(curDraft.hoverY + effD) + 1;
+                gz++
+              ) {
                 const pt = projectToScreen(gx, dotY, gz);
                 ctx.beginPath();
                 ctx.arc(pt.x, pt.y, 1.5, 0, Math.PI * 2);
@@ -4399,8 +4860,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     clientY: number,
     rawX: number,
     rawZ: number,
-    gx: number,
-    gy: number,
+    _gx: number,
+    _gy: number,
     draft: PlacementDraft,
     useGrabOffset = false,
     grabOffX = 0,
@@ -4409,27 +4870,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     if (draft.catalogItem.isWallDecor) {
       const wallSlot = sceneHooksRef.current?.screenToWallSlot(clientX, clientY, draft.rotation);
       if (wallSlot) return wallSlot;
-      const snapped = snapToNearestValidWallSlot(rawX, rawZ, draft.rotation, rooms);
-      if (snapped) {
-        const dSq = (snapped.gx + 0.5 - rawX) ** 2 + (snapped.gy + 0.5 - rawZ) ** 2;
-        if (dSq <= 6.76) return snapped;
+      if (!useGrabOffset) {
+        const snapped = snapToNearestValidWallSlot(rawX, rawZ, draft.rotation, rooms);
+        if (snapped) {
+          const dSq = (snapped.gx + 0.5 - rawX) ** 2 + (snapped.gy + 0.5 - rawZ) ** 2;
+          if (dSq <= 6.76) return snapped;
+        }
       }
       return { gx: draft.hoverX, gy: draft.hoverY, rotation: draft.rotation };
     }
     const effW = draft.rotation % 2 === 0 ? draft.catalogItem.width : draft.catalogItem.depth;
     const effD = draft.rotation % 2 === 0 ? draft.catalogItem.depth : draft.catalogItem.width;
-    let targetGx = gx;
-    let targetGy = gy;
-    if (useGrabOffset) {
-      targetGx = Math.round(rawX - grabOffX);
-      targetGy = Math.round(rawZ - grabOffZ);
-    } else if (effW > 1 || effD > 1) {
-      targetGx = Math.round(rawX - effW / 2);
-      targetGy = Math.round(rawZ - effD / 2);
-    }
+    const targetGx = useGrabOffset ? snapFine(rawX - grabOffX) : snapFine(rawX - effW / 2);
+    const targetGy = useGrabOffset ? snapFine(rawZ - grabOffZ) : snapFine(rawZ - effD / 2);
     if (draft.catalogItem.isSolarPanel || draft.catalogItem.id === 'solar_panel') {
       const clamped = clampToSolarZone(targetGx, targetGy, effW, effD);
-      return { gx: clamped.gx, gy: clamped.gy, rotation: draft.rotation };
+      return { gx: snapFine(clamped.gx), gy: snapFine(clamped.gy), rotation: draft.rotation };
     }
     return { gx: targetGx, gy: targetGy, rotation: draft.rotation };
   };
@@ -4457,7 +4913,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       // 1-tap switching between placed items while rearranging ONLY when actually tapping another item's tile (not an open valid target tile!)
       const tappedOnActiveGhost = hooks.hitTestDraftGhost(clientX, clientY);
       if ((editMode || placementDraft.movingInstanceId) && !tappedOnActiveGhost && onSwitchEditingItem) {
-        const footprintHit = findHitItemAt(gx, gy);
+        const footprintHit = findHitItemAt(rawX, rawZ);
         const visualHit = hooks.hitTestPlacedItem(clientX, clientY);
         const otherHit = footprintHit || (!nextValid ? visualHit : undefined);
         if (otherHit && otherHit.instanceId !== placementDraft.movingInstanceId) {
@@ -4476,7 +4932,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           onConfirmPlacement(resolved.gx, resolved.gy, resolved.rotation);
         }
       } else {
-        // Move preview cleanly to tapped tile or wall slot without blind accidental commit
+        // Move preview cleanly to tapped exact coordinates without forcing tile snaps
         onUpdatePlacementHover(resolved.gx, resolved.gy, resolved.rotation);
       }
       return;
@@ -4529,7 +4985,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       return;
     }
 
-    const hitItem = itemHit?.item || findHitItemAt(gx, gy);
+    const hitItem = itemHit?.item || findHitItemAt(rawX, rawZ);
 
     if (editMode) {
       if (hitItem) {
@@ -4578,7 +5034,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     let grabOffZ = 0;
 
     if (placementDraft && hooks) {
-      const { gx, gy, rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
+      const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
       const effW = placementDraft.rotation % 2 === 0 ? placementDraft.catalogItem.width : placementDraft.catalogItem.depth;
       const effD = placementDraft.rotation % 2 === 0 ? placementDraft.catalogItem.depth : placementDraft.catalogItem.width;
       const wallSlotHit = placementDraft.catalogItem.isWallDecor
@@ -4587,36 +5043,33 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       if (
         hooks.hitTestDraftGhost(e.clientX, e.clientY) ||
         (wallSlotHit &&
-          wallSlotHit.gx === placementDraft.hoverX &&
-          wallSlotHit.gy === placementDraft.hoverY &&
+          Math.abs(wallSlotHit.gx - placementDraft.hoverX) < 0.65 &&
+          Math.abs(wallSlotHit.gy - placementDraft.hoverY) < 0.65 &&
           wallSlotHit.rotation === placementDraft.rotation) ||
         (!placementDraft.catalogItem.isWallDecor &&
-          gx >= placementDraft.hoverX - 0.5 &&
-          gx <= placementDraft.hoverX + effW + 0.5 &&
-          gy >= placementDraft.hoverY - 0.5 &&
-          gy <= placementDraft.hoverY + effD + 0.5)
+          rawX >= placementDraft.hoverX - 0.35 &&
+          rawX <= placementDraft.hoverX + effW + 0.35 &&
+          rawZ >= placementDraft.hoverY - 0.35 &&
+          rawZ <= placementDraft.hoverY + effD + 0.35)
       ) {
         grabbingDraft = true;
         draggingDraftActiveRef.current = true;
         hasGrabOffset = true;
-        grabOffX = Math.max(-0.85, Math.min(effW + 0.85, rawX - placementDraft.hoverX));
-        grabOffZ = Math.max(-0.85, Math.min(effD + 0.85, rawZ - placementDraft.hoverY));
+        grabOffX = rawX - placementDraft.hoverX;
+        grabOffZ = rawZ - placementDraft.hoverY;
         if (pointerSurfaceRef.current) {
           pointerSurfaceRef.current.style.cursor = 'grabbing';
         }
       }
     } else if (!placementDraft && hooks) {
-      const { gx, gy, rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
-      const hitItem = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(gx, gy);
+      const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
+      const hitItem = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(rawX, rawZ);
       if (hitItem) {
         if (editMode) {
           pendingDragItem = hitItem;
-          const cat = catalogMap.get(hitItem.catalogId);
-          const effW = cat ? (hitItem.rotation % 2 === 0 ? cat.width : cat.depth) : 1;
-          const effD = cat ? (hitItem.rotation % 2 === 0 ? cat.depth : cat.width) : 1;
           hasGrabOffset = true;
-          grabOffX = Math.max(-0.85, Math.min(effW + 0.85, rawX - hitItem.gridX));
-          grabOffZ = Math.max(-0.85, Math.min(effD + 0.85, rawZ - hitItem.gridY));
+          grabOffX = rawX - hitItem.gridX;
+          grabOffZ = rawZ - hitItem.gridY;
         } else if (onLongPressPlacedItem) {
           longPressTimerRef.current = window.setTimeout(() => {
             dragRef.current.active = false;
@@ -4663,8 +5116,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     // Hover feedback ONLY when in editMode without an active draft (no mouse-hover teleportation!)
     if (!dragRef.current.active && hooks) {
       if (editMode && !placementDraft) {
-        const { gx, gy } = hooks.screenToGrid(e.clientX, e.clientY);
-        const hoverHit = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(gx, gy);
+        const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
+        const hoverHit = hooks.hitTestPlacedItem(e.clientX, e.clientY) || findHitItemAt(rawX, rawZ);
         hoveredEditItemIdRef.current = hoverHit ? hoverHit.instanceId : null;
         if (pointerSurfaceRef.current) {
           pointerSurfaceRef.current.style.cursor = hoverHit ? 'grab' : 'default';
