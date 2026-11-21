@@ -393,34 +393,62 @@ const IrAimJoystick: React.FC<{
   );
 };
 
-// Physical Rotary Dimmer Knob for IR Lamp Bulb Intensity
-const IrDimmerKnob: React.FC<{
-  intensity: number;
-  isAr: boolean;
+// Mobile-friendly Linear Fader for IR-250 Lamp Deck (Intensity % & Distance cm)
+const IrHardwareFader: React.FC<{
+  label: string;
+  valueText: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  accentClass?: string;
   onChange: (nextVal: number) => void;
-}> = ({ intensity, isAr, onChange }) => {
-  const dragStartRef = useRef<{ y: number; startVal: number; moved: boolean } | null>(null);
-  const pct = Math.round(intensity * 100);
-  const ratio = Math.max(0, Math.min(1, (pct - 15) / 85));
-  const deg = -135 + ratio * 270;
+}> = ({
+  label,
+  valueText,
+  value,
+  min,
+  max,
+  step,
+  accentClass = 'bg-rose-500',
+  onChange,
+}) => {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
+  const ratio = Math.max(0, Math.min(1, (value - min) / Math.max(1e-5, max - min)));
 
-  const commitPct = (nextPct: number) => {
-    const clamped = Math.max(15, Math.min(100, Math.round(nextPct / 5) * 5));
-    onChange(Number((clamped / 100).toFixed(2)));
+  const commitValue = (raw: number) => {
+    const snapped = Math.round((raw - min) / step) * step + min;
+    const clamped = Math.max(min, Math.min(max, Number(snapped.toFixed(2))));
+    if (clamped !== value) onChange(clamped);
+  };
+
+  const applyClientX = (clientX: number) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const t = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    commitValue(min + t * (max - min));
   };
 
   return (
-    <div className="flex flex-col items-center gap-1 select-none">
+    <div className="w-full select-none space-y-0.5">
+      <div className="flex items-center justify-between text-[9px] font-black uppercase tracking-wide px-0.5">
+        <span className="text-slate-300">{label}</span>
+        <span className="font-mono font-black text-rose-200 tabular-nums">{valueText}</span>
+      </div>
       <div className="flex items-center gap-1">
         <button
           type="button"
-          onClick={() => commitPct(pct - 5)}
-          aria-label="Decrease intensity"
-          className="w-5 h-5 rounded bg-black/45 hover:bg-black/65 border border-white/15 text-[11px] font-black text-slate-200 flex items-center justify-center cursor-pointer"
+          onClick={() => commitValue(value - step)}
+          aria-label={`Decrease ${label}`}
+          className="w-7 h-7 rounded-md bg-[#232a36] hover:bg-[#313b4b] border border-white/15 text-xs font-black text-slate-100 flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
         >
           −
         </button>
+
         <div
+          ref={trackRef}
           onPointerDown={(e) => {
             e.stopPropagation();
             try {
@@ -428,41 +456,50 @@ const IrDimmerKnob: React.FC<{
             } catch {
               // ignore
             }
-            dragStartRef.current = { y: e.clientY, startVal: pct, moved: false };
+            pointerIdRef.current = e.pointerId;
+            applyClientX(e.clientX);
           }}
           onPointerMove={(e) => {
-            if (!dragStartRef.current) return;
-            const dy = dragStartRef.current.y - e.clientY;
-            if (Math.abs(dy) > 3) dragStartRef.current.moved = true;
-            commitPct(dragStartRef.current.startVal + (dy / 85) * 85);
+            if (pointerIdRef.current !== e.pointerId) return;
+            e.stopPropagation();
+            applyClientX(e.clientX);
           }}
-          onPointerUp={() => {
-            if (dragStartRef.current && !dragStartRef.current.moved) {
-              commitPct(pct + 10 > 100 ? 20 : pct + 10);
-            }
-            dragStartRef.current = null;
+          onPointerUp={(e) => {
+            if (pointerIdRef.current !== e.pointerId) return;
+            pointerIdRef.current = null;
           }}
           onPointerCancel={() => {
-            dragStartRef.current = null;
+            pointerIdRef.current = null;
           }}
-          title={isAr ? 'اسحب لأعلى/أسفل لضبط الشدة' : 'Drag up/down for dimmer'}
-          style={{ transform: `rotate(${deg}deg)` }}
-          className="w-10 h-10 rounded-full bg-gradient-to-b from-rose-400 via-rose-600 to-rose-900 border-2 border-slate-200/50 shadow-[0_3px_8px_rgba(0,0,0,0.6),inset_0_1px_1px_rgba(255,255,255,0.45)] flex items-start justify-center p-1 cursor-ns-resize touch-none"
+          className="relative flex-1 h-7 rounded-md bg-[#090d12] border border-[#3a4354] shadow-inner touch-none cursor-ew-resize overflow-hidden flex items-center px-1"
         >
-          <span className="w-1 h-2.5 rounded-full bg-white shadow" />
+          <div className="absolute inset-x-2 flex justify-between pointer-events-none opacity-30">
+            {[0, 1, 2, 3, 4].map((idx) => (
+              <span key={idx} className="w-[1px] h-2 bg-slate-300" />
+            ))}
+          </div>
+          <div
+            style={{ width: `${ratio * 100}%` }}
+            className={`absolute inset-y-1 left-0 rounded-r-sm opacity-75 pointer-events-none ${accentClass}`}
+          />
+          <div
+            style={{ left: `calc(${ratio * 100}% - 10px)` }}
+            className="relative z-10 w-5 h-5 rounded bg-gradient-to-b from-white via-slate-200 to-slate-400 border border-slate-900 shadow-[0_2px_5px_rgba(0,0,0,0.75)] flex items-center justify-center gap-[2px] pointer-events-none"
+          >
+            <span className="w-[1px] h-2.5 bg-slate-600" />
+            <span className="w-[1px] h-2.5 bg-slate-600" />
+          </div>
         </div>
+
         <button
           type="button"
-          onClick={() => commitPct(pct + 5)}
-          aria-label="Increase intensity"
-          className="w-5 h-5 rounded bg-black/45 hover:bg-black/65 border border-white/15 text-[11px] font-black text-slate-200 flex items-center justify-center cursor-pointer"
+          onClick={() => commitValue(value + step)}
+          aria-label={`Increase ${label}`}
+          className="w-7 h-7 rounded-md bg-[#232a36] hover:bg-[#313b4b] border border-white/15 text-xs font-black text-slate-100 flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
         >
           +
         </button>
       </div>
-      <span className="text-[9px] font-mono font-black text-rose-200 tabular-nums">
-        {isAr ? 'الشدة' : 'IR'} {pct}%
-      </span>
     </div>
   );
 };
@@ -934,21 +971,26 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               ? activeDevice.probeAnchors
               : getDefaultProbeAnchors(activeDevice.sprite);
           const curProbe = probes.find((p) => p.id === activeDevice.selectedProbeId);
+          const multiProbe = probes.length > 1;
           return (
             <div
               onPointerDown={(e) => e.stopPropagation()}
-              className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-50 max-w-[95vw] rounded-2xl bg-slate-950/94 border-2 border-emerald-400/75 px-3 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-2"
+              className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-50 max-w-[95vw] rounded-2xl bg-slate-950/94 border-2 border-emerald-400/75 px-3 py-1.5 text-white shadow-2xl flex flex-wrap items-center justify-center gap-2"
             >
-              <div className="flex items-center gap-1.5 text-xs font-black text-emerald-300">
-                <Crosshair className="w-4 h-4 shrink-0" />
+              <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-black text-emerald-300">
+                <Crosshair className="w-3.5 h-3.5 shrink-0" />
                 <span>
-                  {isAr
-                    ? `اضغط أو اسحب على المريض لوضع (${curProbe?.label ?? 'القطب'})`
-                    : `Tap or drag on patient to place (${curProbe?.label ?? 'Probe'})`}
+                  {multiProbe
+                    ? isAr
+                      ? `اضغط على المريض لوضع (${curProbe?.label ?? 'القطب'})`
+                      : `Tap patient to place (${curProbe?.label ?? 'Pad'})`
+                    : isAr
+                      ? 'اضغط على المريض لوضع الأداة'
+                      : 'Tap patient to place probe'}
                 </span>
               </div>
 
-              {probes.length > 1 && (
+              {multiProbe && (
                 <div dir="ltr" className="flex items-center gap-1">
                   {probes.map((p) => {
                     const isSel = activeDevice.selectedProbeId === p.id;
@@ -978,7 +1020,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 </div>
               )}
 
-              {activeDevice.hasScreen && (
+              {activeDevice.hasScreen ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -993,20 +1035,20 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 >
                   {isAr ? 'الجهاز' : 'Machine'}
                 </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      selectedProbeId: null,
+                    })
+                  }
+                  className="h-6 px-2.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer"
+                >
+                  {isAr ? 'تم ✓' : 'Done ✓'}
+                </button>
               )}
-
-              <button
-                type="button"
-                onClick={() =>
-                  onUpdateActiveDevice?.({
-                    ...activeDevice,
-                    selectedProbeId: null,
-                  })
-                }
-                className="h-6 px-2.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer"
-              >
-                {isAr ? 'تم ✓' : 'Done ✓'}
-              </button>
             </div>
           );
         })()}
@@ -1126,13 +1168,13 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 w-[min(94vw,24rem)] rounded-[18px] bg-gradient-to-b from-[#2f3642] via-[#202630] to-[#141820] border-2 border-[#545f72] shadow-[0_14px_34px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.18)] p-2 text-white space-y-1.5"
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 w-[min(95vw,25.5rem)] rounded-[18px] bg-gradient-to-b from-[#2f3642] via-[#202630] to-[#141820] border-2 border-[#545f72] shadow-[0_14px_34px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.18)] p-2 text-white space-y-1.5"
         >
           {/* Steel Column Chassis Top Plate */}
-          <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10">
-            <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-white/10">
+            <div className="flex items-center gap-1.5 min-w-0">
               <span
-                className={`w-3 h-3 rounded-full border border-black/60 shrink-0 ${
+                className={`w-2.5 h-2.5 rounded-full border border-black/60 shrink-0 ${
                   activeDevice.isRunning
                     ? 'bg-rose-500 shadow-[0_0_10px_#f43f5e]'
                     : 'bg-slate-600'
@@ -1140,7 +1182,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               />
               <Flame className="w-3.5 h-3.5 text-rose-400 shrink-0" />
               <span className="text-[11px] font-black tracking-wide text-slate-100 truncate">
-                {isAr ? 'وحدة الأشعة تحت الحمراء IR-250' : 'IR-250 THERM LAMP'}
+                {isAr ? 'IR-250' : 'IR-250'}
               </span>
             </div>
 
@@ -1195,7 +1237,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                     isRunning: !activeDevice.isRunning,
                   })
                 }
-                className={`h-7 px-2.5 rounded-md text-[10px] font-black border-2 flex items-center gap-1 cursor-pointer shadow ${
+                className={`h-7 px-2 rounded-md text-[10px] font-black border-2 flex items-center gap-1 cursor-pointer shadow ${
                   activeDevice.isRunning
                     ? 'bg-rose-600 hover:bg-rose-500 border-rose-300 text-white shadow-[0_0_10px_rgba(244,63,94,0.45)]'
                     : 'bg-[#323a48] hover:bg-[#3f495a] border-[#5b677d] text-slate-100'
@@ -1203,6 +1245,24 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               >
                 {activeDevice.isRunning ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current" />}
                 <span>{activeDevice.isRunning ? (isAr ? 'إيقاف' : 'OFF') : isAr ? 'تشغيل' : 'ON'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+                title={isAr ? 'نقل الجهاز' : 'Move'}
+                className="h-7 w-7 rounded-md bg-[#252c38] hover:bg-sky-500 hover:text-slate-950 border border-white/15 flex items-center justify-center cursor-pointer"
+              >
+                <Hand className="w-3 h-3" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+                title={isAr ? 'إرجاع لمكانه' : 'Return'}
+                className="h-7 w-7 rounded-md bg-rose-700 hover:bg-rose-600 border border-rose-400/50 text-white flex items-center justify-center cursor-pointer"
+              >
+                <Undo2 className="w-3 h-3" />
               </button>
 
               <button
@@ -1216,111 +1276,86 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             </div>
           </div>
 
-          {/* Control Box Deck: Motorized Gimbal Joystick + Dimmer Knob + Telescopic Distance */}
-          <div className="rounded-xl bg-[#161a22] border border-[#3a4354] px-3 py-2 flex items-center justify-between gap-3 shadow-inner">
-            <div className="flex flex-col items-center gap-0.5">
-              <span className="text-[9px] font-black uppercase tracking-wider text-slate-300">
-                {isAr ? 'عصا التوجيه' : 'AIM STICK'}
-              </span>
-              <IrAimJoystick
-                activeDevice={activeDevice}
-                isAr={isAr}
-                onUpdate={(next) => onUpdateActiveDevice?.(next)}
-              />
-            </div>
+          {/* Control Box Deck: Motorized Gimbal Joystick + Intensity & Distance Faders */}
+          {(() => {
+            const distCm = Math.round((activeDevice.irDistance ?? 0.52) * 100);
+            const irPct = Math.round((activeDevice.irIntensity ?? 0.85) * 100);
+            const zoneBadge =
+              distCm < 42
+                ? isAr
+                  ? '⚠ قريب جداً (حرارة عالية)'
+                  : '⚠ TOO CLOSE (<42cm)'
+                : distCm <= 60
+                  ? isAr
+                    ? '● مسافة علاجية آمنة'
+                    : '● OPTIMAL 45–60 cm'
+                  : isAr
+                    ? '○ بعيد (جرعة خفيفة)'
+                    : '○ FAR (>60cm)';
+            const zoneColor =
+              distCm < 42 ? 'text-amber-400' : distCm <= 60 ? 'text-emerald-400' : 'text-sky-300';
+            return (
+              <>
+                <div className="rounded-xl bg-[#161a22] border border-[#3a4354] px-2.5 py-1.5 flex items-center justify-between gap-2.5 shadow-inner">
+                  <div className="flex flex-col items-center gap-0.5 shrink-0">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-300">
+                      {isAr ? 'التوجيه' : 'AIM'}
+                    </span>
+                    <IrAimJoystick
+                      activeDevice={activeDevice}
+                      isAr={isAr}
+                      onUpdate={(next) => onUpdateActiveDevice?.(next)}
+                    />
+                  </div>
 
-            <div className="h-16 w-[1px] bg-white/10 shrink-0" />
+                  <div className="h-16 w-[1px] bg-white/10 shrink-0" />
 
-            <div className="flex flex-col items-center gap-2 flex-1">
-              <IrDimmerKnob
-                intensity={activeDevice.irIntensity ?? 0.85}
-                isAr={isAr}
-                onChange={(val) =>
-                  onUpdateActiveDevice?.({
-                    ...activeDevice,
-                    irIntensity: val,
-                  })
-                }
-              />
+                  <div className="flex flex-col justify-center gap-1.5 flex-1 min-w-0">
+                    <IrHardwareFader
+                      label={isAr ? 'الشدة' : 'INTENSITY'}
+                      valueText={`${irPct}%`}
+                      value={irPct}
+                      min={15}
+                      max={100}
+                      step={5}
+                      accentClass="bg-rose-500"
+                      onChange={(valPct) =>
+                        onUpdateActiveDevice?.({
+                          ...activeDevice,
+                          irIntensity: Number((valPct / 100).toFixed(2)),
+                        })
+                      }
+                    />
 
-              {/* Telescopic Distance Stepper */}
-              <div className="flex items-center gap-1 rounded-md bg-[#0b0e13] border border-[#384152] px-1.5 py-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextD = Math.max(0.36, Number(((activeDevice.irDistance ?? 0.52) - 0.06).toFixed(2)));
-                    onUpdateActiveDevice?.({
-                      ...activeDevice,
-                      irDistance: nextD,
-                      closeRange: nextD <= 0.6,
-                    });
-                  }}
-                  title={isAr ? 'أقرب للمريض' : 'Closer'}
-                  className="w-5 h-5 rounded bg-[#232a36] hover:bg-emerald-600 text-[11px] font-black flex items-center justify-center cursor-pointer"
-                >
-                  −
-                </button>
-                <span className="text-[10px] font-mono font-bold text-slate-200 px-1 tabular-nums whitespace-nowrap">
-                  {Math.round((activeDevice.irDistance ?? 0.52) * 100)} cm
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextD = Math.min(1.02, Number(((activeDevice.irDistance ?? 0.52) + 0.06).toFixed(2)));
-                    onUpdateActiveDevice?.({
-                      ...activeDevice,
-                      irDistance: nextD,
-                      closeRange: nextD <= 0.6,
-                    });
-                  }}
-                  title={isAr ? 'أبعد عن المريض' : 'Farther'}
-                  className="w-5 h-5 rounded bg-[#232a36] hover:bg-amber-600 text-[11px] font-black flex items-center justify-center cursor-pointer"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
+                    <IrHardwareFader
+                      label={isAr ? 'المسافة' : 'DISTANCE'}
+                      valueText={`${distCm} cm`}
+                      value={distCm}
+                      min={36}
+                      max={102}
+                      step={4}
+                      accentClass="bg-amber-500"
+                      onChange={(cm) => {
+                        const nextD = Number((cm / 100).toFixed(2));
+                        onUpdateActiveDevice?.({
+                          ...activeDevice,
+                          irDistance: nextD,
+                          closeRange: nextD <= 0.6,
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
 
-          {/* Direct Tap-to-Aim onto Patient + Pick/Return */}
-          <div className="flex items-center justify-between gap-1.5">
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateActiveDevice?.({
-                  ...activeDevice,
-                  selectedProbeId: activeDevice.selectedProbeId === 'head' ? null : 'head',
-                })
-              }
-              className={`h-7 px-2.5 rounded-md border text-[10px] font-black flex items-center gap-1 cursor-pointer ${
-                activeDevice.selectedProbeId === 'head'
-                  ? 'bg-emerald-500 border-emerald-300 text-slate-950'
-                  : 'bg-[#252c38] hover:bg-emerald-600 border-white/15 text-emerald-300 hover:text-white'
-              }`}
-            >
-              <Crosshair className="w-3.5 h-3.5" />
-              <span>{isAr ? 'توجيه على المريض' : 'Aim on Patient'}</span>
-            </button>
-
-            <div className="flex items-center gap-1 ml-auto">
-              <button
-                type="button"
-                onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
-                className="h-7 px-2.5 rounded-md bg-[#252c38] hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-[10px] font-black flex items-center gap-1 cursor-pointer"
-              >
-                <Hand className="w-3 h-3" />
-                <span>{isAr ? 'نقل' : 'Pick'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
-                className="h-7 px-2.5 rounded-md bg-rose-700 hover:bg-rose-600 border border-rose-400/50 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
-              >
-                <Undo2 className="w-3 h-3" />
-                <span>{isAr ? 'إرجاع' : 'Return'}</span>
-              </button>
-            </div>
-          </div>
+                <div className="flex items-center justify-between gap-2 text-[9px] font-bold px-1">
+                  <span className={zoneColor}>{zoneBadge}</span>
+                  <span className="text-slate-400">
+                    {isAr ? 'اضغط على المريض للتوجيه' : 'Tap patient to aim'}
+                  </span>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -1328,9 +1363,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 max-w-[95vw] rounded-2xl bg-slate-950/94 border border-sky-400/40 px-2.5 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-1.5"
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 max-w-[95vw] rounded-2xl bg-slate-950/94 border border-sky-400/40 px-2.5 py-1.5 text-white shadow-2xl flex flex-wrap items-center justify-center gap-1.5"
         >
-          <span className="text-[11px] font-black text-sky-300 px-1.5 flex items-center gap-1.5 whitespace-nowrap">
+          <span className="text-[11px] font-black text-sky-300 px-1 flex items-center gap-1.5 whitespace-nowrap">
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
                 activeDevice.isRunning ? 'bg-emerald-400' : 'bg-slate-500'
@@ -1338,9 +1373,11 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             />
             <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>{activeDevice.nameEn}</span>
-            <span className="font-mono text-emerald-300 text-[10px] px-1 rounded bg-slate-900 border border-white/10">
-              {formatTimerMmSs(activeDevice.deviceParams, 15)}
-            </span>
+            {activeDevice.hasScreen && (
+              <span className="font-mono text-emerald-300 text-[10px] px-1 rounded bg-slate-900 border border-white/10">
+                {formatTimerMmSs(activeDevice.deviceParams, 15)}
+              </span>
+            )}
           </span>
 
           {activeDevice.hasScreen && (
@@ -1357,7 +1394,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               className="h-7 px-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 border border-sky-300 text-slate-950 text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer"
             >
               <Maximize2 className="w-3 h-3 shrink-0" />
-              <span>{isAr ? 'فتح الجهاز' : 'Open Machine'}</span>
+              <span>{isAr ? 'الجهاز' : 'Machine'}</span>
             </button>
           )}
 
@@ -1378,14 +1415,10 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                   selectedProbeId: nextId,
                 });
               }}
-              className={`h-7 px-2.5 rounded-lg border text-[10px] font-black flex items-center gap-1 cursor-pointer ${
-                activeDevice.selectedProbeId
-                  ? 'bg-emerald-500 border-emerald-300 text-slate-950'
-                  : 'bg-slate-900 hover:bg-emerald-600 border-emerald-400/50 text-emerald-300 hover:text-white'
-              }`}
+              className="h-7 px-2.5 rounded-lg border bg-slate-900 hover:bg-emerald-600 border-emerald-400/50 text-emerald-300 hover:text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
             >
               <Crosshair className="w-3 h-3 shrink-0" />
-              <span>{isAr ? 'وضع على المريض' : 'Place Probe'}</span>
+              <span>{isAr ? 'الأقطاب' : 'Probes'}</span>
             </button>
           )}
 
@@ -1455,19 +1488,19 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           <button
             type="button"
             onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
-            className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-slate-100 text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer"
+            title={isAr ? 'نقل الجهاز' : 'Move'}
+            className="h-7 w-7 rounded-lg bg-slate-800 hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-slate-100 flex items-center justify-center transition-colors cursor-pointer"
           >
-            <Hand className="w-3 h-3 shrink-0" />
-            <span>{isAr ? 'حمل' : 'Pick Up'}</span>
+            <Hand className="w-3 h-3" />
           </button>
 
           <button
             type="button"
             onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
-            className="h-7 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
+            title={isAr ? 'إرجاع لمكانه' : 'Return'}
+            className="h-7 w-7 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white flex items-center justify-center cursor-pointer"
           >
-            <Undo2 className="w-3 h-3 shrink-0" />
-            <span>{isAr ? 'إرجاع' : 'Return'}</span>
+            <Undo2 className="w-3 h-3" />
           </button>
 
           <button

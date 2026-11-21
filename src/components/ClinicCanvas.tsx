@@ -1553,8 +1553,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       lastFppNearKey = '';
       latestRef.current.onFppHeldDeviceChange?.(null);
       latestRef.current.onFppNearbyDeviceChange?.(null);
-      if (plan.nearBed && (held.selectedProbeId || held.sprite === 'infrared_lamp')) {
-        latestRef.current.onFppActiveBedDeviceChange?.(buildActiveDevicePayload(held, false));
+      if (plan.nearBed) {
+        const openConsoleNow =
+          !held.selectedProbeId &&
+          held.sprite !== 'infrared_lamp' &&
+          hasDeviceInteractiveScreen(held.sprite);
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildActiveDevicePayload(held, openConsoleNow)
+        );
       } else {
         latestRef.current.onFppActiveBedDeviceChange?.(null);
       }
@@ -3104,7 +3110,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         if (entry.mode === 'placed_bed') {
           emitAttachedDevicesForActiveFpp();
         }
-        latestRef.current.onFppActiveBedDeviceChange?.(buildActiveDevicePayload(entry, false));
+        const openConsole =
+          !entry.selectedProbeId &&
+          entry.sprite !== 'infrared_lamp' &&
+          hasDeviceInteractiveScreen(entry.sprite);
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildActiveDevicePayload(entry, openConsole)
+        );
       } else {
         entry.selectedProbeId = entry.selectedProbeId === drag.probeId ? null : drag.probeId;
         latestRef.current.onFppActiveBedDeviceChange?.(buildActiveDevicePayload(entry, false));
@@ -3137,10 +3149,48 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
     const tryPlaceSelectedProbeAtPointer = (clientX: number, clientY: number): boolean => {
       const curAct = latestRef.current.fppActiveDevice;
-      if (!curAct || !curAct.selectedProbeId) return false;
+      if (!curAct) return false;
       for (const eq of fppEquipBayMap.values()) {
         if (eq.mode === 'held') return false;
       }
+
+      const activeEntry = curAct.instanceId
+        ? fppEquipBayMap.get(curAct.instanceId) ?? resolveBayEntry(curAct.catalogId)
+        : resolveBayEntry(curAct.catalogId);
+      if (!activeEntry) return false;
+
+      // Direct tap-to-aim on patient whenever IR lamp or a single-probe applicator is active
+      if (!curAct.selectedProbeId) {
+        const allowDirectSingleTap =
+          activeEntry.sprite === 'infrared_lamp' ||
+          (activeEntry.probeAnchors.length === 1 && hasDeviceProbes(activeEntry.sprite));
+        if (!allowDirectSingleTap) return false;
+        const hit = raycastSessionPatientBody(clientX, clientY);
+        if (!hit) return false;
+        activeEntry.mode = 'placed_bed';
+        activeEntry.irLateralOffset = 0;
+        activeEntry.irHeightOffset = 0;
+        activeEntry.probeAnchors = activeEntry.probeAnchors.map((a, idx) =>
+          idx === 0
+            ? {
+                ...a,
+                bayX: hit.bayX,
+                bayY: hit.bayY,
+                bayZ: hit.bayZ,
+                nx: hit.nx,
+                ny: hit.ny,
+                nz: hit.nz,
+                placed: true,
+              }
+            : a
+        );
+        emitAttachedDevicesForActiveFpp();
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildActiveDevicePayload(activeEntry, Boolean(curAct.screenTapped))
+        );
+        return true;
+      }
+
       let targetEntry: FppBayEquipEntry | undefined;
       for (const eq of fppEquipBayMap.values()) {
         if (eq.selectedProbeId && (eq.mode === 'placed_bed' || eq.mode === 'placed_room')) {
@@ -3175,7 +3225,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         setProbeReticlePose(null);
       }
       emitAttachedDevicesForActiveFpp();
-      latestRef.current.onFppActiveBedDeviceChange?.(buildActiveDevicePayload(targetEntry, false));
+      const openConsole =
+        !targetEntry.selectedProbeId &&
+        targetEntry.sprite !== 'infrared_lamp' &&
+        hasDeviceInteractiveScreen(targetEntry.sprite);
+      latestRef.current.onFppActiveBedDeviceChange?.(
+        buildActiveDevicePayload(targetEntry, openConsole)
+      );
       return true;
     };
 
@@ -6341,34 +6397,39 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
           const sideSign = focusEntry && focusEntry.curX > 0.12 ? -1 : 1;
           const frontSign = focusEntry && focusEntry.curZ < -0.52 ? -1 : 1;
-          const defaultAngle = (isPortrait ? 0.44 : 0.28) * sideSign;
+          const defaultAngle = (isPortrait ? 0.24 : 0.18) * sideSign;
 
           fpp.focusOrbitYaw = THREE.MathUtils.damp(fpp.focusOrbitYaw, fpp.focusTargetOrbitYaw, 10, dt);
           fpp.focusOrbitPitch = THREE.MathUtils.damp(fpp.focusOrbitPitch, fpp.focusTargetOrbitPitch, 10, dt);
           const theta = (frontSign > 0 ? 0 : Math.PI) + defaultAngle + fpp.focusOrbitYaw;
-          const horizDist = isPortrait ? 2.24 : focusPosture === 'standing' ? 1.66 : 1.54;
+          // Keep camera intimately close at natural bedside distance (never pulls away from patient)
+          const horizDist = isPortrait
+            ? 1.44
+            : focusPosture === 'standing'
+              ? 1.28
+              : 1.18;
           const baseCamY =
             focusPosture === 'standing'
-              ? 1.48
+              ? 1.28
               : focusPosture === 'sitting'
-                ? focusBedH + 1.04
-                : focusBedH + 0.98;
+                ? focusBedH + 0.82
+                : focusBedH + 0.72;
 
           const camBayX = THREE.MathUtils.clamp(
             pBayX + Math.sin(theta) * horizDist,
-            -2.92,
-            2.92
+            -2.6,
+            2.6
           );
           const camBayZ = THREE.MathUtils.clamp(
             pBayZ + Math.cos(theta) * horizDist,
-            -0.84,
-            3.16
+            -0.82,
+            2.8
           );
-          const camBayY = THREE.MathUtils.clamp(baseCamY + fpp.focusOrbitPitch * 0.72, 0.94, 2.28);
+          const camBayY = THREE.MathUtils.clamp(baseCamY + fpp.focusOrbitPitch * 0.65, 0.85, 2.02);
 
-          // Aim slightly below patient center so patient + bed sit cleanly in the unobstructed upper viewport
-          const lookOffsetDown = isPortrait ? 0.28 : 0.20;
-          const lookBayY = Math.max(0.18, pBayY - lookOffsetDown);
+          // Gentle upward framing nudge so patient stays big & close right above bottom hardware bar
+          const lookOffsetDown = isPortrait ? 0.14 : 0.10;
+          const lookBayY = Math.max(0.20, pBayY - lookOffsetDown);
 
           const bayFloorY = fpp.baseY - 1.28;
           const goalPosX = fpp.patientX + pfX * camBayZ + prX * camBayX;

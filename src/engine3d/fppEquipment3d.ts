@@ -66,7 +66,6 @@ export const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
   'swd_unit',
   'infrared_lamp',
   'hydro_sink',
-  'pt_toolkit_cart',
 ]);
 
 export function hasDeviceInteractiveScreen(sprite: SpriteKind): boolean {
