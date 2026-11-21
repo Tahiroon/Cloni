@@ -6,6 +6,7 @@ import { ClinicCanvas, PlacementDraft } from './components/ClinicCanvas';
 import { ClinicalAssessmentModal } from './components/ClinicalAssessmentModal';
 import { FirstPersonSessionHud } from './components/FirstPersonSessionHud';
 import { FriendsModal } from './components/FriendsModal';
+import { GameLoadingScreen } from './components/GameLoadingScreen';
 import { MissionsModal } from './components/MissionsModal';
 import { PlayerCharacterModal } from './components/PlayerCharacterModal';
 import { RoomUnlockModal } from './components/RoomUnlockModal';
@@ -45,6 +46,10 @@ import {
   WaitSeatSlot,
   WorldTreeSpecies,
 } from './engine/isometricMath';
+import {
+  getInitialBootLanguage,
+  persistBootLanguage,
+} from './services/gameBootLoader';
 import {
   loadClinicLocal,
   saveClinicLocal,
@@ -171,8 +176,14 @@ const TREE_SPECIES_LABELS: Record<WorldTreeSpecies, { ar: string; en: string }> 
 };
 
 export default function App() {
-  const [clinic, setClinic] = useState<ClinicSaveState>(() => createInitialSaveState());
+  const [clinic, setClinic] = useState<ClinicSaveState>(() => {
+    const initial = createInitialSaveState();
+    const savedLang = getInitialBootLanguage();
+    return savedLang !== initial.language ? { ...initial, language: savedLang } : initial;
+  });
   const [hydrated, setHydrated] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
+  const [bootDismissed, setBootDismissed] = useState(false);
 
   const [patients, setPatients] = useState<PatientEntity[]>([]);
   const [floatingFeedbacks, setFloatingFeedbacks] = useState<FloatingFeedback[]>([]);
@@ -214,6 +225,7 @@ export default function App() {
   const initialSpawnTimeRef = useRef<number | null>(null);
   const fppBlinkLockRef = useRef(false);
   const fppBlinkTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const fppBlinkRafsRef = useRef<number[]>([]);
   const isFppSessionActive = Boolean(firstPersonPatientId);
 
   const clearFppBlinkTimers = useCallback(() => {
@@ -221,6 +233,10 @@ export default function App() {
       clearTimeout(t);
     }
     fppBlinkTimersRef.current = [];
+    for (const id of fppBlinkRafsRef.current) {
+      cancelAnimationFrame(id);
+    }
+    fppBlinkRafsRef.current = [];
   }, []);
 
   const triggerFppBlinkTransition = useCallback(
@@ -235,16 +251,24 @@ export default function App() {
         onHoldSwap();
 
         const tOpen = setTimeout(() => {
-          setFppBlinkPhase('opening');
-          onOpeningStart?.();
+          // Wait 2 animation frames behind closed eyelids so 3D bay & HUD commit cleanly before opening
+          const raf1 = requestAnimationFrame(() => {
+            const raf2 = requestAnimationFrame(() => {
+              setFppBlinkPhase('opening');
+              onOpeningStart?.();
 
-          const tDone = setTimeout(() => {
-            setFppBlinkPhase('idle');
-            fppBlinkLockRef.current = false;
-            fppBlinkTimersRef.current = [];
-          }, 245);
-          fppBlinkTimersRef.current.push(tDone);
-        }, 110);
+              const tDone = setTimeout(() => {
+                setFppBlinkPhase('idle');
+                fppBlinkLockRef.current = false;
+                fppBlinkTimersRef.current = [];
+                fppBlinkRafsRef.current = [];
+              }, 245);
+              fppBlinkTimersRef.current.push(tDone);
+            });
+            fppBlinkRafsRef.current.push(raf2);
+          });
+          fppBlinkRafsRef.current.push(raf1);
+        }, 95);
         fppBlinkTimersRef.current.push(tOpen);
       }, 155);
       fppBlinkTimersRef.current.push(tHold);
@@ -466,6 +490,7 @@ export default function App() {
         setClinic(nextState);
         setLastSyncedAt(nextState.lastSyncedAt || null);
         soundFx.enabled = nextState.soundEnabled;
+        persistBootLanguage(nextState.language);
         document.documentElement.lang = nextState.language;
         document.documentElement.dir = nextState.language === 'ar' ? 'rtl' : 'ltr';
       }
@@ -2892,6 +2917,7 @@ export default function App() {
   };
 
   const handleToggleLanguage = (lang: Language) => {
+    persistBootLanguage(lang);
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
     setClinic((prev) => ({ ...prev, language: lang }));
@@ -3138,6 +3164,8 @@ export default function App() {
         lightingMode={lightingMode}
         removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
         selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
+        hideInternalLoader={!bootDismissed}
+        onSceneReady={() => setSceneReady(true)}
         onReceptionCheckinDone={handleReceptionCheckinDone}
         onTapPatient={handleTapPatient}
         onTapLockedRoom={(room) => {
@@ -3766,6 +3794,18 @@ export default function App() {
                     ? selectedBedPatient.clinicalCase.chiefComplaintAr
                     : selectedBedPatient.clinicalCase.chiefComplaintEn}
                 </div>
+                {selectedBedPatient.attachedDevices &&
+                  selectedBedPatient.attachedDevices.length > 0 && (
+                    <div
+                      className={`text-[11px] mt-1 font-semibold tabular-nums ${
+                        lightingMode === 'night' ? 'text-sky-300' : 'text-sky-700'
+                      }`}
+                    >
+                      {isAr
+                        ? `أجهزة متصلة حالياً: ${selectedBedPatient.attachedDevices.length}`
+                        : `Active bedside devices: ${selectedBedPatient.attachedDevices.length}`}
+                    </div>
+                  )}
               </div>
               <button
                 type="button"
@@ -3799,7 +3839,15 @@ export default function App() {
                 className="flex-1 min-h-[42px] px-4 rounded-2xl text-xs font-black flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white shadow cursor-pointer transition-all active:scale-95"
               >
                 <Play className="w-4 h-4 shrink-0 fill-current" />
-                <span>{isAr ? 'ابدأ الجلسة' : 'Start Session'}</span>
+                <span>
+                  {selectedBedPatient.state === 'in_exam'
+                    ? isAr
+                      ? 'استكمال الجلسة'
+                      : 'Resume Session'
+                    : isAr
+                      ? 'ابدأ الجلسة'
+                      : 'Start Session'}
+                </span>
               </button>
             </div>
           </div>
@@ -3940,6 +3988,16 @@ export default function App() {
           </svg>
         </div>
       </div>
+
+      {/* AAA-Style Initial Game Splash & Asset-Caching Loading Screen */}
+      {!bootDismissed && (
+        <GameLoadingScreen
+          language={clinic.language}
+          hydrated={hydrated}
+          sceneReady={sceneReady}
+          onFinished={() => setBootDismissed(true)}
+        />
+      )}
     </main>
   );
 }

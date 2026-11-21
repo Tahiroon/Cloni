@@ -42,8 +42,8 @@ function createWallEngravingTextures(maxAniso: number): {
   colorTex: THREE.CanvasTexture;
   bumpTex: THREE.CanvasTexture;
 } {
-  const W = 2048;
-  const H = 576;
+  const W = 3840;
+  const H = 1184;
 
   const colorCanvas = document.createElement('canvas');
   colorCanvas.width = W;
@@ -55,7 +55,22 @@ function createWallEngravingTextures(maxAniso: number): {
   bumpCanvas.height = H;
   const bCtx = bumpCanvas.getContext('2d');
 
-  if (cCtx && bCtx) {
+  const aniso = Math.min(16, Math.max(8, maxAniso || 8));
+  const colorTex = new THREE.CanvasTexture(colorCanvas);
+  colorTex.colorSpace = THREE.SRGBColorSpace;
+  colorTex.anisotropy = aniso;
+  colorTex.minFilter = THREE.LinearMipmapLinearFilter;
+  colorTex.magFilter = THREE.LinearFilter;
+  colorTex.generateMipmaps = true;
+
+  const bumpTex = new THREE.CanvasTexture(bumpCanvas);
+  bumpTex.anisotropy = aniso;
+  bumpTex.minFilter = THREE.LinearMipmapLinearFilter;
+  bumpTex.magFilter = THREE.LinearFilter;
+  bumpTex.generateMipmaps = true;
+
+  const renderCanvases = () => {
+    if (!cCtx || !bCtx) return;
     cCtx.clearRect(0, 0, W, H);
     bCtx.fillStyle = '#ffffff';
     bCtx.fillRect(0, 0, W, H);
@@ -63,100 +78,109 @@ function createWallEngravingTextures(maxAniso: number): {
     const drawTextPass = (
       ctx: CanvasRenderingContext2D,
       mainColor: string | CanvasGradient,
-      subLeftColor: string,
+      subLeftColor: string | CanvasGradient,
       subRightColor: string | CanvasGradient,
       lineColor: string | CanvasGradient,
       offsetX: number,
-      offsetY: number
+      offsetY: number,
+      strokeColor?: string,
+      strokeWidth = 0
     ) => {
       // Line 1: "Therason physiotherapy"
       ctx.direction = 'ltr';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = '800 115px "Plus Jakarta Sans", "Cairo", sans-serif';
+      ctx.font = '800 246px "Plus Jakarta Sans", "Cairo", sans-serif';
+      if (strokeColor && strokeWidth > 0) {
+        ctx.lineJoin = 'round';
+        ctx.miterLimit = 2;
+        ctx.lineWidth = strokeWidth;
+        ctx.strokeStyle = strokeColor;
+        ctx.strokeText('Therason physiotherapy', W / 2 + offsetX, 376 + offsetY, W - 240);
+      }
       ctx.fillStyle = mainColor;
-      ctx.fillText('Therason physiotherapy', W / 2 + offsetX, 188 + offsetY);
+      ctx.fillText('Therason physiotherapy', W / 2 + offsetX, 376 + offsetY, W - 240);
 
-      // Sleek architectural divider line
+      // Clean blue architectural divider bar
       ctx.fillStyle = lineColor;
-      ctx.fillRect(W / 2 - 368 + offsetX, 290 + offsetY, 736, 6);
+      ctx.fillRect(W / 2 - 920 + offsetX, 588 + offsetY, 1840, 12);
 
       // Line 2: "Powered by طـــاهــر مــحـمـد"
       const prefix = 'Powered by ';
       const arName = 'طـــاهــر مــحـمـد';
-      ctx.font = '700 64px "Plus Jakarta Sans", sans-serif';
+      ctx.font = '700 132px "Plus Jakarta Sans", sans-serif';
       const wPrefix = ctx.measureText(prefix).width;
-      ctx.font = '800 86px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 176px "Cairo", "Plus Jakarta Sans", sans-serif';
       const wName = ctx.measureText(arName).width;
       const totalW = wPrefix + wName;
       const startX = (W - totalW) / 2 + offsetX;
 
       ctx.direction = 'ltr';
       ctx.textAlign = 'left';
-      ctx.font = '700 64px "Plus Jakarta Sans", sans-serif';
+      ctx.font = '700 132px "Plus Jakarta Sans", sans-serif';
+      if (strokeColor && strokeWidth > 0) {
+        ctx.lineWidth = Math.max(2, strokeWidth * 0.72);
+        ctx.strokeStyle = strokeColor;
+        ctx.strokeText(prefix, startX, 822 + offsetY);
+      }
       ctx.fillStyle = subLeftColor;
-      ctx.fillText(prefix, startX, 394 + offsetY);
+      ctx.fillText(prefix, startX, 822 + offsetY);
 
       ctx.direction = 'rtl';
       ctx.textAlign = 'right';
-      ctx.font = '800 86px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 176px "Cairo", "Plus Jakarta Sans", sans-serif';
+      if (strokeColor && strokeWidth > 0) {
+        ctx.lineWidth = Math.max(2, strokeWidth * 0.82);
+        ctx.strokeStyle = strokeColor;
+        ctx.strokeText(arName, startX + totalW, 814 + offsetY);
+      }
       ctx.fillStyle = subRightColor;
-      ctx.fillText(arName, startX + totalW, 390 + offsetY);
+      ctx.fillText(arName, startX + totalW, 814 + offsetY);
     };
 
-    // Soft clean wall-plaster recess bevel without milky washout
+    // Subtle crisp drop shadow for clean architectural separation against the plaster wall
     drawTextPass(
       cCtx,
-      'rgba(255, 255, 255, 0.34)',
-      'rgba(255, 255, 255, 0.28)',
-      'rgba(255, 255, 255, 0.34)',
-      'rgba(255, 255, 255, 0.24)',
+      'rgba(7, 34, 78, 0.36)',
+      'rgba(7, 34, 78, 0.32)',
+      'rgba(7, 34, 78, 0.36)',
+      'rgba(7, 34, 78, 0.24)',
       0,
-      2.2
+      7
     );
 
-    // Crisp recessed shadow rim for high contrast depth
-    drawTextPass(
-      cCtx,
-      'rgba(2, 10, 22, 0.72)',
-      'rgba(2, 10, 22, 0.65)',
-      'rgba(2, 10, 22, 0.72)',
-      'rgba(2, 10, 22, 0.55)',
-      0,
-      -2.4
-    );
+    // Rich, very clear vivid royal-cerulean blue fill + crisp deep-cobalt outline
+    const titleGrad = cCtx.createLinearGradient(320, 220, W - 320, 520);
+    titleGrad.addColorStop(0, '#0369a1');
+    titleGrad.addColorStop(0.5, '#0284c7');
+    titleGrad.addColorStop(1, '#1d4ed8');
 
-    // Deep dark obsidian-navy inlaid typography for crisp legibility on bright wall
-    const titleGrad = cCtx.createLinearGradient(352, 112, 1696, 256);
-    titleGrad.addColorStop(0, '#041426');
-    titleGrad.addColorStop(0.5, '#07223e');
-    titleGrad.addColorStop(1, '#041426');
+    const lineGrad = cCtx.createLinearGradient(W / 2 - 920, 0, W / 2 + 920, 0);
+    lineGrad.addColorStop(0, 'rgba(2, 132, 199, 0.16)');
+    lineGrad.addColorStop(0.5, '#0284c7');
+    lineGrad.addColorStop(1, 'rgba(29, 78, 216, 0.16)');
 
-    const lineGrad = cCtx.createLinearGradient(W / 2 - 368, 0, W / 2 + 368, 0);
-    lineGrad.addColorStop(0, 'rgba(7, 34, 62, 0.18)');
-    lineGrad.addColorStop(0.5, '#072b4d');
-    lineGrad.addColorStop(1, 'rgba(7, 34, 62, 0.18)');
+    const subPrefixGrad = '#075985';
+    const nameGrad = cCtx.createLinearGradient(1100, 700, W - 900, 940);
+    nameGrad.addColorStop(0, '#0369a1');
+    nameGrad.addColorStop(0.5, '#0284c7');
+    nameGrad.addColorStop(1, '#1d4ed8');
 
-    const nameGrad = cCtx.createLinearGradient(672, 336, 1472, 448);
-    nameGrad.addColorStop(0, '#041426');
-    nameGrad.addColorStop(0.55, '#082c4e');
-    nameGrad.addColorStop(1, '#04182e');
+    drawTextPass(cCtx, titleGrad, subPrefixGrad, nameGrad, lineGrad, 0, 0, '#082f68', 6);
 
-    drawTextPass(cCtx, titleGrad, '#091524', nameGrad, lineGrad, 0, 0);
+    // Clean subtle bevel bump map (gentle relief so lettering stays razor sharp)
+    drawTextPass(bCtx, '#3a3a3a', '#444444', '#3a3a3a', '#505050', 0, 0);
 
-    // Deeper negative-engraving bump map (dark strokes = recessed into the wall)
-    drawTextPass(bCtx, '#161616', '#282828', '#161616', '#303030', 0, 0);
+    colorTex.needsUpdate = true;
+    bumpTex.needsUpdate = true;
+  };
+
+  renderCanvases();
+  if (typeof document !== 'undefined' && 'fonts' in document && document.fonts?.ready) {
+    void document.fonts.ready.then(() => {
+      renderCanvases();
+    });
   }
-
-  const aniso = Math.min(16, Math.max(4, maxAniso || 4));
-  const colorTex = new THREE.CanvasTexture(colorCanvas);
-  colorTex.colorSpace = THREE.SRGBColorSpace;
-  colorTex.anisotropy = aniso;
-  colorTex.needsUpdate = true;
-
-  const bumpTex = new THREE.CanvasTexture(bumpCanvas);
-  bumpTex.anisotropy = aniso;
-  bumpTex.needsUpdate = true;
 
   return { colorTex, bumpTex };
 }
@@ -424,15 +448,18 @@ export function createFppRoomBackdrop3D(
     new THREE.MeshStandardMaterial({
       map: wallSignColorTex,
       bumpMap: wallSignBumpTex,
-      bumpScale: 0.032,
+      bumpScale: 0.008,
+      emissiveMap: wallSignColorTex,
+      emissive: new THREE.Color(0x0ea5e9),
+      emissiveIntensity: 0.28,
       transparent: true,
       alphaTest: 0.02,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
-      roughness: 0.62,
-      metalness: 0.06,
-      envMapIntensity: 0.2,
+      roughness: 0.36,
+      metalness: 0.08,
+      envMapIntensity: 0.35,
     })
   );
 
@@ -688,10 +715,10 @@ export function createFppRoomBackdrop3D(
 
   // Wall-engraved typography directly on the plaster wall above the patient's bed
   const wallEngraving = new THREE.Mesh(
-    trackGeom(new THREE.PlaneGeometry(1.72, 0.48)),
+    trackGeom(new THREE.PlaneGeometry(2.38, 0.74)),
     wallEngravingMat
   );
-  wallEngraving.position.set(0, 1.35, backZ + 0.036);
+  wallEngraving.position.set(0, 1.56, backZ + 0.036);
   wallEngraving.renderOrder = 1;
   group.add(wallEngraving);
 

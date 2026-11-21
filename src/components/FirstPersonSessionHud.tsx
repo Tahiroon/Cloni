@@ -551,10 +551,24 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const isAr = language === 'ar';
   const isNight = lightingMode === 'night';
   const [screenExpanded, setScreenExpanded] = useState(false);
+  const [entryReady, setEntryReady] = useState(false);
+  const entryGreetedRef = useRef(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setEntryReady(true));
+    if (!entryGreetedRef.current) {
+      entryGreetedRef.current = true;
+      const greetAr = `أهلاً دكتور، أنا ${c.patientNameAr} — أشتكي من ${c.chiefComplaintAr}.`;
+      const greetEn = `Hello doctor, I'm ${c.patientNameEn} — dealing with ${c.chiefComplaintEn}.`;
+      setSpeechCaption(isAr ? greetAr : greetEn);
+      onPatientSpeak(patient.id, 2600);
+    }
+    return () => cancelAnimationFrame(raf);
+  }, [patient.id, c.patientNameAr, c.patientNameEn, c.chiefComplaintAr, c.chiefComplaintEn, isAr, onPatientSpeak]);
 
   const activeDeviceIdentity = activeDevice ? `${activeDevice.instanceId ?? activeDevice.catalogId}` : '';
   useEffect(() => {
-    if (!activeDevice) {
+    if (!activeDevice || activeDevice.placementMode !== 'bed') {
       setScreenExpanded(false);
     } else if (activeDevice.selectedProbeId) {
       setScreenExpanded(false);
@@ -565,6 +579,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
     }
   }, [
     activeDeviceIdentity,
+    activeDevice?.placementMode,
     activeDevice?.screenTapped,
     activeDevice?.hasScreen,
     activeDevice?.selectedProbeId,
@@ -745,7 +760,11 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
     : 'bg-white/96 border-slate-200 text-slate-900';
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2.5 sm:p-3.5">
+    <div
+      className={`pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2.5 sm:p-3.5 transition-all duration-300 ease-out ${
+        entryReady ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1.5'
+      }`}
+    >
       {/* Top Compact Strip + Progressive Steps + Smart Non-Blocking Speech Caption */}
       <div className="flex flex-col gap-1.5">
         <div
@@ -961,9 +980,10 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         )}
       </div>
 
-      {/* Direct 3D Electrode / Probe Placement Guide Bar — docked at bottom edge so focused patient stays 100% clear */}
+      {/* Direct 3D Electrode / Probe Placement Guide Bar — only for bedside-deployed devices */}
       {!heldDevice &&
         activeDevice &&
+        activeDevice.placementMode === 'bed' &&
         !screenExpanded &&
         activeDevice.selectedProbeId && (() => {
           const probes =
@@ -1133,7 +1153,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         </div>
       )}
 
-      {!heldDevice && activeDevice && activeDevice.hasScreen && screenExpanded && (
+      {!heldDevice && activeDevice && activeDevice.placementMode === 'bed' && activeDevice.hasScreen && screenExpanded && (
         <PhysicalDeviceController
           device={activeDevice}
           language={language}
@@ -1164,7 +1184,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         />
       )}
 
-      {!heldDevice && activeDevice && activeDevice.sprite === 'infrared_lamp' && !activeDevice.selectedProbeId && (
+      {!heldDevice && activeDevice && activeDevice.placementMode === 'bed' && activeDevice.sprite === 'infrared_lamp' && !activeDevice.selectedProbeId && (
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
@@ -1359,7 +1379,58 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         </div>
       )}
 
-      {!heldDevice && activeDevice && activeDevice.sprite !== 'infrared_lamp' && !activeDevice.selectedProbeId && !(activeDevice.hasScreen && screenExpanded) && (
+      {/* Room-placed device bar (too far from bed — no patient treatment options until moved closer) */}
+      {!heldDevice && activeDevice && activeDevice.placementMode === 'room' && (
+        <div
+          dir={isAr ? 'rtl' : 'ltr'}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 max-w-[95vw] rounded-2xl bg-slate-950/94 border border-sky-400/35 px-3 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-2"
+        >
+          <div className="flex items-center gap-2 text-[11px] font-bold px-1">
+            <span dir="ltr" className="font-black text-sky-300 whitespace-nowrap">
+              {activeDevice.nameEn}
+            </span>
+            <span className="text-slate-500" aria-hidden="true">·</span>
+            <span className="text-amber-300 whitespace-nowrap">
+              {isAr
+                ? 'بعيد عن سرير المريض — قرّبه أولاً'
+                : 'Far from patient bed — move closer first'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+              className="h-7 px-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <Hand className="w-3 h-3 shrink-0" />
+              <span>{isAr ? 'حمل وتقريب' : 'Move Closer'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+              title={isAr ? 'إرجاع لمكانه' : 'Return'}
+              className="h-7 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+            >
+              <Undo2 className="w-3 h-3 shrink-0" />
+              <span>{isAr ? 'إرجاع' : 'Return'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onCloseActiveDevice?.()}
+              aria-label={isAr ? 'إغلاق' : 'Close'}
+              className="h-7 w-7 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!heldDevice && activeDevice && activeDevice.placementMode === 'bed' && activeDevice.sprite !== 'infrared_lamp' && !activeDevice.selectedProbeId && !(activeDevice.hasScreen && screenExpanded) && (
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
@@ -1533,6 +1604,11 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                     <span>{isAr ? 'اضغط على السؤال لسماع رد المريض' : 'Tap a question to hear the patient'}</span>
                     <span className="tabular-nums text-rose-500">VAS {c.vasPain}/10</span>
                   </div>
+                  <p className="text-[10px] opacity-60 px-0.5 leading-snug">
+                    {isAr
+                      ? 'اسحب للنظر · اقترب تماماً من أي جهاز لاستخدامه وتقريبه للسرير'
+                      : 'Drag to look · Walk right up to any device to use and bring it bedside'}
+                  </p>
 
                   {presetQuestions.map((item) => {
                     const isOpen = openQuestionId === item.id;
