@@ -66,6 +66,7 @@ import {
   Language,
   LightingMode,
   NavTab,
+  PatientAttachedDevice,
   PatientEntity,
   PlacedItem,
   PlayerCharacterConfig,
@@ -2071,10 +2072,50 @@ export default function App() {
     ]
   );
 
+  const handleSyncPatientDevices = useCallback(
+    (patientId: string, devices: PatientAttachedDevice[]) => {
+      setPatients((prev) =>
+        prev.map((pt) =>
+          pt.id === patientId
+            ? {
+                ...pt,
+                attachedDevices: devices.length > 0 ? devices : undefined,
+              }
+            : pt
+        )
+      );
+    },
+    []
+  );
+
+  const handleSetPatientFppPosture = useCallback(
+    (nextPosture: FppPatientPosture, targetPatientId?: string | null) => {
+      setFppPosture(nextPosture);
+      const pid = targetPatientId ?? firstPersonPatientId;
+      if (!pid) return;
+      setPatients((prev) =>
+        prev.map((pt) =>
+          pt.id === pid && pt.sessionPosture !== nextPosture
+            ? { ...pt, sessionPosture: nextPosture }
+            : pt
+        )
+      );
+    },
+    [firstPersonPatientId]
+  );
+
   const startFirstPersonSession = useCallback(
     (patientId: string) => {
       if (fppBlinkLockRef.current) return;
       soundFx.tap();
+      const targetPt = patients.find((pt) => pt.id === patientId);
+      const targetStation = targetPt?.assignedStationId
+        ? clinic.placedItems.find((it) => it.instanceId === targetPt.assignedStationId)
+        : undefined;
+      const targetStationCat = targetStation ? catalogById.get(targetStation.catalogId) : undefined;
+      const initialPosture =
+        targetPt?.sessionPosture ?? getDefaultPostureForStation(targetStationCat?.sprite);
+
       setSelectedBedPatientId(null);
       setSelectedWaitingPatientId(null);
       setFocusedPatientId(null);
@@ -2092,17 +2133,18 @@ export default function App() {
         setPatients((prev) =>
           prev.map((pt) =>
             pt.id === patientId && pt.state === 'ready_for_exam'
-              ? { ...pt, state: 'in_exam' }
+              ? { ...pt, state: 'in_exam', sessionPosture: pt.sessionPosture ?? initialPosture }
               : pt
           )
         );
+        setFppPosture(initialPosture);
         setFirstPersonPatientId(patientId);
         setFppNearbyDevice(null);
         setFppHeldDevice(null);
         setFppActiveDevice(null);
       });
     },
-    [triggerFppBlinkTransition]
+    [patients, clinic.placedItems, catalogById, triggerFppBlinkTransition]
   );
 
   // Handle tapping a patient
@@ -2211,6 +2253,8 @@ export default function App() {
                 leavingItemId: pt.assignedStationId || undefined,
                 assignedStationId: null,
                 treatmentProgress: undefined,
+                attachedDevices: undefined,
+                sessionPosture: undefined,
                 blockedTicks: 0,
                 path: buildPatientPath(pt, 32, 15, pt.assignedStationId || undefined),
               }
@@ -2648,11 +2692,19 @@ export default function App() {
       }));
       setPatients((prevPts) =>
         prevPts.map((pt) => {
-          if (pt.waitingSeatKey && pt.waitingSeatKey.startsWith(movedId + '_')) {
-            const matchingSeat = updatedSeats.find((s) => s.seatKey === pt.waitingSeatKey);
-            if (matchingSeat && pt.state === 'waiting_checkin') {
+          let nextPt = pt;
+          if (pt.attachedDevices?.some((d) => d.instanceId === movedId)) {
+            const filtered = pt.attachedDevices.filter((d) => d.instanceId !== movedId);
+            nextPt = {
+              ...nextPt,
+              attachedDevices: filtered.length > 0 ? filtered : undefined,
+            };
+          }
+          if (nextPt.waitingSeatKey && nextPt.waitingSeatKey.startsWith(movedId + '_')) {
+            const matchingSeat = updatedSeats.find((s) => s.seatKey === nextPt.waitingSeatKey);
+            if (matchingSeat && nextPt.state === 'waiting_checkin') {
               return {
-                ...pt,
+                ...nextPt,
                 gridX: matchingSeat.seatTileX,
                 gridY: matchingSeat.seatTileY,
                 targetX: matchingSeat.seatTileX,
@@ -2665,15 +2717,15 @@ export default function App() {
             }
           }
           if (
-            pt.state !== 'in_treatment' &&
-            pt.state !== 'ready_for_exam' &&
-            !(pt.state === 'waiting_checkin' && pt.isSeatedWait) &&
-            !isTileWalkable(pt.gridX, pt.gridY, 0.21, updatedBoxes)
+            nextPt.state !== 'in_treatment' &&
+            nextPt.state !== 'ready_for_exam' &&
+            !(nextPt.state === 'waiting_checkin' && nextPt.isSeatedWait) &&
+            !isTileWalkable(nextPt.gridX, nextPt.gridY, 0.21, updatedBoxes)
           ) {
-            const safe = findNearestWalkableTile(pt.gridX, pt.gridY, 0.22, updatedBoxes);
-            return { ...pt, gridX: safe.x, gridY: safe.y };
+            const safe = findNearestWalkableTile(nextPt.gridX, nextPt.gridY, 0.22, updatedBoxes);
+            return { ...nextPt, gridX: safe.x, gridY: safe.y };
           }
-          return pt;
+          return nextPt;
         })
       );
       addFloatingFeedback(gx, gy, clinic.language === 'ar' ? 'تم النقل ✓' : 'Moved ✓', '#38bdf8');
@@ -2736,6 +2788,16 @@ export default function App() {
       coins: Math.max(999999, prev.coins + refund),
       placedItems: prev.placedItems.filter((it) => it.instanceId !== instanceId),
     }));
+    setPatients((prevPts) =>
+      prevPts.map((pt) => {
+        if (!pt.attachedDevices?.some((d) => d.instanceId === instanceId)) return pt;
+        const filtered = pt.attachedDevices.filter((d) => d.instanceId !== instanceId);
+        return {
+          ...pt,
+          attachedDevices: filtered.length > 0 ? filtered : undefined,
+        };
+      })
+    );
     if (targetItem) {
       addFloatingFeedback(targetItem.gridX, targetItem.gridY, `+${refund}`, '#fbbf24');
     }
@@ -2913,11 +2975,10 @@ export default function App() {
   }, [firstPersonPatient?.assignedStationId, clinic.placedItems, catalogById]);
 
   useEffect(() => {
-    setFppPosture(getDefaultPostureForStation(firstPersonStationCat?.sprite));
     setFppNearbyDevice(null);
     setFppHeldDevice(null);
     setFppActiveDevice(null);
-  }, [firstPersonPatientId, firstPersonStationCat?.sprite]);
+  }, [firstPersonPatientId]);
 
   const selectedBedPatient = useMemo(() => {
     if (!selectedBedPatientId) return null;
@@ -3059,13 +3120,14 @@ export default function App() {
         onFppHeldDeviceChange={setFppHeldDevice}
         onFppActiveBedDeviceChange={(next) => {
           setFppActiveDevice((prev) => {
-            if (next && prev?.catalogId !== next.catalogId) {
+            if (next && (prev?.instanceId ?? prev?.catalogId) !== (next.instanceId ?? next.catalogId)) {
               soundFx.tap();
             }
             return next;
           });
         }}
-        onFppRequirePosture={setFppPosture}
+        onFppRequirePosture={(nextPosture) => handleSetPatientFppPosture(nextPosture)}
+        onSyncPatientDevices={handleSyncPatientDevices}
         speakingPatientId={visitingFriend ? null : speakingPatientId}
         selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
         placementDraft={placementDraft}
@@ -3294,7 +3356,7 @@ export default function App() {
           posture={fppPosture}
           onChangePosture={(nextPosture) => {
             soundFx.tap();
-            setFppPosture(nextPosture);
+            handleSetPatientFppPosture(nextPosture, firstPersonPatient.id);
           }}
           nearbyDevice={fppNearbyDevice}
           heldDevice={fppHeldDevice}
@@ -3312,7 +3374,6 @@ export default function App() {
             fppDeviceCmdRef.current?.returnDevice(catalogId);
           }}
           onUpdateActiveDevice={(next) => {
-            soundFx.tap();
             fppDeviceCmdRef.current?.updateActiveBedDevice(next);
           }}
           onCloseActiveDevice={() => {

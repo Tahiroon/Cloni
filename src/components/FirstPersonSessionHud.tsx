@@ -9,15 +9,19 @@ import {
   ChevronUp,
   ClipboardCheck,
   Coins,
+  Crosshair,
   Eye,
   EyeOff,
+  Flame,
   Hand,
   Lock,
   LogOut,
-  MoveHorizontal,
+  Maximize2,
+  Minus,
   Pause,
   PersonStanding,
   Play,
+  Plus,
   RotateCcw,
   ShieldAlert,
   Sparkles,
@@ -27,18 +31,23 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { getFppDeviceCapability, getPostureRulesForStation } from '../data/catalog';
+import { getPostureRulesForStation } from '../data/catalog';
+import {
+  formatTimerMmSs,
+  getDefaultDeviceParams,
+  getDefaultProbeAnchors,
+} from '../engine3d/fppEquipment3d';
 import {
   FppActiveDeviceState,
   FppHeldDeviceInfo,
   FppNearbyDeviceInfo,
   FppPatientPosture,
-  FppTargetRegion,
   Language,
   LightingMode,
   PatientEntity,
   SpriteKind,
 } from '../types/clinic';
+import { PhysicalDeviceController } from './PhysicalDeviceController';
 
 type SessionStep = 'subjective' | 'redflags' | 'objective' | 'plan' | 'summary';
 
@@ -184,6 +193,280 @@ const VirtualJoystick: React.FC<{
   );
 };
 
+// 2-Axis Motorized Gimbal Joystick for Infrared Lamp Gooseneck Arm
+const IrAimJoystick: React.FC<{
+  activeDevice: FppActiveDeviceState;
+  isAr: boolean;
+  onUpdate: (next: FppActiveDeviceState) => void;
+}> = ({ activeDevice, isAr, onUpdate }) => {
+  const padRef = useRef<HTMLDivElement | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
+  const vecRef = useRef<{ nx: number; ny: number }>({ nx: 0, ny: 0 });
+  const rafRef = useRef<number | null>(null);
+  const lastTsRef = useRef<number>(0);
+  const lastEmitTsRef = useRef<number>(0);
+  const dirtyEmitRef = useRef<boolean>(false);
+  const latestRef = useRef<{ dev: FppActiveDeviceState; onUpdate: (n: FppActiveDeviceState) => void }>({
+    dev: activeDevice,
+    onUpdate,
+  });
+  latestRef.current = { dev: activeDevice, onUpdate };
+
+  const [stickPx, setStickPx] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const maxR = 24;
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, []);
+
+  const stopLoop = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (dirtyEmitRef.current) {
+      dirtyEmitRef.current = false;
+      latestRef.current.onUpdate(latestRef.current.dev);
+    }
+    vecRef.current = { nx: 0, ny: 0 };
+    setStickPx({ x: 0, y: 0 });
+    setDragging(false);
+    pointerIdRef.current = null;
+  };
+
+  const applyStickCurve = (v: number): number => {
+    const dead = 0.08;
+    const av = Math.abs(v);
+    if (av <= dead) return 0;
+    const norm = (av - dead) / (1 - dead);
+    return Math.sign(v) * Math.pow(norm, 1.85);
+  };
+
+  const stepLoop = (ts: number) => {
+    if (pointerIdRef.current === null) {
+      rafRef.current = null;
+      return;
+    }
+    const dt = lastTsRef.current ? Math.min(0.05, Math.max(0.008, (ts - lastTsRef.current) / 1000)) : 0.016;
+    lastTsRef.current = ts;
+
+    const cx = applyStickCurve(vecRef.current.nx);
+    const cy = applyStickCurve(vecRef.current.ny);
+    if (cx !== 0 || cy !== 0) {
+      const curDev = latestRef.current.dev;
+      const sign = curDev.visualRightSign ?? 1;
+      const curLat = curDev.irLateralOffset ?? 0;
+      const curH = curDev.irHeightOffset ?? 0;
+      const nextLat = Math.max(-0.9, Math.min(0.9, Number((curLat + cx * sign * dt * 0.36).toFixed(3))));
+      const nextH = Math.max(-0.32, Math.min(0.44, Number((curH - cy * dt * 0.22).toFixed(3))));
+
+      if (Math.abs(nextLat - curLat) > 0.0004 || Math.abs(nextH - curH) > 0.0004) {
+        const nextDev: FppActiveDeviceState = {
+          ...curDev,
+          irLateralOffset: nextLat,
+          irHeightOffset: nextH,
+        };
+        latestRef.current.dev = nextDev;
+        dirtyEmitRef.current = true;
+        if (ts - lastEmitTsRef.current >= 34) {
+          lastEmitTsRef.current = ts;
+          dirtyEmitRef.current = false;
+          latestRef.current.onUpdate(nextDev);
+        }
+      }
+    }
+    rafRef.current = requestAnimationFrame(stepLoop);
+  };
+
+  const updateStickFromPointer = (clientX: number, clientY: number) => {
+    const el = padRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxR) {
+      dx = (dx / dist) * maxR;
+      dy = (dy / dist) * maxR;
+    }
+    setStickPx({ x: dx, y: dy });
+    vecRef.current = { nx: dx / maxR, ny: dy / maxR };
+  };
+
+  const latPct = Math.round(((activeDevice.irLateralOffset ?? 0) * (activeDevice.visualRightSign ?? 1)) * 100);
+  const hCm = Math.round((activeDevice.irHeightOffset ?? 0) * 100);
+
+  return (
+    <div className="flex flex-col items-center gap-1 select-none">
+      <div
+        ref={padRef}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+          pointerIdRef.current = e.pointerId;
+          setDragging(true);
+          updateStickFromPointer(e.clientX, e.clientY);
+          lastTsRef.current = performance.now();
+          if (rafRef.current === null) {
+            rafRef.current = requestAnimationFrame(stepLoop);
+          }
+        }}
+        onPointerMove={(e) => {
+          if (pointerIdRef.current !== e.pointerId) return;
+          e.stopPropagation();
+          updateStickFromPointer(e.clientX, e.clientY);
+        }}
+        onPointerUp={(e) => {
+          if (pointerIdRef.current !== e.pointerId) return;
+          e.stopPropagation();
+          stopLoop();
+        }}
+        onPointerCancel={stopLoop}
+        title={isAr ? 'اسحب العصا لتوجيه المصباح' : 'Drag joystick to steer IR lamp head'}
+        className="relative w-[84px] h-[84px] rounded-full bg-[radial-gradient(circle_at_center,#10141c_35%,#1d2330_85%,#0b0e14_100%)] border-2 border-[#4e596c] shadow-[inset_0_5px_12px_rgba(0,0,0,0.85),0_2px_6px_rgba(0,0,0,0.5)] flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
+      >
+        {/* Gimbal Crosshair & Rubber Boot Rings */}
+        <div className="absolute inset-2.5 rounded-full border border-white/10 pointer-events-none" />
+        <div className="absolute inset-5 rounded-full border border-rose-400/20 pointer-events-none" />
+        <div className="absolute inset-x-3 top-1/2 h-[1px] bg-white/10 pointer-events-none" />
+        <div className="absolute inset-y-3 left-1/2 w-[1px] bg-white/10 pointer-events-none" />
+
+        {/* Live Aim Pip showing where the gooseneck is currently pointed */}
+        <span
+          style={{
+            transform: `translate3d(${Math.max(-22, Math.min(22, ((activeDevice.irLateralOffset ?? 0) * (activeDevice.visualRightSign ?? 1)) * 22))}px, ${Math.max(-22, Math.min(22, -(activeDevice.irHeightOffset ?? 0) * 44))}px, 0)`,
+          }}
+          className="absolute w-2 h-2 rounded-full bg-rose-400/75 shadow-[0_0_6px_#fb7185] pointer-events-none"
+        />
+
+        {/* Joystick Shaft Shadow */}
+        <div
+          style={{
+            transform: `translate3d(${stickPx.x * 0.5}px, ${stickPx.y * 0.5}px, 0)`,
+          }}
+          className="w-5 h-5 rounded-full bg-black/70 pointer-events-none"
+        />
+
+        {/* Physical Red-Capped Control Stick */}
+        <div
+          style={{
+            transform: `translate3d(${stickPx.x}px, ${stickPx.y}px, 0)`,
+          }}
+          className={`absolute w-9 h-9 rounded-full bg-[radial-gradient(circle_at_32%_28%,#fb7185_0%,#e11d48_52%,#881337_100%)] border-2 ${
+            dragging ? 'border-white scale-105' : 'border-rose-200/80'
+          } shadow-[0_5px_10px_rgba(0,0,0,0.75),inset_0_2px_3px_rgba(255,255,255,0.45)] flex items-center justify-center pointer-events-none transition-transform duration-75`}
+        >
+          <span className="w-2.5 h-2.5 rounded-full bg-white/40 border border-white/60" />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1.5 text-[9px] font-mono text-slate-300">
+        <span className="tabular-nums">
+          {latPct >= 0 ? `+${latPct}` : latPct} / {hCm >= 0 ? `+${hCm}` : hCm}cm
+        </span>
+        <button
+          type="button"
+          onClick={() =>
+            onUpdate({
+              ...activeDevice,
+              irLateralOffset: 0,
+              irHeightOffset: 0,
+            })
+          }
+          title={isAr ? 'توسيط الذراع' : 'Center Arm'}
+          className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 border border-white/15 flex items-center justify-center text-slate-200 cursor-pointer"
+        >
+          <RotateCcw className="w-2.5 h-2.5" />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// Physical Rotary Dimmer Knob for IR Lamp Bulb Intensity
+const IrDimmerKnob: React.FC<{
+  intensity: number;
+  isAr: boolean;
+  onChange: (nextVal: number) => void;
+}> = ({ intensity, isAr, onChange }) => {
+  const dragStartRef = useRef<{ y: number; startVal: number; moved: boolean } | null>(null);
+  const pct = Math.round(intensity * 100);
+  const ratio = Math.max(0, Math.min(1, (pct - 15) / 85));
+  const deg = -135 + ratio * 270;
+
+  const commitPct = (nextPct: number) => {
+    const clamped = Math.max(15, Math.min(100, Math.round(nextPct / 5) * 5));
+    onChange(Number((clamped / 100).toFixed(2)));
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-1 select-none">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => commitPct(pct - 5)}
+          aria-label="Decrease intensity"
+          className="w-5 h-5 rounded bg-black/45 hover:bg-black/65 border border-white/15 text-[11px] font-black text-slate-200 flex items-center justify-center cursor-pointer"
+        >
+          −
+        </button>
+        <div
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              // ignore
+            }
+            dragStartRef.current = { y: e.clientY, startVal: pct, moved: false };
+          }}
+          onPointerMove={(e) => {
+            if (!dragStartRef.current) return;
+            const dy = dragStartRef.current.y - e.clientY;
+            if (Math.abs(dy) > 3) dragStartRef.current.moved = true;
+            commitPct(dragStartRef.current.startVal + (dy / 85) * 85);
+          }}
+          onPointerUp={() => {
+            if (dragStartRef.current && !dragStartRef.current.moved) {
+              commitPct(pct + 10 > 100 ? 20 : pct + 10);
+            }
+            dragStartRef.current = null;
+          }}
+          onPointerCancel={() => {
+            dragStartRef.current = null;
+          }}
+          title={isAr ? 'اسحب لأعلى/أسفل لضبط الشدة' : 'Drag up/down for dimmer'}
+          style={{ transform: `rotate(${deg}deg)` }}
+          className="w-10 h-10 rounded-full bg-gradient-to-b from-rose-400 via-rose-600 to-rose-900 border-2 border-slate-200/50 shadow-[0_3px_8px_rgba(0,0,0,0.6),inset_0_1px_1px_rgba(255,255,255,0.45)] flex items-start justify-center p-1 cursor-ns-resize touch-none"
+        >
+          <span className="w-1 h-2.5 rounded-full bg-white shadow" />
+        </div>
+        <button
+          type="button"
+          onClick={() => commitPct(pct + 5)}
+          aria-label="Increase intensity"
+          className="w-5 h-5 rounded bg-black/45 hover:bg-black/65 border border-white/15 text-[11px] font-black text-slate-200 flex items-center justify-center cursor-pointer"
+        >
+          +
+        </button>
+      </div>
+      <span className="text-[9px] font-mono font-black text-rose-200 tabular-nums">
+        {isAr ? 'الشدة' : 'IR'} {pct}%
+      </span>
+    </div>
+  );
+};
+
 export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   patient,
   stationSprite,
@@ -230,11 +513,26 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const c = patient.clinicalCase;
   const isAr = language === 'ar';
   const isNight = lightingMode === 'night';
+  const [screenExpanded, setScreenExpanded] = useState(false);
 
-  const activeCap = useMemo(
-    () => (activeDevice ? getFppDeviceCapability(activeDevice.sprite) : null),
-    [activeDevice]
-  );
+  const activeDeviceIdentity = activeDevice ? `${activeDevice.instanceId ?? activeDevice.catalogId}` : '';
+  useEffect(() => {
+    if (!activeDevice) {
+      setScreenExpanded(false);
+    } else if (activeDevice.selectedProbeId) {
+      setScreenExpanded(false);
+    } else if (activeDevice.hasScreen && activeDevice.screenTapped) {
+      setScreenExpanded(true);
+    } else if (!activeDevice.hasScreen) {
+      setScreenExpanded(false);
+    }
+  }, [
+    activeDeviceIdentity,
+    activeDevice?.screenTapped,
+    activeDevice?.hasScreen,
+    activeDevice?.selectedProbeId,
+  ]);
+
   const postureRules = useMemo(
     () => getPostureRulesForStation(stationSprite),
     [stationSprite]
@@ -570,38 +868,40 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           </div>
         </div>
 
-        {/* Slender Stage Tabs */}
-        <div
-          onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto pb-0.5"
-        >
-          {stepDefs.map((s) => {
-            const active = step === s.id && !panelHidden;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                disabled={s.disabled}
-                onClick={() => {
-                  setPanelHidden(false);
-                  setStep(s.id);
-                }}
-                className={`h-8 px-2.5 rounded-xl text-[11px] sm:text-xs font-extrabold whitespace-nowrap shrink-0 border transition-colors ${
-                  active
-                    ? 'bg-sky-500 border-sky-300 text-slate-950 shadow'
-                    : s.disabled
-                      ? 'bg-slate-950/60 border-white/10 text-slate-500 cursor-not-allowed'
-                      : 'bg-slate-950/85 hover:bg-slate-900 border-white/15 text-slate-100 cursor-pointer'
-                }`}
-              >
-                {isAr ? s.labelAr : s.labelEn}
-              </button>
-            );
-          })}
-        </div>
+        {/* Slender Stage Tabs (hidden while focused on adjusting a device/probes) */}
+        {!activeDevice && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto pb-0.5"
+          >
+            {stepDefs.map((s) => {
+              const active = step === s.id && !panelHidden;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  disabled={s.disabled}
+                  onClick={() => {
+                    setPanelHidden(false);
+                    setStep(s.id);
+                  }}
+                  className={`h-8 px-2.5 rounded-xl text-[11px] sm:text-xs font-extrabold whitespace-nowrap shrink-0 border transition-colors ${
+                    active
+                      ? 'bg-sky-500 border-sky-300 text-slate-950 shadow'
+                      : s.disabled
+                        ? 'bg-slate-950/60 border-white/10 text-slate-500 cursor-not-allowed'
+                        : 'bg-slate-950/85 hover:bg-slate-900 border-white/15 text-slate-100 cursor-pointer'
+                  }`}
+                >
+                  {isAr ? s.labelAr : s.labelEn}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Smart Floating Patient Speech Reply — positioned neatly in the side corner, never blocking patient's face */}
-        {speechCaption && (
+        {!activeDevice && speechCaption && (
           <div
             onPointerDown={(e) => e.stopPropagation()}
             className="pointer-events-auto self-start max-w-[19rem] sm:max-w-xs rounded-2xl bg-slate-950/90 border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2"
@@ -624,6 +924,93 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         )}
       </div>
 
+      {/* Direct 3D Electrode / Probe Placement Guide Bar — docked at bottom edge so focused patient stays 100% clear */}
+      {!heldDevice &&
+        activeDevice &&
+        !screenExpanded &&
+        activeDevice.selectedProbeId && (() => {
+          const probes =
+            activeDevice.probeAnchors && activeDevice.probeAnchors.length > 0
+              ? activeDevice.probeAnchors
+              : getDefaultProbeAnchors(activeDevice.sprite);
+          const curProbe = probes.find((p) => p.id === activeDevice.selectedProbeId);
+          return (
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-50 max-w-[95vw] rounded-2xl bg-slate-950/94 border-2 border-emerald-400/75 px-3 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-2"
+            >
+              <div className="flex items-center gap-1.5 text-xs font-black text-emerald-300">
+                <Crosshair className="w-4 h-4 shrink-0" />
+                <span>
+                  {isAr
+                    ? `اضغط أو اسحب على المريض لوضع (${curProbe?.label ?? 'القطب'})`
+                    : `Tap or drag on patient to place (${curProbe?.label ?? 'Probe'})`}
+                </span>
+              </div>
+
+              {probes.length > 1 && (
+                <div dir="ltr" className="flex items-center gap-1">
+                  {probes.map((p) => {
+                    const isSel = activeDevice.selectedProbeId === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() =>
+                          onUpdateActiveDevice?.({
+                            ...activeDevice,
+                            screenTapped: false,
+                            selectedProbeId: p.id,
+                          })
+                        }
+                        className={`h-6 px-2 rounded-md text-[10px] font-black border cursor-pointer ${
+                          isSel
+                            ? 'bg-emerald-400 border-emerald-200 text-slate-950'
+                            : p.placed
+                              ? 'bg-sky-600/80 border-sky-400 text-white'
+                              : 'bg-slate-800 border-white/15 text-slate-300'
+                        }`}
+                      >
+                        {p.placed ? `✓ ${p.label}` : p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {activeDevice.hasScreen && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      selectedProbeId: null,
+                      screenTapped: true,
+                    });
+                    setScreenExpanded(true);
+                  }}
+                  className="h-6 px-2.5 rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 text-[10px] font-black cursor-pointer"
+                >
+                  {isAr ? 'الجهاز' : 'Machine'}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateActiveDevice?.({
+                    ...activeDevice,
+                    selectedProbeId: null,
+                  })
+                }
+                className="h-6 px-2.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer"
+              >
+                {isAr ? 'تم ✓' : 'Done ✓'}
+              </button>
+            </div>
+          );
+        })()}
+
       {/* Direct Single "Use" Button on Proximity + "Place" Bar While Carrying + Tapped Device Controls */}
       {!heldDevice && !activeDevice && nearbyDevice && nearbyDevice.canDeploy && (
         <div
@@ -632,7 +1019,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         >
           <button
             type="button"
-            onClick={() => onGrabDevice?.(nearbyDevice.catalogId)}
+            onClick={() => onGrabDevice?.(nearbyDevice.instanceId || nearbyDevice.catalogId)}
             className="h-10 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 border border-sky-300 text-slate-950 shadow-2xl flex items-center gap-2 text-xs font-black transition-colors cursor-pointer"
           >
             <Play className="w-3.5 h-3.5 fill-current shrink-0" />
@@ -660,7 +1047,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               </span>
             ) : heldDevice.nearBed ? (
               <span className="text-emerald-300">
-                {isAr ? `عند المريض (${heldDevice.nearBedRegion ?? ''})` : `Patient · ${heldDevice.nearBedRegion ?? ''}`}
+                {isAr ? 'بجانب المريض · اضغط وضع' : 'Beside patient · Tap Place'}
               </span>
             ) : (
               <span className="text-slate-300">
@@ -693,7 +1080,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
 
             <button
               type="button"
-              onClick={() => onReturnDevice?.(heldDevice.catalogId)}
+              onClick={() => onReturnDevice?.(heldDevice.instanceId || heldDevice.catalogId)}
               title={isAr ? 'إرجاع لمكانه' : 'Return to standby'}
               className="h-10 px-3 rounded-xl bg-slate-900/95 hover:bg-rose-600 border border-white/15 text-white text-xs font-bold flex items-center gap-1 shadow-xl transition-colors cursor-pointer"
             >
@@ -704,21 +1091,303 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         </div>
       )}
 
-      {!heldDevice && activeDevice && (
+      {!heldDevice && activeDevice && activeDevice.hasScreen && screenExpanded && (
+        <PhysicalDeviceController
+          device={activeDevice}
+          language={language}
+          onUpdate={(next) => onUpdateActiveDevice?.(next)}
+          onSelectProbeToPlace={(probeId) => {
+            setScreenExpanded(false);
+            onUpdateActiveDevice?.({
+              ...activeDevice,
+              screenTapped: false,
+              selectedProbeId: probeId,
+            });
+          }}
+          onPickUp={() => {
+            setScreenExpanded(false);
+            onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId);
+          }}
+          onReturn={() => {
+            setScreenExpanded(false);
+            onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId);
+          }}
+          onClose={() => {
+            setScreenExpanded(false);
+            onUpdateActiveDevice?.({
+              ...activeDevice,
+              screenTapped: false,
+            });
+          }}
+        />
+      )}
+
+      {!heldDevice && activeDevice && activeDevice.sprite === 'infrared_lamp' && !activeDevice.selectedProbeId && (
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 max-w-[95vw] rounded-2xl bg-slate-950/94 border border-sky-400/40 px-2.5 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-1.5"
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 w-[min(94vw,24rem)] rounded-[18px] bg-gradient-to-b from-[#2f3642] via-[#202630] to-[#141820] border-2 border-[#545f72] shadow-[0_14px_34px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.18)] p-2 text-white space-y-1.5"
+        >
+          {/* Steel Column Chassis Top Plate */}
+          <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10">
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className={`w-3 h-3 rounded-full border border-black/60 shrink-0 ${
+                  activeDevice.isRunning
+                    ? 'bg-rose-500 shadow-[0_0_10px_#f43f5e]'
+                    : 'bg-slate-600'
+                }`}
+              />
+              <Flame className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span className="text-[11px] font-black tracking-wide text-slate-100 truncate">
+                {isAr ? 'وحدة الأشعة تحت الحمراء IR-250' : 'IR-250 THERM LAMP'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              {/* Hardware 7-Segment Timer Readout */}
+              <div className="inline-flex items-center gap-1 rounded-md bg-[#090d12] border border-[#3a4354] px-1.5 py-0.5 font-mono text-[11px] shadow-inner">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = Math.max(1, (activeDevice.deviceParams?.timerMin ?? 15) - 1);
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      deviceParams: {
+                        ...(activeDevice.deviceParams ?? {}),
+                        timerMin: m,
+                        timerRemainingSec: m * 60,
+                      },
+                    });
+                  }}
+                  className="w-4 h-4 rounded bg-[#1d2430] hover:bg-[#2c3546] flex items-center justify-center cursor-pointer"
+                >
+                  <Minus className="w-2.5 h-2.5" />
+                </button>
+                <span className="font-black text-rose-400 tabular-nums px-0.5">
+                  {formatTimerMmSs(activeDevice.deviceParams, 15)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = Math.min(45, (activeDevice.deviceParams?.timerMin ?? 15) + 1);
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      deviceParams: {
+                        ...(activeDevice.deviceParams ?? {}),
+                        timerMin: m,
+                        timerRemainingSec: m * 60,
+                      },
+                    });
+                  }}
+                  className="w-4 h-4 rounded bg-[#1d2430] hover:bg-[#2c3546] flex items-center justify-center cursor-pointer"
+                >
+                  <Plus className="w-2.5 h-2.5" />
+                </button>
+              </div>
+
+              {/* Illuminated Red Power Rocker */}
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateActiveDevice?.({
+                    ...activeDevice,
+                    isRunning: !activeDevice.isRunning,
+                  })
+                }
+                className={`h-7 px-2.5 rounded-md text-[10px] font-black border-2 flex items-center gap-1 cursor-pointer shadow ${
+                  activeDevice.isRunning
+                    ? 'bg-rose-600 hover:bg-rose-500 border-rose-300 text-white shadow-[0_0_10px_rgba(244,63,94,0.45)]'
+                    : 'bg-[#323a48] hover:bg-[#3f495a] border-[#5b677d] text-slate-100'
+                }`}
+              >
+                {activeDevice.isRunning ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current" />}
+                <span>{activeDevice.isRunning ? (isAr ? 'إيقاف' : 'OFF') : isAr ? 'تشغيل' : 'ON'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onCloseActiveDevice?.()}
+                aria-label={isAr ? 'إغلاق' : 'Close'}
+                className="h-7 w-7 rounded-md bg-[#2a313d] hover:bg-[#384152] border border-white/15 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Control Box Deck: Motorized Gimbal Joystick + Dimmer Knob + Telescopic Distance */}
+          <div className="rounded-xl bg-[#161a22] border border-[#3a4354] px-3 py-2 flex items-center justify-between gap-3 shadow-inner">
+            <div className="flex flex-col items-center gap-0.5">
+              <span className="text-[9px] font-black uppercase tracking-wider text-slate-300">
+                {isAr ? 'عصا التوجيه' : 'AIM STICK'}
+              </span>
+              <IrAimJoystick
+                activeDevice={activeDevice}
+                isAr={isAr}
+                onUpdate={(next) => onUpdateActiveDevice?.(next)}
+              />
+            </div>
+
+            <div className="h-16 w-[1px] bg-white/10 shrink-0" />
+
+            <div className="flex flex-col items-center gap-2 flex-1">
+              <IrDimmerKnob
+                intensity={activeDevice.irIntensity ?? 0.85}
+                isAr={isAr}
+                onChange={(val) =>
+                  onUpdateActiveDevice?.({
+                    ...activeDevice,
+                    irIntensity: val,
+                  })
+                }
+              />
+
+              {/* Telescopic Distance Stepper */}
+              <div className="flex items-center gap-1 rounded-md bg-[#0b0e13] border border-[#384152] px-1.5 py-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextD = Math.max(0.36, Number(((activeDevice.irDistance ?? 0.52) - 0.06).toFixed(2)));
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      irDistance: nextD,
+                      closeRange: nextD <= 0.6,
+                    });
+                  }}
+                  title={isAr ? 'أقرب للمريض' : 'Closer'}
+                  className="w-5 h-5 rounded bg-[#232a36] hover:bg-emerald-600 text-[11px] font-black flex items-center justify-center cursor-pointer"
+                >
+                  −
+                </button>
+                <span className="text-[10px] font-mono font-bold text-slate-200 px-1 tabular-nums whitespace-nowrap">
+                  {Math.round((activeDevice.irDistance ?? 0.52) * 100)} cm
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextD = Math.min(1.02, Number(((activeDevice.irDistance ?? 0.52) + 0.06).toFixed(2)));
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      irDistance: nextD,
+                      closeRange: nextD <= 0.6,
+                    });
+                  }}
+                  title={isAr ? 'أبعد عن المريض' : 'Farther'}
+                  className="w-5 h-5 rounded bg-[#232a36] hover:bg-amber-600 text-[11px] font-black flex items-center justify-center cursor-pointer"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Direct Tap-to-Aim onto Patient + Pick/Return */}
+          <div className="flex items-center justify-between gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateActiveDevice?.({
+                  ...activeDevice,
+                  selectedProbeId: activeDevice.selectedProbeId === 'head' ? null : 'head',
+                })
+              }
+              className={`h-7 px-2.5 rounded-md border text-[10px] font-black flex items-center gap-1 cursor-pointer ${
+                activeDevice.selectedProbeId === 'head'
+                  ? 'bg-emerald-500 border-emerald-300 text-slate-950'
+                  : 'bg-[#252c38] hover:bg-emerald-600 border-white/15 text-emerald-300 hover:text-white'
+              }`}
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+              <span>{isAr ? 'توجيه على المريض' : 'Aim on Patient'}</span>
+            </button>
+
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                type="button"
+                onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+                className="h-7 px-2.5 rounded-md bg-[#252c38] hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-[10px] font-black flex items-center gap-1 cursor-pointer"
+              >
+                <Hand className="w-3 h-3" />
+                <span>{isAr ? 'نقل' : 'Pick'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+                className="h-7 px-2.5 rounded-md bg-rose-700 hover:bg-rose-600 border border-rose-400/50 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
+              >
+                <Undo2 className="w-3 h-3" />
+                <span>{isAr ? 'إرجاع' : 'Return'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!heldDevice && activeDevice && activeDevice.sprite !== 'infrared_lamp' && !activeDevice.selectedProbeId && !(activeDevice.hasScreen && screenExpanded) && (
+        <div
+          dir="ltr"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 max-w-[95vw] rounded-2xl bg-slate-950/94 border border-sky-400/40 px-2.5 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-1.5"
         >
           <span className="text-[11px] font-black text-sky-300 px-1.5 flex items-center gap-1.5 whitespace-nowrap">
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
-                activeDevice.isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                activeDevice.isRunning ? 'bg-emerald-400' : 'bg-slate-500'
               }`}
             />
             <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>{activeDevice.nameEn}</span>
+            <span className="font-mono text-emerald-300 text-[10px] px-1 rounded bg-slate-900 border border-white/10">
+              {formatTimerMmSs(activeDevice.deviceParams, 15)}
+            </span>
           </span>
+
+          {activeDevice.hasScreen && (
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateActiveDevice?.({
+                  ...activeDevice,
+                  selectedProbeId: null,
+                  screenTapped: true,
+                });
+                setScreenExpanded(true);
+              }}
+              className="h-7 px-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 border border-sky-300 text-slate-950 text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <Maximize2 className="w-3 h-3 shrink-0" />
+              <span>{isAr ? 'فتح الجهاز' : 'Open Machine'}</span>
+            </button>
+          )}
+
+          {activeDevice.supportsProbes && (
+            <button
+              type="button"
+              onClick={() => {
+                const probes =
+                  activeDevice.probeAnchors && activeDevice.probeAnchors.length > 0
+                    ? activeDevice.probeAnchors
+                    : getDefaultProbeAnchors(activeDevice.sprite);
+                const nextId =
+                  activeDevice.selectedProbeId
+                    ? null
+                    : probes.find((p) => !p.placed)?.id ?? probes[0]?.id ?? null;
+                onUpdateActiveDevice?.({
+                  ...activeDevice,
+                  selectedProbeId: nextId,
+                });
+              }}
+              className={`h-7 px-2.5 rounded-lg border text-[10px] font-black flex items-center gap-1 cursor-pointer ${
+                activeDevice.selectedProbeId
+                  ? 'bg-emerald-500 border-emerald-300 text-slate-950'
+                  : 'bg-slate-900 hover:bg-emerald-600 border-emerald-400/50 text-emerald-300 hover:text-white'
+              }`}
+            >
+              <Crosshair className="w-3 h-3 shrink-0" />
+              <span>{isAr ? 'وضع على المريض' : 'Place Probe'}</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -750,72 +1419,42 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             </span>
           </button>
 
-          {activeDevice.placementMode === 'bed' && activeCap?.isAdjustable && (
-            <>
-              <span className="text-slate-600" aria-hidden="true">|</span>
-              {(['cervical', 'shoulder', 'lumbar', 'knee'] as FppTargetRegion[]).map((reg) => {
-                const label =
-                  reg === 'cervical'
-                    ? 'Cervical'
-                    : reg === 'shoulder'
-                      ? 'Shoulder'
-                      : reg === 'lumbar'
-                        ? 'Lumbar'
-                        : 'Knee';
-                const isRegActive = activeDevice.region === reg;
-                return (
-                  <button
-                    key={reg}
-                    type="button"
-                    onClick={() =>
-                      onUpdateActiveDevice?.({ ...activeDevice, region: reg })
-                    }
-                    className={`h-7 px-2 rounded-lg text-[10px] font-extrabold border transition-colors cursor-pointer ${
-                      isRegActive
-                        ? 'bg-sky-500 border-sky-300 text-slate-950'
-                        : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-200'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-
+          {(activeDevice.sprite === 'hand_rehab_table' ||
+            activeDevice.sprite === 'pt_toolkit_cart' ||
+            activeDevice.sprite === 'ball_rack') && (() => {
+            const tools =
+              activeDevice.sprite === 'hand_rehab_table'
+                ? ['PEGBOARD', 'PUTTY', 'DYNAMOMETER']
+                : activeDevice.sprite === 'pt_toolkit_cart'
+                  ? ['GONIOMETER', 'REFLEX', 'IASTM', 'TAPE']
+                  : ['CORE STABILITY', 'PELVIC TILT', 'SCAPULAR'];
+            const curTool =
+              activeDevice.deviceParams?.tool ?? getDefaultDeviceParams(activeDevice.sprite).tool ?? tools[0];
+            return tools.map((tl) => (
               <button
+                key={tl}
                 type="button"
                 onClick={() =>
                   onUpdateActiveDevice?.({
                     ...activeDevice,
-                    side: activeDevice.side === 'front' ? 'back' : 'front',
+                    isRunning: true,
+                    deviceParams: { ...(activeDevice.deviceParams ?? {}), tool: tl },
                   })
                 }
-                title="Switch Bed Side"
-                className="h-7 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/15 text-[10px] font-extrabold text-amber-300 flex items-center gap-1 cursor-pointer"
+                className={`h-7 px-2 rounded-lg text-[10px] font-extrabold border cursor-pointer ${
+                  curTool === tl
+                    ? 'bg-sky-500 border-sky-300 text-slate-950'
+                    : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-200'
+                }`}
               >
-                <MoveHorizontal className="w-3 h-3 shrink-0" />
-                <span>{activeDevice.side === 'front' ? 'Front Side' : 'Back Side'}</span>
+                {tl}
               </button>
-
-              {activeCap.supportsDistance && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUpdateActiveDevice?.({
-                      ...activeDevice,
-                      closeRange: !activeDevice.closeRange,
-                    })
-                  }
-                  className="h-7 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/15 text-[10px] font-extrabold text-emerald-300 cursor-pointer"
-                >
-                  {activeDevice.closeRange ? 'Near' : 'Far'}
-                </button>
-              )}
-            </>
-          )}
+            ));
+          })()}
 
           <button
             type="button"
-            onClick={() => onGrabDevice?.(activeDevice.catalogId)}
+            onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
             className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-slate-100 text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer"
           >
             <Hand className="w-3 h-3 shrink-0" />
@@ -824,7 +1463,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
 
           <button
             type="button"
-            onClick={() => onReturnDevice?.(activeDevice.catalogId)}
+            onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
             className="h-7 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
           >
             <Undo2 className="w-3 h-3 shrink-0" />
@@ -842,17 +1481,18 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         </div>
       )}
 
-      {/* Bottom Row: Compact Joystick + Smart End-Docked Clinical Sheet */}
-      <div className="flex items-end justify-between gap-3 w-full">
-        <div className="shrink-0">
-          <VirtualJoystick isAr={isAr} isNight={isNight} moveInputRef={moveInputRef} />
-        </div>
+      {/* Bottom Row: Compact Joystick + Smart End-Docked Clinical Sheet (hidden while adjusting device/probes) */}
+      {!activeDevice && (
+        <div className="flex items-end justify-between gap-3 w-full">
+          <div className="shrink-0">
+            <VirtualJoystick isAr={isAr} isNight={isNight} moveInputRef={moveInputRef} />
+          </div>
 
-        {!panelHidden && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            className={`pointer-events-auto w-full max-w-[15.5rem] sm:max-w-[20.5rem] rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[33vh] sm:max-h-[40vh] ${surfaceCls}`}
-          >
+          {!panelHidden && (
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              className={`pointer-events-auto w-full max-w-[15.5rem] sm:max-w-[20.5rem] rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[33vh] sm:max-h-[40vh] ${surfaceCls}`}
+            >
             <div className="p-2.5 sm:p-3 overflow-y-auto custom-scroll space-y-2 flex-1">
               {step === 'subjective' && (
                 <div className="space-y-1.5">
@@ -1156,6 +1796,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

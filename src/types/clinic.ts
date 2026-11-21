@@ -237,7 +237,62 @@ export type FppTargetRegion = 'cervical' | 'shoulder' | 'lumbar' | 'knee';
 
 export type FppBedSide = 'front' | 'back';
 
+export interface FppProbeAnchor {
+  id: string;
+  label?: string;
+  bayX: number;
+  bayY: number;
+  bayZ: number;
+  nx?: number;
+  ny?: number;
+  nz?: number;
+  placed: boolean;
+}
+
+export interface DeviceConsoleParams {
+  intensity?: number;
+  freqHz?: number;
+  pulseUs?: number;
+  dutyPct?: number;
+  timerMin?: number;
+  timerRemainingSec?: number;
+  tempC?: number;
+  mode?: string;
+  flexDeg?: number;
+  extDeg?: number;
+  speed?: number;
+  tipSize?: string;
+  shocks?: number;
+  deliveredShocks?: number;
+  pressureMmHg?: number;
+  flow?: string;
+  tool?: string;
+}
+
+export interface PatientAttachedDevice {
+  instanceId: string;
+  catalogId: string;
+  sprite: SpriteKind;
+  nameEn: string;
+  nameAr: string;
+  region: FppTargetRegion;
+  side: FppBedSide;
+  closeRange: boolean;
+  isRunning: boolean;
+  placedX: number;
+  placedY: number;
+  placedZ: number;
+  placedRotY: number;
+  irIntensity?: number;
+  irHeightOffset?: number;
+  irLateralOffset?: number;
+  irDistance?: number;
+  deviceParams?: DeviceConsoleParams;
+  probeAnchors?: FppProbeAnchor[];
+}
+
 export interface FppActiveDeviceState {
+  instanceId?: string;
   catalogId: string;
   sprite: SpriteKind;
   nameEn: string;
@@ -247,9 +302,21 @@ export interface FppActiveDeviceState {
   closeRange: boolean;
   isRunning: boolean;
   placementMode: 'bed' | 'room';
+  hasScreen?: boolean;
+  screenTapped?: boolean;
+  visualRightSign?: 1 | -1;
+  irIntensity?: number;
+  irHeightOffset?: number;
+  irLateralOffset?: number;
+  irDistance?: number;
+  deviceParams?: DeviceConsoleParams;
+  probeAnchors?: FppProbeAnchor[];
+  selectedProbeId?: string | null;
+  supportsProbes?: boolean;
 }
 
 export interface FppNearbyDeviceInfo {
+  instanceId?: string;
   catalogId: string;
   sprite: SpriteKind;
   nameEn: string;
@@ -262,6 +329,7 @@ export interface FppNearbyDeviceInfo {
 }
 
 export interface FppHeldDeviceInfo {
+  instanceId?: string;
   catalogId: string;
   sprite: SpriteKind;
   nameEn: string;
@@ -273,9 +341,9 @@ export interface FppHeldDeviceInfo {
 }
 
 export interface FppDeviceCommandApi {
-  grabDevice: (catalogId: string) => void;
+  grabDevice: (deviceId: string) => void;
   placeHeldDevice: () => void;
-  returnDevice: (catalogId: string) => void;
+  returnDevice: (deviceId: string) => void;
   updateActiveBedDevice: (next: FppActiveDeviceState) => void;
 }
 
@@ -324,6 +392,8 @@ export interface PatientEntity {
   };
   clinicalCase: ClinicalCase;
   isAiGenerated?: boolean;
+  attachedDevices?: PatientAttachedDevice[];
+  sessionPosture?: FppPatientPosture;
 }
 
 export interface Mission {
