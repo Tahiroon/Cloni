@@ -226,6 +226,7 @@ export default function App() {
   const fppMoveInputRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialSpawnTimeRef = useRef<number | null>(null);
+  const sessionSpawnedRealisticRef = useRef(false);
   const fppBlinkLockRef = useRef(false);
   const fppBlinkTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const fppBlinkRafsRef = useRef<number[]>([]);
@@ -819,8 +820,16 @@ export default function App() {
         if (activeCount >= maxActive) return prev;
 
         const isInitialSinglePatient = isFirstIntroFlow && prev.length === 0;
+        const shouldUseRealisticFirst =
+          isInitialSinglePatient ||
+          (!sessionSpawnedRealisticRef.current &&
+            prev.length === 0 &&
+            !prev.some((p) => p.modelKey === 'char_patient_realistic_1'));
         if (isInitialSinglePatient && initialSpawnTimeRef.current === null) {
           initialSpawnTimeRef.current = Date.now();
+        }
+        if (shouldUseRealisticFirst) {
+          sessionSpawnedRealisticRef.current = true;
         }
 
         const activeBaseIds = new Set(
@@ -828,11 +837,15 @@ export default function App() {
         );
         const unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
         const casePool = unseenPool.length > 0 ? unseenPool : FALLBACK_CLINICAL_CASES;
-        const fallbackCase = isInitialSinglePatient
+        const fallbackCase = shouldUseRealisticFirst
           ? FALLBACK_CLINICAL_CASES[0]
           : casePool[Math.floor(Math.random() * casePool.length)];
+        const useRealisticModel =
+          shouldUseRealisticFirst ||
+          (fallbackCase.id === 'case_lbp_radiculopathy' &&
+            !prev.some((p) => p.modelKey === 'char_patient_realistic_1'));
         const chosenCase = { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
-        const skin = isInitialSinglePatient
+        const skin = useRealisticModel
           ? '#9e6847'
           : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
@@ -866,7 +879,7 @@ export default function App() {
           return pool[Math.floor(Math.random() * pool.length)];
         };
 
-        if (isInitialSinglePatient) {
+        if (useRealisticModel) {
           outfitStyle = 'casual';
           shirtStyle = 'shirt';
           shirtColor = '#bfdbfe';
@@ -947,12 +960,13 @@ export default function App() {
           outfitStyle,
           shirtStyle,
           heightScale,
-          hasBeard: isInitialSinglePatient ? false : !isFemale && chosenCase.age >= 28,
+          hasBeard: useRealisticModel ? false : !isFemale && chosenCase.age >= 28,
           state: 'arriving',
           assignedStationId: null,
           waitTimer: 0,
           clinicalCase: chosenCase,
           isAiGenerated: false,
+          modelKey: useRealisticModel ? 'char_patient_realistic_1' : undefined,
         };
         return [...prev, newPatient];
       });

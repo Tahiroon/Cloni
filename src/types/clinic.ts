@@ -392,6 +392,7 @@ export interface PatientEntity {
   };
   clinicalCase: ClinicalCase;
   isAiGenerated?: boolean;
+  modelKey?: string;
   attachedDevices?: PatientAttachedDevice[];
   sessionPosture?: FppPatientPosture;
 }

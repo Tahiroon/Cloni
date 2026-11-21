@@ -109,25 +109,25 @@ function computeFppTargetZoneInBay(
   bedHeight: number
 ): { ax: number; ay: number; az: number } {
   if (curPosture === 'standing') {
-    if (region === 'cervical') return { ax: 0, ay: 1.26, az: 0.18 };
-    if (region === 'shoulder') return { ax: side === 'front' ? -0.18 : 0.18, ay: 1.14, az: 0.18 };
-    if (region === 'lumbar') return { ax: 0, ay: 0.90, az: 0.16 };
-    return { ax: 0, ay: 0.44, az: 0.22 };
+    if (region === 'cervical') return { ax: 0, ay: 1.34, az: 0.18 };
+    if (region === 'shoulder') return { ax: side === 'front' ? -0.18 : 0.18, ay: 1.20, az: 0.18 };
+    if (region === 'lumbar') return { ax: 0, ay: 0.94, az: 0.16 };
+    return { ax: 0, ay: 0.48, az: 0.22 };
   }
   if (curPosture === 'sitting') {
-    if (region === 'cervical') return { ax: 0, ay: bedHeight + 0.68, az: -0.02 };
-    if (region === 'shoulder') return { ax: -0.18, ay: bedHeight + 0.54, az: 0.02 };
-    if (region === 'lumbar') return { ax: 0, ay: bedHeight + 0.28, az: -0.08 };
-    return { ax: 0, ay: bedHeight - 0.05, az: 0.28 };
+    if (region === 'cervical') return { ax: 0, ay: bedHeight + 0.72, az: -0.02 };
+    if (region === 'shoulder') return { ax: -0.18, ay: bedHeight + 0.58, az: 0.02 };
+    if (region === 'lumbar') return { ax: 0, ay: bedHeight + 0.30, az: -0.08 };
+    return { ax: 0, ay: bedHeight - 0.04, az: 0.28 };
   }
   const rx =
     region === 'cervical'
-      ? headSign * 0.42
+      ? headSign * 0.44
       : region === 'shoulder'
-        ? headSign * 0.28
+        ? headSign * 0.30
         : region === 'lumbar'
           ? -headSign * 0.02
-          : -headSign * 0.34;
+          : -headSign * 0.36;
   return { ax: rx, ay: bedHeight + 0.18, az: -0.24 };
 }
 
@@ -3611,6 +3611,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         let entry = patientRigs.get(p.id);
         if (!entry) {
           const rig = createHumanoid3D({
+            modelKey:
+              p.modelKey ||
+              (p.clinicalCase.id.startsWith('case_lbp_radiculopathy')
+                ? 'char_patient_realistic_1'
+                : undefined),
             skinTone: p.skinTone,
             hairColor: p.hairColor,
             shirtColor: p.shirtColor,
@@ -3722,12 +3727,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const postureHeightLift =
           entry.proneBlend * 0.01 + (entry.rightSideBlend + entry.leftSideBlend) * 0.032;
         const bedMattressTop = spr === 'exercise_mat' ? 0.066 : 0.52;
+        const scanOffsetScale = p.modelKey === 'char_patient_realistic_1' ? 1.54 / 1.34 : 1;
         const lyingHeight =
           spr === 'tilt_table'
-            ? THREE.MathUtils.lerp(bedMattressTop + 0.145, 0.545, tiltAlpha)
-            : bedMattressTop + 0.145 + postureHeightLift;
+            ? THREE.MathUtils.lerp(bedMattressTop + 0.142, 0.545, tiltAlpha)
+            : bedMattressTop + 0.142 + postureHeightLift;
         const bedBodyZOffset =
-          spr === 'tilt_table' ? (0.67 - 0.12 * tiltAlpha) * hScale : undefined;
+          spr === 'tilt_table' ? (0.67 - 0.12 * tiltAlpha) * hScale * scanOffsetScale : undefined;
         const tiltPitch =
           spr === 'tilt_table' ? -Math.PI / 2 + 0.5 * tiltAlpha : -Math.PI / 2;
         const isBikeStation = Boolean(isAtStation && station && spr === 'exercise_bike');
@@ -4409,6 +4415,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             ? { x: camera.position.x, y: camera.position.y, z: camera.position.z }
             : null,
           isSpeaking: isFppTarget && curSpeakId === p.id,
+          isFppSession: isFppTarget,
+          vasPain: p.clinicalCase.vasPain,
+          hasRelief: p.state === 'in_treatment' || p.state === 'treated_leaving',
         });
       }
 
@@ -6246,7 +6255,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         fpp.roomMaxX = 999;
         fpp.roomMinZ = -999;
         fpp.roomMaxZ = 999;
-        fpp.baseY = surfPt.floorY + 1.28;
+        fpp.baseY = surfPt.floorY + 1.32;
         fpp.posX = anchorX;
         fpp.posZ = anchorZ;
         fpp.posY = fpp.baseY;
@@ -6427,9 +6436,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           const pBayX = 0;
           const pBayY =
             focusPosture === 'standing'
-              ? 1.02
+              ? 1.12
               : focusPosture === 'sitting'
-                ? focusBedH + 0.42
+                ? focusBedH + 0.46
                 : focusBedH + 0.14;
           const pBayZ =
             focusPosture === 'standing' ? 0.18 : focusPosture === 'sitting' ? -0.02 : -0.24;
@@ -6445,13 +6454,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           const horizDist = isPortrait
             ? 1.44
             : focusPosture === 'standing'
-              ? 1.28
-              : 1.18;
+              ? 1.32
+              : 1.22;
           const baseCamY =
             focusPosture === 'standing'
-              ? 1.28
+              ? 1.36
               : focusPosture === 'sitting'
-                ? focusBedH + 0.82
+                ? focusBedH + 0.86
                 : focusBedH + 0.72;
 
           const camBayX = THREE.MathUtils.clamp(
@@ -6470,7 +6479,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           const lookOffsetDown = isPortrait ? 0.14 : 0.10;
           const lookBayY = Math.max(0.20, pBayY - lookOffsetDown);
 
-          const bayFloorY = fpp.baseY - 1.28;
+          const bayFloorY = fpp.baseY - 1.32;
           const goalPosX = fpp.patientX + pfX * camBayZ + prX * camBayX;
           const goalPosZ = fpp.patientZ + pfZ * camBayZ + prZ * camBayX;
           const goalPosY = bayFloorY + camBayY;

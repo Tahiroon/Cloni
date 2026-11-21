@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 export interface GlbProgressInfo {
@@ -39,6 +40,7 @@ const MODEL_PATHS: Record<string, string> = {
   char_woman_suit: '/models/chars/woman_suit.glb',
   char_man2: '/models/chars/man_casual2.glb',
   char_suit: '/models/chars/man_suit.glb',
+  char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
 
   // Furniture & Clinic Props (active lineup only)
   furn_bed_single: '/models/furn/bed_single.glb',
@@ -180,6 +182,9 @@ function refineGlbAssets(obj: THREE.Object3D) {
       const m = child as THREE.Mesh;
       m.castShadow = true;
       m.receiveShadow = true;
+      if ((m as THREE.SkinnedMesh).isSkinnedMesh) {
+        m.frustumCulled = false;
+      }
       m.userData.sharedGlbGeom = true;
       m.userData.sharedGlbMat = true;
       const mats = Array.isArray(m.material) ? m.material : [m.material];
@@ -205,14 +210,14 @@ function refineGlbAssets(obj: THREE.Object3D) {
           tex.needsUpdate = true;
         }
         if ('roughness' in std) {
-          std.envMapIntensity = 0.56;
+          std.envMapIntensity = std.map ? 0.44 : 0.56;
           if (std.roughness > 0.94) {
             std.roughness = 0.85;
           } else if (std.metalness < 0.1 && std.roughness < 0.24) {
             std.roughness = 0.38;
           }
-          // Slightly soften overly bright pure-white albedo on imported models
-          if (std.color && std.color.r > 0.92 && std.color.g > 0.92 && std.color.b > 0.92) {
+          // Slightly soften overly bright pure-white albedo only on untextured low-poly meshes
+          if (!std.map && std.color && std.color.r > 0.92 && std.color.g > 0.92 && std.color.b > 0.92) {
             std.color.multiplyScalar(0.86);
           }
         }
@@ -405,6 +410,7 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
   THREE.Cache.enabled = true;
 
   const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
   const entries = Object.entries(MODEL_PATHS);
   let remaining = TOTAL_ASSETS;
 
@@ -422,6 +428,7 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
   };
 
   void (async () => {
+    await MeshoptDecoder.ready;
     const cache = await openAssetCache();
 
     // 1. Download & cache external referenced texture(s) into browser CacheStorage & image cache first
