@@ -2546,6 +2546,10 @@ export function animateHumanoid3D(
     lyingHeight?: number;
     bedBodyZOffset?: number;
     tiltPitch?: number;
+    bodyRoll?: number;
+    proneBlend?: number;
+    rightSideBlend?: number;
+    leftSideBlend?: number;
     facingRad: number;
     timeSec: number;
     isSelected: boolean;
@@ -2579,6 +2583,10 @@ export function animateHumanoid3D(
     lyingHeight = 0.51,
     bedBodyZOffset,
     tiltPitch = -Math.PI / 2,
+    bodyRoll = 0,
+    proneBlend = 0,
+    rightSideBlend = 0,
+    leftSideBlend = 0,
     facingRad,
     timeSec,
     isSelected,
@@ -2621,7 +2629,21 @@ export function animateHumanoid3D(
     rig.blinkLids[1].rotation.x = lidRx;
   }
 
-  const speakingActive = isSpeaking && (lieBlend ?? (pose === 'lying' ? 1 : 0)) < 0.2;
+  const pWeightRaw = THREE.MathUtils.clamp(proneBlend, 0, 1);
+  const rWeightRaw = THREE.MathUtils.clamp(rightSideBlend, 0, 1);
+  const lWeightRaw = THREE.MathUtils.clamp(leftSideBlend, 0, 1);
+  const totalAltW = pWeightRaw + rWeightRaw + lWeightRaw;
+  const altScaleW = totalAltW > 1 ? 1 / totalAltW : 1;
+  const proneW = pWeightRaw * altScaleW;
+  const rightW = rWeightRaw * altScaleW;
+  const leftW = lWeightRaw * altScaleW;
+  const sideW = rightW + leftW;
+  const supineW = Math.max(0, 1 - proneW - sideW);
+  const sideSign = rightW - leftW;
+
+  const speakingActive =
+    isSpeaking &&
+    ((lieBlend ?? (pose === 'lying' ? 1 : 0)) < 0.2 || proneW < 0.35);
   if (rig.mouthLower && rig.mouthSeam) {
     if (speakingActive) {
       const cadence = Math.max(0, Math.sin(t * 9.5) * 0.65 + Math.sin(t * 14.3) * 0.35);
@@ -2758,41 +2780,117 @@ export function animateHumanoid3D(
     const armRelaxL = Math.pow(Math.max(0, Math.sin(t * 0.23 + 0.6)), 1.4) * 0.22;
     const armRelaxR = Math.pow(Math.max(0, Math.cos(t * 0.21)), 1.4) * 0.24;
 
-    // Fast path for full supine lying posture
+    // Unified anatomical targets for horizontal bed postures (Supine, Prone, Right Side, Left Side)
+    const hipShiftEff = hipShift * (supineW + 0.35 * proneW);
+    const lieHipsY = hipShiftEff * 0.55;
+    const lieHipsZ = hipShiftEff - sideSign * 0.04;
+    const lieTorsoX =
+      supineW * (0.018 + lieBreath * 0.022) +
+      proneW * (-0.018 - lieBreath * 0.015) +
+      sideW * (0.045 + lieBreath * 0.012);
+    const lieTorsoY = Math.sin(t * 0.24) * 0.022 * (1 - 0.5 * sideW) + sideSign * 0.04;
+    const lieTorsoZ = -hipShiftEff * 0.5 + sideSign * 0.03;
+    const lieChestX =
+      supineW * (0.015 + lieBreath * 0.03) +
+      proneW * (-0.012 - lieBreath * 0.022) +
+      sideW * (0.035 + lieBreath * 0.02);
+    const lieChestY = Math.sin(t * 0.26) * 0.018 * (1 - 0.5 * sideW);
+    const lieChestZ = sideSign * 0.025;
+    const lieShLZ = -0.045 - lieBreath * 0.015 + rightW * 0.04 - leftW * 0.06;
+    const lieShRZ = 0.045 + lieBreath * 0.015 - leftW * 0.04 + rightW * 0.06;
+
+    const lieULX =
+      supineW * (-0.04 - kneeRelaxL * 0.62) + proneW * 0.035 + rightW * -0.46 + leftW * -0.16;
+    const lieULY =
+      supineW * (0.065 + Math.sin(t * 0.17) * 0.028) +
+      proneW * 0.04 +
+      rightW * -0.08 +
+      leftW * 0.02;
+    const lieULZ = supineW * 0.042 + proneW * 0.048 + rightW * -0.095 + leftW * 0.015;
+    const lieLLX =
+      supineW * ((isTilted ? 0.06 : 0.12) + kneeRelaxL * 1.15) +
+      proneW * (0.24 + Math.sin(t * 0.35) * 0.03) +
+      rightW * 0.7 +
+      leftW * 0.26;
+    const lieFootLX =
+      supineW * ((isTilted ? 0.05 : 0.14) + ankleL) +
+      proneW * (0.26 + ankleL * 0.5) +
+      rightW * 0.16 +
+      leftW * 0.12;
+    const lieFootLY = supineW * 0.035;
+
+    const lieURX =
+      supineW * (-0.04 - kneeRelaxR * 0.62) + proneW * 0.035 + rightW * -0.16 + leftW * -0.46;
+    const lieURY =
+      supineW * (-0.065 - Math.cos(t * 0.16) * 0.028) +
+      proneW * -0.04 +
+      rightW * -0.02 +
+      leftW * 0.08;
+    const lieURZ = supineW * -0.042 + proneW * -0.048 + rightW * -0.015 + leftW * 0.095;
+    const lieLRX =
+      supineW * ((isTilted ? 0.06 : 0.12) + kneeRelaxR * 1.15) +
+      proneW * (0.24 + Math.cos(t * 0.32) * 0.03) +
+      rightW * 0.26 +
+      leftW * 0.7;
+    const lieFootRX =
+      supineW * ((isTilted ? 0.05 : 0.14) + ankleR) +
+      proneW * (0.26 + ankleR * 0.5) +
+      rightW * 0.12 +
+      leftW * 0.16;
+    const lieFootRY = supineW * -0.035;
+
+    const lieArmDropL = supineW * -1.41 + proneW * -1.35 + rightW * -1.53 + leftW * -1.28;
+    const lieArmSwingL =
+      supineW * (-0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16) +
+      proneW * 0.08 +
+      rightW * -0.14 +
+      leftW * -0.34;
+    const lieElbowL = supineW * (0.26 + armRelaxL) + proneW * 0.14 + rightW * 0.44 + leftW * 0.72;
+
+    const lieArmDropR = supineW * 1.41 + proneW * 1.35 + rightW * 1.28 + leftW * 1.53;
+    const lieArmSwingR =
+      supineW * (-0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16) +
+      proneW * 0.08 +
+      rightW * -0.34 +
+      leftW * -0.14;
+    const lieElbowR = supineW * (0.28 + armRelaxR) + proneW * 0.14 + rightW * 0.72 + leftW * 0.44;
+
+    const lieNeckX = supineW * 0.045 + proneW * -0.08 + sideW * 0.04;
+    const lieNeckY = supineW * (lieHeadYaw * 0.4) + proneW * 0.32 + sideW * (sideSign * -0.06);
+    const lieNeckZ = supineW * (lieHeadRoll * 0.35) + proneW * -0.04 + sideW * (sideSign * 0.06);
+    const effLieHeadPitch = supineW * lieHeadPitch + proneW * -0.12 + sideW * 0.1;
+    const effLieHeadYaw =
+      supineW * (lieHeadYaw * 0.72) +
+      proneW * (0.66 + Math.sin(t * 0.24) * 0.04) +
+      sideW * (sideSign * -0.1 + Math.sin(t * 0.22) * 0.05);
+    const effLieHeadRoll =
+      supineW * lieHeadRoll + proneW * -0.08 + sideW * (sideSign * 0.09);
+
+    // Fast path for full horizontal bed posture (Supine / Prone / Right Side / Left Side)
     if (lie >= 0.999) {
-      rig.bodyPivot.rotation.set(tiltPitch, 0, 0);
+      rig.bodyPivot.rotation.set(tiltPitch, bodyRoll, 0);
       rig.bodyPivot.position.set(0, lyingHeight, liePosZ);
 
-      applyCharEuler(b['Hips'], 0, hipShift * 0.55, hipShift);
-      applyCharEuler(b['Torso'], 0.018 + lieBreath * 0.022, Math.sin(t * 0.24) * 0.022, -hipShift * 0.5);
-      applyCharEuler(b['Chest'], 0.015 + lieBreath * 0.03, Math.sin(t * 0.26) * 0.018, 0);
-      applyCharEuler(b['ShoulderL'], 0, 0, -0.045 - lieBreath * 0.015);
-      applyCharEuler(b['ShoulderR'], 0, 0, 0.045 + lieBreath * 0.015);
+      applyCharEuler(b['Hips'], 0, lieHipsY, lieHipsZ);
+      applyCharEuler(b['Torso'], lieTorsoX, lieTorsoY, lieTorsoZ);
+      applyCharEuler(b['Chest'], lieChestX, lieChestY, lieChestZ);
+      applyCharEuler(b['ShoulderL'], 0, 0, lieShLZ);
+      applyCharEuler(b['ShoulderR'], 0, 0, lieShRZ);
 
-      applyCharEuler(
-        b['UpperLegL'],
-        -0.04 - kneeRelaxL * 0.62,
-        0.065 + Math.sin(t * 0.17) * 0.028,
-        0.042
-      );
-      applyCharEuler(
-        b['UpperLegR'],
-        -0.04 - kneeRelaxR * 0.62,
-        -0.065 - Math.cos(t * 0.16) * 0.028,
-        -0.042
-      );
-      applyCharEuler(b['LowerLegL'], (isTilted ? 0.06 : 0.12) + kneeRelaxL * 1.15, 0, 0);
-      applyCharEuler(b['LowerLegR'], (isTilted ? 0.06 : 0.12) + kneeRelaxR * 1.15, 0, 0);
-      applyCharEuler(b['FootL'], (isTilted ? 0.05 : 0.14) + ankleL, 0.035, 0);
-      applyCharEuler(b['FootR'], (isTilted ? 0.05 : 0.14) + ankleR, -0.035, 0);
+      applyCharEuler(b['UpperLegL'], lieULX, lieULY, lieULZ);
+      applyCharEuler(b['UpperLegR'], lieURX, lieURY, lieURZ);
+      applyCharEuler(b['LowerLegL'], lieLLX, 0, 0);
+      applyCharEuler(b['LowerLegR'], lieLRX, 0, 0);
+      applyCharEuler(b['FootL'], lieFootLX, lieFootLY, 0);
+      applyCharEuler(b['FootR'], lieFootRX, lieFootRY, 0);
 
-      applyArmSagittal(b['UpperArmL'], -1.41, -0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16);
-      applyArmSagittal(b['UpperArmR'], 1.41, -0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16);
-      applyLocalElbowFlex(b['LowerArmL'], true, 0.26 + armRelaxL);
-      applyLocalElbowFlex(b['LowerArmR'], false, 0.28 + armRelaxR);
+      applyArmSagittal(b['UpperArmL'], lieArmDropL, lieArmSwingL);
+      applyArmSagittal(b['UpperArmR'], lieArmDropR, lieArmSwingR);
+      applyLocalElbowFlex(b['LowerArmL'], true, lieElbowL);
+      applyLocalElbowFlex(b['LowerArmR'], false, lieElbowR);
 
-      applyCharEuler(b['Neck'], 0.045, lieHeadYaw * 0.4, lieHeadRoll * 0.35);
-      applyCharEuler(b['Head'], lieHeadPitch, lieHeadYaw * 0.72, lieHeadRoll);
+      applyCharEuler(b['Neck'], lieNeckX, lieNeckY, lieNeckZ);
+      applyCharEuler(b['Head'], effLieHeadPitch, effLieHeadYaw, effLieHeadRoll);
       return;
     }
 
@@ -2844,7 +2942,8 @@ export function animateHumanoid3D(
     const hipTargetY = THREE.MathUtils.lerp(hipStartY, hipEndY, lie) + hipShiftArc;
     const hipTargetZ = THREE.MathUtils.lerp(hipStartZ, hipEndZ, lie);
 
-    rig.bodyPivot.rotation.set(theta, 0, 0);
+    const rollBlend = smoothstep01((lie - 0.18) / 0.72);
+    rig.bodyPivot.rotation.set(theta, bodyRoll * rollBlend, 0);
     rig.bodyPivot.position.set(
       THREE.MathUtils.lerp(basePosX, 0, lie),
       hipTargetY - hipH * Math.cos(theta),
@@ -2859,8 +2958,8 @@ export function animateHumanoid3D(
     applyCharEuler(
       b['Hips'],
       0,
-      THREE.MathUtils.lerp(baseHipY, hipShift * 0.55, lie),
-      THREE.MathUtils.lerp(baseHipZ, hipShift, lie)
+      THREE.MathUtils.lerp(baseHipY, lieHipsY, lie),
+      THREE.MathUtils.lerp(baseHipZ, lieHipsZ, lie)
     );
 
     // Seated torso, arms & head targets based on natural activity
@@ -2951,9 +3050,9 @@ export function animateHumanoid3D(
     const baseTorsoZ = THREE.MathUtils.lerp(torsoStandZ, sitTorsoZ, sit);
     applyCharEuler(
       b['Torso'],
-      THREE.MathUtils.lerp(baseTorsoX, 0.018 + lieBreath * 0.022, lie),
-      THREE.MathUtils.lerp(baseTorsoY, Math.sin(t * 0.24) * 0.022, lie),
-      THREE.MathUtils.lerp(baseTorsoZ, -hipShift * 0.5, lie)
+      THREE.MathUtils.lerp(baseTorsoX, lieTorsoX, lie),
+      THREE.MathUtils.lerp(baseTorsoY, lieTorsoY, lie),
+      THREE.MathUtils.lerp(baseTorsoZ, lieTorsoZ, lie)
     );
 
     const baseChestX = THREE.MathUtils.lerp(
@@ -2979,9 +3078,9 @@ export function animateHumanoid3D(
     );
     applyCharEuler(
       b['Chest'],
-      THREE.MathUtils.lerp(baseChestX, 0.015 + lieBreath * 0.03, lie),
-      THREE.MathUtils.lerp(baseChestY, Math.sin(t * 0.26) * 0.018, lie),
-      THREE.MathUtils.lerp(baseChestZ, 0, lie)
+      THREE.MathUtils.lerp(baseChestX, lieChestX, lie),
+      THREE.MathUtils.lerp(baseChestY, lieChestY, lie),
+      THREE.MathUtils.lerp(baseChestZ, lieChestZ, lie)
     );
 
     const restShrug = seatedActivity === 'rest' ? Math.sin(t * 1.1) * 0.022 * sit * (1 - lie) : 0;
@@ -2998,7 +3097,7 @@ export function animateHumanoid3D(
       b['ShoulderL'],
       0,
       THREE.MathUtils.lerp(baseShoulderLY, 0, lie),
-      THREE.MathUtils.lerp(-0.04 - restShrug, -0.045 - lieBreath * 0.015, lie)
+      THREE.MathUtils.lerp(-0.04 - restShrug, lieShLZ, lie)
     );
     applyCharEuler(
       b['ShoulderR'],
@@ -3006,7 +3105,7 @@ export function animateHumanoid3D(
       THREE.MathUtils.lerp(baseShoulderRY, 0, lie),
       THREE.MathUtils.lerp(
         activeDrink || activePickFile || activePlaceFile ? -0.04 : 0.04 + restShrug,
-        0.045 + lieBreath * 0.015,
+        lieShRZ,
         lie
       )
     );
@@ -3076,9 +3175,9 @@ export function animateHumanoid3D(
     const baseULZ = THREE.MathUtils.lerp(0.018 + standWeight * 0.03, 0.038, sit);
     applyCharEuler(
       b['UpperLegL'],
-      THREE.MathUtils.lerp(baseULX, -0.04 - kneeRelaxL * 0.62, lie) - legSwingLift,
-      THREE.MathUtils.lerp(baseULY, 0.065 + Math.sin(t * 0.17) * 0.028, lie),
-      THREE.MathUtils.lerp(baseULZ, 0.042, lie)
+      THREE.MathUtils.lerp(baseULX, lieULX, lie) - legSwingLift,
+      THREE.MathUtils.lerp(baseULY, lieULY, lie),
+      THREE.MathUtils.lerp(baseULZ, lieULZ, lie)
     );
 
     const baseURX = THREE.MathUtils.lerp(
@@ -3090,25 +3189,15 @@ export function animateHumanoid3D(
     const baseURZ = THREE.MathUtils.lerp(-0.018 + standWeight * 0.03, -0.038, sit);
     applyCharEuler(
       b['UpperLegR'],
-      THREE.MathUtils.lerp(baseURX, -0.04 - kneeRelaxR * 0.62, lie) - legSwingLift,
-      THREE.MathUtils.lerp(baseURY, -0.065 - Math.cos(t * 0.16) * 0.028, lie),
-      THREE.MathUtils.lerp(baseURZ, -0.042, lie)
+      THREE.MathUtils.lerp(baseURX, lieURX, lie) - legSwingLift,
+      THREE.MathUtils.lerp(baseURY, lieURY, lie),
+      THREE.MathUtils.lerp(baseURZ, lieURZ, lie)
     );
 
     const baseLLX = THREE.MathUtils.lerp(standKneeL, sitKneeAngle + pedal * 0.65 + sitLegFidget, sit);
     const baseLRX = THREE.MathUtils.lerp(standKneeR, sitKneeAngle - pedal * 0.65 - sitLegFidget, sit);
-    applyCharEuler(
-      b['LowerLegL'],
-      THREE.MathUtils.lerp(baseLLX, (isTilted ? 0.06 : 0.12) + kneeRelaxL * 1.15, shinBlend),
-      0,
-      0
-    );
-    applyCharEuler(
-      b['LowerLegR'],
-      THREE.MathUtils.lerp(baseLRX, (isTilted ? 0.06 : 0.12) + kneeRelaxR * 1.15, shinBlend),
-      0,
-      0
-    );
+    applyCharEuler(b['LowerLegL'], THREE.MathUtils.lerp(baseLLX, lieLLX, shinBlend), 0, 0);
+    applyCharEuler(b['LowerLegR'], THREE.MathUtils.lerp(baseLRX, lieLRX, shinBlend), 0, 0);
 
     // Ankle dorsiflexion during swing & heel-strike (-), plantarflexion push-off at terminal stance (+)
     const ankleSwingL =
@@ -3129,14 +3218,14 @@ export function animateHumanoid3D(
     );
     applyCharEuler(
       b['FootL'],
-      THREE.MathUtils.lerp(baseFootLX, (isTilted ? 0.05 : 0.14) + ankleL, shinBlend) - ankleLift,
-      THREE.MathUtils.lerp(0, 0.035, lie),
+      THREE.MathUtils.lerp(baseFootLX, lieFootLX, shinBlend) - ankleLift,
+      THREE.MathUtils.lerp(0, lieFootLY, lie),
       0
     );
     applyCharEuler(
       b['FootR'],
-      THREE.MathUtils.lerp(baseFootRX, (isTilted ? 0.05 : 0.14) + ankleR, shinBlend) - ankleLift,
-      THREE.MathUtils.lerp(0, -0.035, lie),
+      THREE.MathUtils.lerp(baseFootRX, lieFootRX, shinBlend) - ankleLift,
+      THREE.MathUtils.lerp(0, lieFootRY, lie),
       0
     );
 
@@ -3228,22 +3317,22 @@ export function animateHumanoid3D(
 
     applyArmSagittal(
       b['UpperArmL'],
-      THREE.MathUtils.lerp(baseArmDropL, -1.41, lie),
-      THREE.MathUtils.lerp(baseArmSwingL, -0.06 + Math.sin(t * 0.31) * 0.035 - armRelaxL * 0.16, lie),
+      THREE.MathUtils.lerp(baseArmDropL, lieArmDropL, lie),
+      THREE.MathUtils.lerp(baseArmSwingL, lieArmSwingL, lie),
       0
     );
     applyArmSagittal(
       b['UpperArmR'],
-      THREE.MathUtils.lerp(rightArmDropZ, 1.41, lie),
-      THREE.MathUtils.lerp(rightArmSwingX, -0.075 + Math.cos(t * 0.28) * 0.035 - armRelaxR * 0.16, lie),
+      THREE.MathUtils.lerp(rightArmDropZ, lieArmDropR, lie),
+      THREE.MathUtils.lerp(rightArmSwingX, lieArmSwingR, lie),
       THREE.MathUtils.lerp(rightArmAdductY, 0, lie)
     );
 
     const elbowStandL =
       0.24 + Math.max(0, -armStride) * 0.26 * activeBlend + Math.sin(t * 0.47) * 0.03 * standIdleAmt;
     const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit);
-    applyLocalElbowFlex(b['LowerArmL'], true, THREE.MathUtils.lerp(baseElbowL, 0.26 + armRelaxL, lie));
-    applyLocalElbowFlex(b['LowerArmR'], false, THREE.MathUtils.lerp(rightElbowFlex, 0.28 + armRelaxR, lie));
+    applyLocalElbowFlex(b['LowerArmL'], true, THREE.MathUtils.lerp(baseElbowL, lieElbowL, lie));
+    applyLocalElbowFlex(b['LowerArmR'], false, THREE.MathUtils.lerp(rightElbowFlex, lieElbowR, lie));
 
     // Right wrist & finger curl for genuine file grasp, carry, and flat desk placement
     let handExtX = 0;
@@ -3348,15 +3437,15 @@ export function animateHumanoid3D(
     const baseHeadX = THREE.MathUtils.lerp(finalLookPitch, -0.02 + finalLookPitch, sit);
     applyCharEuler(
       b['Neck'],
-      THREE.MathUtils.lerp(baseNeckX, 0.045, lie),
-      THREE.MathUtils.lerp(finalLookYaw * 0.45, lieHeadYaw * 0.4, lie),
-      THREE.MathUtils.lerp(headTiltZ * 0.35, lieHeadRoll * 0.35, lie)
+      THREE.MathUtils.lerp(baseNeckX, lieNeckX, lie),
+      THREE.MathUtils.lerp(finalLookYaw * 0.45, lieNeckY, lie),
+      THREE.MathUtils.lerp(headTiltZ * 0.35, lieNeckZ, lie)
     );
     applyCharEuler(
       b['Head'],
-      THREE.MathUtils.lerp(baseHeadX, lieHeadPitch, lie),
-      THREE.MathUtils.lerp(finalLookYaw, lieHeadYaw * 0.72, lie),
-      THREE.MathUtils.lerp(headTiltZ, lieHeadRoll, lie)
+      THREE.MathUtils.lerp(baseHeadX, effLieHeadPitch, lie),
+      THREE.MathUtils.lerp(finalLookYaw, effLieHeadYaw, lie),
+      THREE.MathUtils.lerp(headTiltZ, effLieHeadRoll, lie)
     );
     return;
   }

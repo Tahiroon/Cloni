@@ -7,6 +7,9 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import {
   CATALOG_ITEMS,
+  FPP_EXCLUDED_BED_SPRITES,
+  getFppDeviceCapability,
+  getPostureRulesForStation,
   normalizePlayerProfile,
   PLAYER_DEFAULT_SKIN,
   resolvePlayerOutfitMeta,
@@ -49,8 +52,10 @@ import {
   disposeObject3D,
   DoorActorInput,
   FountainRigMeta,
+  MagnetoRigMeta,
   ReceptionDeskRigMeta,
   SmartLightMeta,
+  TiltTableRigMeta,
   updateDoors3D,
   updateFoliageWindTime,
   WaterCoolerRigMeta,
@@ -58,19 +63,33 @@ import {
   WorldTreeDef,
 } from '../engine3d/models3d';
 import {
+  createFppEquipment3D,
+  FppEquipHandle,
+  getFppEquipCarrySpec,
+} from '../engine3d/fppEquipment3d';
+import {
   createFppClinicianHands3D,
   createFppRoomBackdrop3D,
+  FppHandGripTarget,
 } from '../engine3d/fppViewRig';
 import { createTextureBundle, TextureBundle } from '../engine3d/textures3d';
 import {
   CatalogItem,
   ClinicRoom,
   FloatingFeedback,
+  FppActiveDeviceState,
+  FppBedSide,
+  FppDeviceCommandApi,
+  FppHeldDeviceInfo,
+  FppNearbyDeviceInfo,
+  FppPatientPosture,
+  FppTargetRegion,
   Language,
   LightingMode,
   PatientEntity,
   PlacedItem,
   PlayerCharacterConfig,
+  SpriteKind,
   StaffMember,
 } from '../types/clinic';
 
@@ -100,8 +119,11 @@ interface ClinicCanvasProps {
   removedTreeIds?: string[];
   selectedTreeId?: string | null;
   firstPersonPatientId?: string | null;
+  fppPosture?: FppPatientPosture;
   fppRecenterNonce?: number;
   fppMoveInputRef?: React.MutableRefObject<{ x: number; y: number }>;
+  fppActiveDevice?: FppActiveDeviceState | null;
+  fppCommandRef?: React.MutableRefObject<FppDeviceCommandApi | null>;
   speakingPatientId?: string | null;
   selectedBedPatientId?: string | null;
   onTapPatient: (patient: PatientEntity) => void;
@@ -113,6 +135,11 @@ interface ClinicCanvasProps {
   onTapReceptionDesk?: () => void;
   onInspectItem?: (item: PlacedItem) => void;
   onTapWorldTree?: (tree: WorldTreeDef) => void;
+  onFppNearbyDeviceChange?: (info: FppNearbyDeviceInfo | null) => void;
+  onFppHeldDeviceChange?: (info: FppHeldDeviceInfo | null) => void;
+  onFppActiveBedDeviceChange?: (info: FppActiveDeviceState | null) => void;
+  onFppRequirePosture?: (posture: FppPatientPosture) => void;
+  onFppTapDevice?: (info: FppNearbyDeviceInfo) => void;
   onUpdatePlacementHover: (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => void;
   onConfirmPlacement: (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => void;
   onCancelPlacement: () => void;
@@ -217,8 +244,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   removedTreeIds = [],
   selectedTreeId = null,
   firstPersonPatientId = null,
+  fppPosture,
   fppRecenterNonce = 0,
   fppMoveInputRef,
+  fppActiveDevice = null,
+  fppCommandRef,
   speakingPatientId = null,
   selectedBedPatientId = null,
   onTapPatient,
@@ -230,6 +260,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   onTapReceptionDesk,
   onInspectItem,
   onTapWorldTree,
+  onFppNearbyDeviceChange,
+  onFppHeldDeviceChange,
+  onFppActiveBedDeviceChange,
+  onFppRequirePosture,
+  onFppTapDevice,
   onUpdatePlacementHover,
   onConfirmPlacement,
   onCancelPlacement,
@@ -253,6 +288,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     patientX: 4.5,
     patientZ: 16.5,
     patientFacing: 0,
+    patientEdgeSign: 1 as 1 | -1,
+    patientStationSprite: 'treatment_bed' as SpriteKind,
     anchorX: 4.5,
     anchorZ: 17.5,
     roomMinX: 2.35,
@@ -406,7 +443,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     removedTreeIds,
     selectedTreeId,
     firstPersonPatientId,
+    fppPosture,
     fppMoveInputRef,
+    fppActiveDevice,
     speakingPatientId,
     selectedBedPatientId,
     catalogMap,
@@ -417,6 +456,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     onLongPressPlacedItem,
     onTapReceptionDesk,
     onTapWorldTree,
+    onFppNearbyDeviceChange,
+    onFppHeldDeviceChange,
+    onFppActiveBedDeviceChange,
+    onFppRequirePosture,
+    onFppTapDevice,
     onUpdatePlacementHover,
     onConfirmPlacement,
     onReceptionCheckinDone,
@@ -437,7 +481,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     removedTreeIds,
     selectedTreeId,
     firstPersonPatientId,
+    fppPosture,
     fppMoveInputRef,
+    fppActiveDevice,
     speakingPatientId,
     selectedBedPatientId,
     catalogMap,
@@ -448,6 +494,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     onLongPressPlacedItem,
     onTapReceptionDesk,
     onTapWorldTree,
+    onFppNearbyDeviceChange,
+    onFppHeldDeviceChange,
+    onFppActiveBedDeviceChange,
+    onFppRequirePosture,
+    onFppTapDevice,
     onUpdatePlacementHover,
     onConfirmPlacement,
     onReceptionCheckinDone,
@@ -481,10 +532,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     hitTestPlacedItemDetail: (clientX: number, clientY: number) => { item: PlacedItem; distSq: number } | null;
     hitTestWorldTreeDetail: (clientX: number, clientY: number) => { tree: WorldTreeDef; distSq: number } | null;
     hitTestLockedRoomDetail: (clientX: number, clientY: number) => { room: ClinicRoom; distSq: number } | null;
+    hitTestFppDevice: (clientX: number, clientY: number) => FppNearbyDeviceInfo | null;
+    handleFppTap: (clientX: number, clientY: number) => void;
     getRayGroundDistSq: (rawX: number, rawZ: number) => number;
     hitTestDraftGhost: (clientX: number, clientY: number) => boolean;
     getPanVectors: () => { right: THREE.Vector3; forward: THREE.Vector3; scale: number };
     updateFppHandsAppearance: (profile?: PlayerCharacterConfig) => void;
+    grabFppDevice: (catalogId: string) => void;
+    placeFppHeldDevice: () => void;
+    returnFppDevice: (catalogId: string) => void;
+    updateFppBedDevice: (next: FppActiveDeviceState) => void;
   } | null>(null);
 
   useEffect(() => {
@@ -538,8 +595,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   useEffect(() => {
     if (!firstPersonPatientId || !fppRecenterNonce) return;
     const fpp = fppCamRef.current;
+    fpp.posX = fpp.anchorX;
+    fpp.posZ = fpp.anchorZ;
+    fpp.posY = fpp.baseY;
     fpp.targetYawOffset = 0;
-    fpp.targetPitch = -0.09;
+    fpp.targetPitch = -0.14;
   }, [fppRecenterNonce, firstPersonPatientId]);
 
   useEffect(() => {
@@ -724,7 +784,524 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const fppBackdrop = createFppRoomBackdrop3D(textures, maxAniso, {
       enableShadows: !isSoftwareGl,
     });
+    const fppEquipLayer = new THREE.Group();
+    fppBackdrop.group.add(fppEquipLayer);
     scene.add(fppBackdrop.group);
+
+    interface FppBayEquipEntry {
+      catalogId: string;
+      sprite: SpriteKind;
+      nameEn: string;
+      nameAr: string;
+      handle: FppEquipHandle;
+      standbyX: number;
+      standbyZ: number;
+      standbyRotY: number;
+      curX: number;
+      curY: number;
+      curZ: number;
+      curRotY: number;
+      activeBlend: number;
+      mode: 'standby' | 'held' | 'placed_room' | 'placed_bed';
+      placedX: number;
+      placedY: number;
+      placedZ: number;
+      placedRotY: number;
+      bedRegion: FppTargetRegion;
+      bedSide: FppBedSide;
+      closeRange: boolean;
+      isRunning: boolean;
+      suppressNearUntilAway: boolean;
+    }
+
+    const fppEquipBayMap = new Map<string, FppBayEquipEntry>();
+    let lastFppEquipSig = '';
+    let lastFppNearKey = '';
+    let lastFppHeldKey = '';
+    const _fppAimWorld = new THREE.Vector3();
+    const _lGripWorld = new THREE.Vector3();
+    const _rGripWorld = new THREE.Vector3();
+    const _lGripCam = new THREE.Vector3();
+    const _rGripCam = new THREE.Vector3();
+    const _fppGripScratch: FppHandGripTarget = {
+      active: false,
+      style: 'bar',
+      leftX: -0.15,
+      leftY: -0.25,
+      leftZ: -0.45,
+      rightX: 0.15,
+      rightY: -0.25,
+      rightZ: -0.45,
+    };
+
+    // Soft glowing placement reticle shown on floor when carrying/moving a device
+    const fppDropRingGroup = new THREE.Group();
+    const fppDropRingGeom = new THREE.RingGeometry(0.24, 0.30, 32);
+    fppDropRingGeom.rotateX(-Math.PI / 2);
+    const fppDropRingMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+    });
+    const fppDropDiscGeom = new THREE.CircleGeometry(0.24, 32);
+    fppDropDiscGeom.rotateX(-Math.PI / 2);
+    const fppDropDiscMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+    });
+    fppDropRingGroup.add(
+      new THREE.Mesh(fppDropRingGeom, fppDropRingMat),
+      new THREE.Mesh(fppDropDiscGeom, fppDropDiscMat)
+    );
+    fppDropRingGroup.visible = false;
+    fppBackdrop.group.add(fppDropRingGroup);
+
+    const syncFppEquipmentBay = (
+      curItems: PlacedItem[],
+      curPatients: PatientEntity[],
+      curRooms: ClinicRoom[]
+    ) => {
+      const unlockedRoomIds = new Set(curRooms.filter((r) => r.unlocked).map((r) => r.id));
+      const occupiedIds = new Set<string>();
+      for (const pt of curPatients) {
+        if (pt.state !== 'treated_leaving' && pt.assignedStationId) {
+          occupiedIds.add(pt.assignedStationId);
+        }
+      }
+
+      const catMap = latestRef.current.catalogMap;
+      const seenCatalogIds = new Set<string>();
+      const unusedList: Array<{ catalogId: string; cat: CatalogItem; stationary: boolean }> = [];
+
+      for (const item of curItems) {
+        if (occupiedIds.has(item.instanceId)) continue;
+        if (item.roomId && item.roomId !== 'outdoor' && !unlockedRoomIds.has(item.roomId)) {
+          continue;
+        }
+        const cat = catMap.get(item.catalogId);
+        if (!cat || cat.category !== 'equipment') continue;
+        if (FPP_EXCLUDED_BED_SPRITES.has(cat.sprite)) continue;
+        if (seenCatalogIds.has(cat.id)) continue;
+        seenCatalogIds.add(cat.id);
+        const cap = getFppDeviceCapability(cat.sprite);
+        unusedList.push({ catalogId: cat.id, cat, stationary: !cap.canDeploy });
+      }
+
+      // Stationary large gym units first so they get spacious flush wall bays
+      unusedList.sort((a, b) => Number(b.stationary) - Number(a.stationary));
+
+      const nextSig = unusedList.map((u) => u.catalogId).join('|');
+      if (nextSig === lastFppEquipSig) return;
+      lastFppEquipSig = nextSig;
+
+      // Perimeter standby slots inside roomW = 6.8 (-3.4..3.4), backZ = -1.24, frontZ = 3.60
+      const stationarySlots: Array<{ x: number; z: number; rotY: number }> = [
+        { x: -2.85, z: 0.25, rotY: Math.PI / 2 },
+        { x: 2.85, z: 0.25, rotY: -Math.PI / 2 },
+        { x: -2.85, z: 1.85, rotY: Math.PI / 2 },
+        { x: 2.85, z: 1.85, rotY: -Math.PI / 2 },
+        { x: -1.45, z: 3.12, rotY: Math.PI },
+        { x: 1.45, z: 3.12, rotY: Math.PI },
+      ];
+      const mobileSlots: Array<{ x: number; z: number; rotY: number }> = [
+        { x: -2.62, z: -0.42, rotY: Math.PI * 0.36 },
+        { x: 2.62, z: -0.42, rotY: -Math.PI * 0.36 },
+        { x: -2.74, z: 0.98, rotY: Math.PI * 0.48 },
+        { x: 2.74, z: 0.98, rotY: -Math.PI * 0.48 },
+        { x: -2.74, z: 2.28, rotY: Math.PI * 0.62 },
+        { x: 2.74, z: 2.28, rotY: -Math.PI * 0.62 },
+        { x: -2.18, z: -0.82, rotY: 0.12 },
+        { x: 2.18, z: -0.82, rotY: -0.12 },
+        { x: -1.92, z: 3.05, rotY: Math.PI * 0.88 },
+        { x: 1.92, z: 3.05, rotY: -Math.PI * 0.88 },
+        { x: -0.88, z: 3.08, rotY: Math.PI },
+        { x: 0.88, z: 3.08, rotY: Math.PI },
+      ];
+
+      let stIdx = 0;
+      let mbIdx = 0;
+      const keepCatalogs = new Set(unusedList.map((u) => u.catalogId));
+
+      for (const [cid, existing] of fppEquipBayMap.entries()) {
+        if (!keepCatalogs.has(cid)) {
+          fppEquipLayer.remove(existing.handle.group);
+          existing.handle.dispose();
+          fppEquipBayMap.delete(cid);
+        }
+      }
+
+      for (const item of unusedList) {
+        const slot = item.stationary
+          ? stationarySlots[stIdx++] ?? mobileSlots[mbIdx++ % mobileSlots.length]
+          : mobileSlots[mbIdx++ % mobileSlots.length];
+
+        let sx = slot.x;
+        let sz = slot.z;
+        let sRotY = slot.rotY;
+        if (item.cat.sprite === 'wall_bars') {
+          sx = -3.26;
+          sz = 1.05;
+          sRotY = Math.PI / 2;
+        }
+
+        const existing = fppEquipBayMap.get(item.catalogId);
+        if (existing) {
+          existing.standbyX = sx;
+          existing.standbyZ = sz;
+          existing.standbyRotY = sRotY;
+        } else {
+          const handle = createFppEquipment3D(item.cat.sprite, textures, {
+            enableShadows: !isSoftwareGl,
+          });
+          handle.group.userData.fppCatalogId = item.catalogId;
+          handle.group.position.set(sx, 0, sz);
+          handle.group.rotation.y = sRotY;
+          fppEquipLayer.add(handle.group);
+          const cap = getFppDeviceCapability(item.cat.sprite);
+          fppEquipBayMap.set(item.catalogId, {
+            catalogId: item.catalogId,
+            sprite: item.cat.sprite,
+            nameEn: item.cat.nameEn,
+            nameAr: item.cat.nameAr,
+            handle,
+            standbyX: sx,
+            standbyZ: sz,
+            standbyRotY: sRotY,
+            curX: sx,
+            curY: 0,
+            curZ: sz,
+            curRotY: sRotY,
+            activeBlend: 0,
+            mode: 'standby',
+            placedX: sx,
+            placedY: 0,
+            placedZ: sz,
+            placedRotY: sRotY,
+            bedRegion: cap.defaultRegion,
+            bedSide: cap.defaultSide,
+            closeRange: true,
+            isRunning: false,
+            suppressNearUntilAway: false,
+          });
+        }
+      }
+    };
+
+    const computeBayDropPlan = (eq: FppBayEquipEntry) => {
+      const fpp = fppCamRef.current;
+      const curPosture: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+      const headSign = -(fpp.patientEdgeSign ?? 1);
+      const pfX = Math.sin(fpp.patientFacing);
+      const pfZ = Math.cos(fpp.patientFacing);
+      const prX = Math.cos(fpp.patientFacing);
+      const prZ = -Math.sin(fpp.patientFacing);
+      const dCamX = fpp.posX - fpp.patientX;
+      const dCamZ = fpp.posZ - fpp.patientZ;
+      const camBayX = dCamX * prX + dCamZ * prZ;
+      const camBayZ = dCamX * pfX + dCamZ * pfZ;
+      const bayYaw = fpp.yaw - fpp.patientFacing;
+      const fwdBayX = -Math.sin(bayYaw);
+      const fwdBayZ = -Math.cos(bayYaw);
+
+      const spec = getFppEquipCarrySpec(eq.sprite);
+      let rawDropX = THREE.MathUtils.clamp(camBayX + fwdBayX * Math.max(0.68, spec.holdDist), -3.0, 3.0);
+      let rawDropZ = THREE.MathUtils.clamp(camBayZ + fwdBayZ * Math.max(0.68, spec.holdDist), -0.95, 3.22);
+
+      // Push clear of core bed footprint for floor placement preview
+      const nearBed =
+        (Math.abs(rawDropX) < 1.56 && rawDropZ > -1.18 && rawDropZ < 1.18) ||
+        Math.hypot(camBayX, camBayZ - (curPosture === 'standing' ? 0.2 : -0.22)) < 1.48;
+
+      const cap = getFppDeviceCapability(eq.sprite);
+      const rules = getPostureRulesForStation(fpp.patientStationSprite);
+      const postureBlocked = Boolean(
+        cap.requiredPosture && !rules.find((r) => r.id === cap.requiredPosture)?.available
+      );
+
+      let region: FppTargetRegion = cap.defaultRegion;
+      let side: FppBedSide = rawDropZ >= -0.24 ? 'front' : 'back';
+      let finalX = rawDropX;
+      let finalY = eq.sprite === 'cpm_device' ? 0.02 : 0;
+      let finalZ = rawDropZ;
+      let finalRotY = bayYaw + Math.PI;
+
+      if (nearBed && !postureBlocked) {
+        const effPosture = cap.requiredPosture ?? curPosture;
+        if (eq.sprite === 'cpm_device' || eq.sprite === 'balance_trainer') {
+          region = 'knee';
+        } else if (eq.sprite === 'hand_rehab_table') {
+          region = 'lumbar';
+        } else if (effPosture === 'standing') {
+          region = fpp.pitch > -0.05 ? 'cervical' : fpp.pitch < -0.21 ? 'knee' : 'lumbar';
+        } else if (effPosture === 'sitting') {
+          region =
+            Math.abs(camBayX) > 0.45
+              ? 'shoulder'
+              : fpp.pitch > -0.04
+                ? 'cervical'
+                : fpp.pitch < -0.22
+                  ? 'knee'
+                  : 'lumbar';
+        } else {
+          const along = rawDropX * headSign;
+          if (along > 0.28) region = 'cervical';
+          else if (along > 0.06) region = 'shoulder';
+          else if (along > -0.20) region = 'lumbar';
+          else region = 'knee';
+        }
+
+        const aimX =
+          effPosture === 'standing'
+            ? region === 'shoulder'
+              ? side === 'front'
+                ? -0.18
+                : 0.18
+              : 0
+            : effPosture === 'sitting'
+              ? region === 'shoulder'
+                ? -0.18
+                : 0
+              : region === 'cervical'
+                ? headSign * 0.42
+                : region === 'shoulder'
+                  ? headSign * 0.28
+                  : region === 'lumbar'
+                    ? -headSign * 0.02
+                    : -headSign * 0.34;
+        const aimZ = effPosture === 'standing' ? 0.18 : effPosture === 'sitting' ? 0.02 : -0.24;
+
+        if (eq.sprite === 'cpm_device') {
+          finalX = -headSign * 0.28;
+          finalY = 0;
+          finalZ = -0.24;
+          finalRotY = headSign < 0 ? 0 : Math.PI;
+        } else if (eq.sprite === 'hand_rehab_table') {
+          finalX = 0;
+          finalY = 0;
+          finalZ = 0.40;
+          finalRotY = Math.PI;
+        } else if (eq.sprite === 'balance_trainer') {
+          finalX = 0;
+          finalY = 0;
+          finalZ = 0.54;
+          finalRotY = Math.PI;
+        } else {
+          // Keep right where player rolled it beside the bed, clamped cleanly outside bed mattress box
+          const bHalfW = 1.06;
+          const bMinZ = -0.78;
+          const bMaxZ = effPosture === 'standing' ? 0.58 : 0.44;
+          if (Math.abs(rawDropX) < bHalfW && rawDropZ > bMinZ && rawDropZ < bMaxZ) {
+            const pL = Math.abs(rawDropX + bHalfW);
+            const pR = Math.abs(bHalfW - rawDropX);
+            const pF = Math.abs(bMaxZ - rawDropZ);
+            const pB = Math.abs(rawDropZ - bMinZ);
+            const m = Math.min(pL, pR, pF, pB);
+            if (m === pF) finalZ = bMaxZ;
+            else if (m === pB) finalZ = bMinZ;
+            else if (m === pL) finalX = -bHalfW;
+            else finalX = bHalfW;
+          }
+          side = finalZ >= -0.24 ? 'front' : 'back';
+          finalRotY = Math.atan2(aimX - finalX, aimZ - finalZ);
+        }
+      } else {
+        // Placing freely anywhere in the room (not colliding inside bed core)
+        const bHalfW = 1.04;
+        const bMinZ = -0.72;
+        const bMaxZ = curPosture === 'standing' ? 0.62 : 0.44;
+        if (Math.abs(finalX) < bHalfW && finalZ > bMinZ && finalZ < bMaxZ) {
+          const pL = Math.abs(finalX + bHalfW);
+          const pR = Math.abs(bHalfW - finalX);
+          const pF = Math.abs(bMaxZ - finalZ);
+          const pB = Math.abs(finalZ - bMinZ);
+          const m = Math.min(pL, pR, pF, pB);
+          if (m === pF) finalZ = bMaxZ;
+          else if (m === pB) finalZ = bMinZ;
+          else if (m === pL) finalX = -bHalfW;
+          else finalX = bHalfW;
+        }
+        finalRotY = bayYaw + Math.PI;
+      }
+
+      return {
+        nearBed: nearBed && !postureBlocked,
+        rawNearBed: nearBed,
+        postureBlocked,
+        region,
+        side,
+        finalX,
+        finalY,
+        finalZ,
+        finalRotY,
+        requiredPosture: cap.requiredPosture,
+      };
+    };
+
+    const buildActiveDevicePayload = (entry: FppBayEquipEntry): FppActiveDeviceState => ({
+      catalogId: entry.catalogId,
+      sprite: entry.sprite,
+      nameEn: entry.nameEn,
+      nameAr: entry.nameAr,
+      region: entry.bedRegion,
+      side: entry.bedSide,
+      closeRange: entry.closeRange,
+      isRunning: entry.isRunning,
+      placementMode: entry.mode === 'placed_bed' ? 'bed' : 'room',
+    });
+
+    const grabFppDevice = (catalogId: string) => {
+      const entry = fppEquipBayMap.get(catalogId);
+      if (!entry) return;
+      const cap = getFppDeviceCapability(entry.sprite);
+      if (!cap.canDeploy) return;
+
+      // Return any currently held device cleanly back to standby first
+      for (const eq of fppEquipBayMap.values()) {
+        if (eq.mode === 'held' && eq.catalogId !== catalogId) {
+          eq.mode = 'standby';
+          eq.activeBlend = 0;
+          eq.isRunning = false;
+          eq.suppressNearUntilAway = false;
+        }
+      }
+
+      entry.mode = 'held';
+      entry.isRunning = false;
+      entry.suppressNearUntilAway = false;
+      const plan = computeBayDropPlan(entry);
+      lastFppNearKey = '';
+      latestRef.current.onFppNearbyDeviceChange?.(null);
+      latestRef.current.onFppActiveBedDeviceChange?.(null);
+      lastFppHeldKey = `${entry.catalogId}|${plan.nearBed ? 1 : 0}|${plan.region}|${plan.postureBlocked ? 1 : 0}`;
+      latestRef.current.onFppHeldDeviceChange?.({
+        catalogId: entry.catalogId,
+        sprite: entry.sprite,
+        nameEn: entry.nameEn,
+        nameAr: entry.nameAr,
+        nearBed: plan.nearBed,
+        nearBedRegion: plan.region,
+        nearBedPostureBlocked: plan.postureBlocked,
+        requiredPosture: plan.requiredPosture,
+      });
+    };
+
+    const placeFppHeldDevice = () => {
+      let held: FppBayEquipEntry | null = null;
+      for (const eq of fppEquipBayMap.values()) {
+        if (eq.mode === 'held') {
+          held = eq;
+          break;
+        }
+      }
+      if (!held) return;
+
+      const plan = computeBayDropPlan(held);
+      held.placedX = plan.finalX;
+      held.placedY = plan.finalY;
+      held.placedZ = plan.finalZ;
+      held.placedRotY = plan.finalRotY;
+      held.isRunning = false;
+      held.suppressNearUntilAway = true;
+
+      if (plan.nearBed) {
+        if (plan.requiredPosture && latestRef.current.fppPosture !== plan.requiredPosture) {
+          latestRef.current.onFppRequirePosture?.(plan.requiredPosture);
+        }
+        held.mode = 'placed_bed';
+        held.bedRegion = plan.region;
+        held.bedSide = plan.side;
+        held.closeRange = true;
+      } else {
+        held.mode = 'placed_room';
+      }
+
+      lastFppHeldKey = '';
+      lastFppNearKey = '';
+      latestRef.current.onFppHeldDeviceChange?.(null);
+      latestRef.current.onFppNearbyDeviceChange?.(null);
+      latestRef.current.onFppActiveBedDeviceChange?.(null);
+    };
+
+    const returnFppDevice = (catalogId: string) => {
+      const entry = fppEquipBayMap.get(catalogId);
+      if (!entry) return;
+      const wasHeld = entry.mode === 'held';
+      entry.mode = 'standby';
+      entry.activeBlend = 0;
+      entry.isRunning = false;
+      entry.suppressNearUntilAway = false;
+      if (wasHeld) {
+        lastFppHeldKey = '';
+        latestRef.current.onFppHeldDeviceChange?.(null);
+      }
+      lastFppNearKey = '';
+      if (latestRef.current.fppActiveDevice?.catalogId === catalogId) {
+        latestRef.current.onFppActiveBedDeviceChange?.(null);
+      }
+    };
+
+    const updateFppBedDevice = (next: FppActiveDeviceState) => {
+      const entry = fppEquipBayMap.get(next.catalogId);
+      if (!entry) return;
+      entry.bedRegion = next.region;
+      entry.bedSide = next.side;
+      entry.closeRange = next.closeRange;
+      entry.isRunning = next.isRunning;
+
+      if (entry.mode === 'placed_bed') {
+        // Reposition cleanly around the bed when clinician uses quick bedside adjust controls
+        const fpp = fppCamRef.current;
+        const curPosture: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+        const headSign = -(fpp.patientEdgeSign ?? 1);
+        const aimX =
+          curPosture === 'standing'
+            ? next.region === 'shoulder'
+              ? next.side === 'front'
+                ? -0.18
+                : 0.18
+              : 0
+            : curPosture === 'sitting'
+              ? next.region === 'shoulder'
+                ? -0.18
+                : 0
+              : next.region === 'cervical'
+                ? headSign * 0.42
+                : next.region === 'shoulder'
+                  ? headSign * 0.28
+                  : next.region === 'lumbar'
+                    ? -headSign * 0.02
+                    : -headSign * 0.34;
+        const aimZ = curPosture === 'standing' ? 0.18 : curPosture === 'sitting' ? 0.02 : -0.24;
+
+        if (entry.sprite === 'infrared_lamp' || entry.sprite === 'swd_unit') {
+          if (curPosture === 'standing') {
+            const dist = next.closeRange ? 0.56 : 0.76;
+            entry.placedX = next.side === 'front' ? -dist : dist;
+            entry.placedZ = 0.24;
+          } else {
+            const distFront = next.closeRange ? 0.48 : 0.68;
+            const distBack = next.closeRange ? 0.56 : 0.68;
+            entry.placedX = aimX;
+            entry.placedZ = next.side === 'front' ? aimZ + distFront : -0.24 - distBack;
+          }
+          entry.placedRotY = Math.atan2(aimX - entry.placedX, aimZ - entry.placedZ);
+        } else {
+          if (curPosture === 'standing') {
+            entry.placedX = next.side === 'front' ? -0.62 : 0.62;
+            entry.placedZ = 0.28;
+          } else {
+            entry.placedX = THREE.MathUtils.clamp(aimX + (aimX >= 0 ? 0.22 : -0.22), -0.95, 0.95);
+            entry.placedZ = next.side === 'front' ? Math.max(0.48, aimZ + 0.52) : -0.82;
+          }
+          entry.placedRotY = Math.atan2(aimX - entry.placedX, aimZ - entry.placedZ);
+        }
+      }
+      latestRef.current.onFppActiveBedDeviceChange?.(buildActiveDevicePayload(entry));
+    };
+
     const fppHands = createFppClinicianHands3D(textures, latestRef.current.playerProfile);
     camera.add(fppHands.group);
     fppBackdrop.group.visible = true;
@@ -765,12 +1342,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         walkBlend: number;
         sitBlend: number;
         lieBlend: number;
+        bodyRoll: number;
+        proneBlend: number;
+        rightSideBlend: number;
+        leftSideBlend: number;
         doorPush: number;
         facingRad: number;
         turnLean: number;
         actorSeed: number;
         bedStationId?: string;
-        bedPhase?: 'to_edge' | 'sit_edge' | 'reclining' | 'lying';
+        bedPhase?: 'to_edge' | 'sit_edge' | 'reclining' | 'lying' | 'stand_beside';
         bedTimer?: number;
         bedArriveTimer?: number;
         bedEdgeSign?: 1 | -1;
@@ -1570,7 +2151,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         camera.position.y += Math.sin(Math.PI * s) * 0.42;
         camera.quaternion.copy(_fppIsoQuat).slerp(_fppCamQuat, s);
 
-        const nextFov = THREE.MathUtils.lerp(30, 52, s);
+        const nextFov = THREE.MathUtils.lerp(30, 60, s);
         const nextNear = THREE.MathUtils.lerp(0.5, 0.08, s);
         if (Math.abs(camera.fov - nextFov) > 0.02 || Math.abs(camera.near - nextNear) > 0.002) {
           camera.fov = nextFov;
@@ -1847,6 +2428,76 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       return { right: _camRight.clone(), forward: _camFwd.clone(), scale: visibleH / h };
     };
 
+    const hitTestFppDevice = (clientX: number, clientY: number): FppNearbyDeviceInfo | null => {
+      if (fppEquipLayer.children.length === 0) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      _raycaster.setFromCamera(_ndc, camera);
+      const hits = _raycaster.intersectObjects(fppEquipLayer.children, true);
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
+        while (obj && obj !== fppEquipLayer) {
+          const cid = obj.userData?.fppCatalogId as string | undefined;
+          if (cid) {
+            const entry = fppEquipBayMap.get(cid);
+            if (entry) {
+              const cap = getFppDeviceCapability(entry.sprite);
+              return {
+                catalogId: entry.catalogId,
+                sprite: entry.sprite,
+                nameEn: entry.nameEn,
+                nameAr: entry.nameAr,
+                canDeploy: cap.canDeploy,
+                isActive: latestRef.current.fppActiveDevice?.catalogId === entry.catalogId,
+                isAdjustable: cap.isAdjustable,
+                supportsDistance: cap.supportsDistance,
+                requiredPosture: cap.requiredPosture,
+              };
+            }
+            break;
+          }
+          obj = obj.parent;
+        }
+      }
+      return null;
+    };
+
+    const handleFppTap = (clientX: number, clientY: number) => {
+      for (const eq of fppEquipBayMap.values()) {
+        if (eq.mode === 'held') return;
+      }
+      if (fppEquipLayer.children.length === 0) {
+        if (latestRef.current.fppActiveDevice) {
+          latestRef.current.onFppActiveBedDeviceChange?.(null);
+        }
+        return;
+      }
+      const rect = renderer.domElement.getBoundingClientRect();
+      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      _raycaster.setFromCamera(_ndc, camera);
+      const hits = _raycaster.intersectObjects(fppEquipLayer.children, true);
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
+        while (obj && obj !== fppEquipLayer) {
+          const cid = obj.userData?.fppCatalogId as string | undefined;
+          if (cid) {
+            const entry = fppEquipBayMap.get(cid);
+            if (entry && (entry.mode === 'placed_bed' || entry.mode === 'placed_room')) {
+              latestRef.current.onFppActiveBedDeviceChange?.(buildActiveDevicePayload(entry));
+              return;
+            }
+            break;
+          }
+          obj = obj.parent;
+        }
+      }
+      if (latestRef.current.fppActiveDevice) {
+        latestRef.current.onFppActiveBedDeviceChange?.(null);
+      }
+    };
+
     sceneHooksRef.current = {
       rebuildWorld,
       syncItems,
@@ -1858,11 +2509,25 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       hitTestPlacedItemDetail,
       hitTestWorldTreeDetail,
       hitTestLockedRoomDetail,
+      hitTestFppDevice,
+      handleFppTap,
       getRayGroundDistSq,
       hitTestDraftGhost,
       getPanVectors,
       updateFppHandsAppearance: fppHands.updateAppearance,
+      grabFppDevice,
+      placeFppHeldDevice,
+      returnFppDevice,
+      updateFppBedDevice,
     };
+    if (fppCommandRef) {
+      fppCommandRef.current = {
+        grabDevice: grabFppDevice,
+        placeHeldDevice: placeFppHeldDevice,
+        returnDevice: returnFppDevice,
+        updateActiveBedDevice: updateFppBedDevice,
+      };
+    }
 
     let lastComposerDpr = dpr;
     const onResize = () => {
@@ -1921,6 +2586,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const doorActorsScratch: DoorActorInput[] = [];
     const activePatientIds = new Set<string>();
     const activeStaffIds = new Set<string>();
+    const stationOccupantMap = new Map<string, { patient: PatientEntity; bedPhase?: string }>();
     const playerStaffSpec: StaffMember = {
       id: 'player_main',
       role: 'therapist',
@@ -1967,6 +2633,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         catalogMap: cMap,
         focusedPatientId: focId,
         firstPersonPatientId: curFppId,
+        fppPosture: curFppPosture,
         speakingPatientId: curSpeakId,
         selectedBedPatientId: curSelBedId,
       } = latestRef.current;
@@ -2040,6 +2707,71 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       }
 
+      // Animate articulated medical bed rigs (PEMF solenoid carriage + motorized tilt table) in both Clinic & FPP modes
+      stationOccupantMap.clear();
+      for (let i = 0; i < curPatients.length; i++) {
+        const pt = curPatients[i];
+        if (pt.state !== 'treated_leaving' && pt.assignedStationId) {
+          const rigEntry = patientRigs.get(pt.id);
+          stationOccupantMap.set(pt.assignedStationId, {
+            patient: pt,
+            bedPhase: rigEntry?.bedPhase,
+          });
+        }
+      }
+      for (const [itemId, entryItem] of itemMeshes.entries()) {
+        if (pureFppId && !entryItem.mesh.visible) continue;
+        const mag = entryItem.mesh.userData.magnetoRig as MagnetoRigMeta | undefined;
+        if (mag) {
+          const occ = stationOccupantMap.get(itemId);
+          const isTreatingLying = Boolean(
+            occ && occ.patient.state === 'in_treatment' && occ.bedPhase === 'lying'
+          );
+          const targetX = !occ
+            ? 0.22
+            : isTreatingLying
+              ? 0.02 + Math.sin(timeSec * 0.95) * 0.14
+              : 0.5;
+          const targetGlow = !occ
+            ? 0.42
+            : isTreatingLying
+              ? 0.95 + Math.sin(timeSec * 4.5) * 0.32
+              : 0.62;
+          mag.currentX = THREE.MathUtils.damp(mag.currentX, targetX, 6.5, dt);
+          mag.solenoidRing.position.x = mag.currentX;
+          mag.coilMat.emissiveIntensity = THREE.MathUtils.damp(
+            mag.coilMat.emissiveIntensity,
+            targetGlow,
+            7.0,
+            dt
+          );
+        }
+        const tt = entryItem.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+        if (tt) {
+          const occ = stationOccupantMap.get(itemId);
+          const isTiltedActive = Boolean(
+            occ &&
+              ((occ.patient.state === 'in_treatment' && occ.bedPhase === 'lying') ||
+                (curFppId === occ.patient.id &&
+                  curFppPosture === 'standing' &&
+                  occ.bedPhase === 'lying'))
+          );
+          const targetAlpha = !occ || isTiltedActive ? 1 : 0;
+          tt.currentTiltAlpha = THREE.MathUtils.damp(tt.currentTiltAlpha, targetAlpha, 5.2, dt);
+          const a = tt.currentTiltAlpha;
+          tt.tiltGroup.position.y = THREE.MathUtils.lerp(0.45, 0.67, a);
+          tt.tiltGroup.rotation.z = -0.5 * a;
+          tt.strapsGroup.visible = a > 0.42;
+          tt.ramMesh.position.set(
+            THREE.MathUtils.lerp(0.18, 0.16, a),
+            THREE.MathUtils.lerp(0.3, 0.42, a),
+            0
+          );
+          tt.ramMesh.rotation.z = THREE.MathUtils.lerp(-0.62, -0.28, a);
+          tt.ramMesh.scale.y = THREE.MathUtils.lerp(0.68, 1.0, a);
+        }
+      }
+
       activePatientIds.clear();
       for (const p of curPatients) {
         if (pureFppId && p.id !== pureFppId) continue;
@@ -2080,6 +2812,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             walkBlend: 0,
             sitBlend: 0,
             lieBlend: 0,
+            bodyRoll: 0,
+            proneBlend: 0,
+            rightSideBlend: 0,
+            leftSideBlend: 0,
             doorPush: 0,
             facingRad: -Math.PI / 2,
             turnLean: 0,
@@ -2096,6 +2832,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         entry.rig.root.visible = true;
 
+        const isFppTarget = curFppId === p.id;
         const isAtStation =
           (p.state === 'ready_for_exam' || p.state === 'in_exam' || p.state === 'in_treatment') &&
           p.path.length === 0;
@@ -2115,21 +2852,49 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               spr === 'tilt_table')
         );
         const hScale = p.heightScale || 1;
-        const bedMattressTop =
-          spr === 'exercise_mat'
-            ? 0.066
-            : spr === 'traction_table'
-              ? 0.46
-              : spr === 'magnetotherapy'
-                ? 0.45
-                : spr === 'tilt_table'
-                  ? 0.6
-                  : 0.52;
+        const stationMeshEntry = station ? itemMeshes.get(station.instanceId) : undefined;
+        const tiltRig = stationMeshEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+        const tiltAlpha =
+          spr === 'tilt_table'
+            ? tiltRig
+              ? tiltRig.currentTiltAlpha
+              : p.state === 'in_treatment' && entry?.bedPhase === 'lying'
+                ? 1
+                : 0
+            : 0;
+
+        let targetBodyRoll = 0;
+        let targetProne = 0;
+        let targetRight = 0;
+        let targetLeft = 0;
+        if (isFppTarget && isLyingStation) {
+          if (curFppPosture === 'prone') {
+            targetBodyRoll = entry.bodyRoll >= 0.05 ? Math.PI : -Math.PI;
+            targetProne = 1;
+          } else if (curFppPosture === 'right_side') {
+            targetBodyRoll = -Math.PI / 2;
+            targetRight = 1;
+          } else if (curFppPosture === 'left_side') {
+            targetBodyRoll = Math.PI / 2;
+            targetLeft = 1;
+          }
+        }
+        entry.bodyRoll = THREE.MathUtils.damp(entry.bodyRoll, targetBodyRoll, 6.8, dt);
+        entry.proneBlend = THREE.MathUtils.damp(entry.proneBlend, targetProne, 7.2, dt);
+        entry.rightSideBlend = THREE.MathUtils.damp(entry.rightSideBlend, targetRight, 7.2, dt);
+        entry.leftSideBlend = THREE.MathUtils.damp(entry.leftSideBlend, targetLeft, 7.2, dt);
+
+        const postureHeightLift =
+          entry.proneBlend * 0.01 + (entry.rightSideBlend + entry.leftSideBlend) * 0.032;
+        const bedMattressTop = spr === 'exercise_mat' ? 0.066 : 0.52;
         const lyingHeight =
-          spr === 'tilt_table' ? 0.82 : bedMattressTop + 0.145;
+          spr === 'tilt_table'
+            ? THREE.MathUtils.lerp(bedMattressTop + 0.145, 0.545, tiltAlpha)
+            : bedMattressTop + 0.145 + postureHeightLift;
         const bedBodyZOffset =
-          spr === 'tilt_table' ? 0.53 * hScale : undefined;
-        const tiltPitch = spr === 'tilt_table' ? -Math.PI / 2 + 0.52 : -Math.PI / 2;
+          spr === 'tilt_table' ? (0.67 - 0.12 * tiltAlpha) * hScale : undefined;
+        const tiltPitch =
+          spr === 'tilt_table' ? -Math.PI / 2 + 0.5 * tiltAlpha : -Math.PI / 2;
         const isBikeStation = Boolean(isAtStation && station && spr === 'exercise_bike');
         const isActiveGaitStation = Boolean(
           isAtStation && station && (spr === 'treadmill' || spr === 'parallel_bars')
@@ -2251,7 +3016,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
             const edgeSign = entry.bedEdgeSign ?? bedPose.edgeSign;
             const edgeOffsetZ =
-              spr === 'exercise_mat' ? 0.22 : spr === 'treatment_bed' ? 0.24 : 0.27;
+              spr === 'exercise_mat' ? 0.22 : spr === 'treatment_bed' ? 0.24 : 0.25;
             const edgePt = rotLocal(0, edgeSign * edgeOffsetZ);
             const edgeFacing =
               edgeSign === 1
@@ -2267,6 +3032,25 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
             entry.lastBedEdgeZ = edgePt.z;
             entry.lastBedEdgeFacing = edgeFacing;
 
+            const standPt = rotLocal(0, edgeSign * (edgeOffsetZ + 0.2));
+            const desiredFppPosture: FppPatientPosture = isFppTarget
+              ? curFppPosture ?? 'sitting'
+              : p.state === 'in_treatment'
+                ? 'supine'
+                : 'sitting';
+            const wantsStandBeside =
+              isFppTarget && desiredFppPosture === 'standing' && spr !== 'tilt_table';
+            const wantsLieOnBed =
+              p.state === 'in_treatment' ||
+              (isFppTarget &&
+                (desiredFppPosture === 'supine' ||
+                  desiredFppPosture === 'prone' ||
+                  desiredFppPosture === 'right_side' ||
+                  desiredFppPosture === 'left_side' ||
+                  (desiredFppPosture === 'standing' && spr === 'tilt_table')));
+            const rollClearedToSit =
+              Math.abs(entry.bodyRoll) < 0.45 && (spr !== 'tilt_table' || tiltAlpha < 0.14);
+
             entry.bedArriveTimer = (entry.bedArriveTimer ?? 0) + dt;
             if (entry.bedPhase === 'to_edge') {
               targetX = edgePt.x;
@@ -2280,6 +3064,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 entry.bedPhase = 'sit_edge';
                 entry.bedTimer = 0;
               }
+            } else if (entry.bedPhase === 'stand_beside') {
+              bedAllowsWalk = false;
+              bedDesiredFacing = edgeFacing;
+              bedTargetSit = false;
+              bedTargetLie = 0;
+              targetX = standPt.x;
+              targetZ = standPt.z;
+              if (!wantsStandBeside) {
+                entry.bedPhase = 'sit_edge';
+                entry.bedTimer = 0;
+              }
             } else if (entry.bedPhase === 'sit_edge') {
               bedAllowsWalk = false;
               targetX = edgePt.x;
@@ -2287,11 +3082,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               bedDesiredFacing = edgeFacing;
               bedTargetSit = true;
               bedTargetLie = 0;
-              // Stay comfortably seated on the hospital bed while awaiting/undergoing clinical exam;
-              // smoothly recline ONLY after clinical assessment finishes and treatment begins.
-              if (p.state === 'in_treatment') {
+              if (wantsStandBeside) {
+                if (entry.lieBlend <= 0.04) {
+                  entry.bedPhase = 'stand_beside';
+                  entry.bedTimer = 0;
+                }
+              } else if (wantsLieOnBed) {
                 entry.bedTimer = (entry.bedTimer ?? 0) + dt;
-                if ((entry.bedTimer >= 0.35 && entry.sitBlend >= 0.88) || entry.bedTimer >= 0.9) {
+                const waitNeeded = isFppTarget ? 0.15 : 0.35;
+                if ((entry.bedTimer >= waitNeeded && entry.sitBlend >= 0.85) || entry.bedTimer >= 0.9) {
                   entry.bedPhase = 'reclining';
                   entry.bedTimer = 0;
                   entry.bedStartX = entry.visX;
@@ -2302,8 +3101,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               }
             } else if (entry.bedPhase === 'reclining') {
               bedAllowsWalk = false;
-              entry.bedTimer = (entry.bedTimer ?? 0) + dt;
-              const u = THREE.MathUtils.clamp(entry.bedTimer / 1.5, 0, 1);
+              if (wantsLieOnBed) {
+                entry.bedTimer = (entry.bedTimer ?? 0) + dt;
+              } else if (rollClearedToSit) {
+                entry.bedTimer = Math.max(0, (entry.bedTimer ?? 1.5) - dt * 1.2);
+              }
+              const u = THREE.MathUtils.clamp((entry.bedTimer ?? 0) / 1.4, 0, 1);
               const s = u * u * (3 - 2 * u);
               const moveFrac = Math.min(1, u / 0.72);
               const moveS = moveFrac * moveFrac * (3 - 2 * moveFrac);
@@ -2316,8 +3119,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 edgeFacing + shortestAngleDelta(edgeFacing, stationFacing) * moveS;
               bedTargetSit = true;
               bedTargetLie = s;
-              if (u >= 1) {
+              if (wantsLieOnBed && u >= 1) {
                 entry.bedPhase = 'lying';
+              } else if (!wantsLieOnBed && u <= 0) {
+                entry.bedPhase = 'sit_edge';
+                entry.bedTimer = 0;
               }
             } else {
               bedAllowsWalk = false;
@@ -2329,6 +3135,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               bedForcedFacing = stationFacing;
               bedTargetSit = true;
               bedTargetLie = 1;
+              if (!wantsLieOnBed && rollClearedToSit) {
+                entry.bedPhase = 'reclining';
+                entry.bedTimer = 1.4;
+                entry.bedStartX = edgePt.x;
+                entry.bedStartZ = edgePt.z;
+              }
             }
           } else if (isBikeStation) {
             const pt = rotLocal(-0.18, 0);
@@ -2732,7 +3544,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         entry.rig.root.position.set(entry.visX, entry.groundY, entry.visZ);
 
-        const isFppTarget = curFppId === p.id;
         animateHumanoid3D(entry.rig, {
           pose,
           walkPhase: entry.walkPhase,
@@ -2745,6 +3556,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           lyingHeight: effectiveLyingHeight,
           bedBodyZOffset: effectiveBedZOffset,
           tiltPitch: effectiveTiltPitch,
+          bodyRoll: entry.bodyRoll,
+          proneBlend: entry.proneBlend,
+          rightSideBlend: entry.rightSideBlend,
+          leftSideBlend: entry.leftSideBlend,
           facingRad: entry.facingRad,
           turnLean: entry.turnLean,
           timeSec,
@@ -4419,27 +5234,127 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         fpp.activeId = curFppId;
         const pRig = patientRigs.get(curFppId);
         const pObj = latestRef.current.patients.find((pt) => pt.id === curFppId);
-        const px = pRig ? pRig.visX : pObj ? pObj.gridX + 0.5 : 4.5;
-        const pz = pRig ? pRig.visZ : pObj ? pObj.gridY + 0.5 : 16.5;
-        const facing = pRig ? pRig.facingRad : 0;
+        let px = pRig ? pRig.visX : pObj ? pObj.gridX + 0.5 : 4.5;
+        let pz = pRig ? pRig.visZ : pObj ? pObj.gridY + 0.5 : 16.5;
+        let facing = pRig ? pRig.facingRad : 0;
+
+        // Guarantee canonical bedside seated alignment & stowed device state when entering FPP on ANY bed/device
+        if (pObj?.assignedStationId) {
+          const stItem = latestRef.current.placedItems.find(
+            (it) => it.instanceId === pObj.assignedStationId
+          );
+          const stCat = stItem
+            ? latestRef.current.catalogMap.get(stItem.catalogId)
+            : undefined;
+          const stSpr = stCat?.sprite;
+          if (
+            stItem &&
+            stCat &&
+            (stSpr === 'treatment_bed' ||
+              stSpr === 'traction_table' ||
+              stSpr === 'magnetotherapy' ||
+              stSpr === 'tilt_table' ||
+              stSpr === 'exercise_mat')
+          ) {
+            if (
+              pRig &&
+              pRig.lastBedStationId === stItem.instanceId &&
+              pRig.lastBedEdgeX !== undefined &&
+              pRig.lastBedEdgeZ !== undefined &&
+              pRig.lastBedEdgeFacing !== undefined
+            ) {
+              px = pRig.lastBedEdgeX;
+              pz = pRig.lastBedEdgeZ;
+              facing = pRig.lastBedEdgeFacing;
+            } else {
+              const { obstacles: boxes } = getWalkerObstacles(
+                latestRef.current.rooms,
+                latestRef.current.placedItems,
+                latestRef.current.removedTreeIds
+              );
+              const bp = getTreatmentBedPose(
+                stItem,
+                stSpr,
+                stCat.width,
+                stCat.depth,
+                boxes,
+                px,
+                pz
+              );
+              px = bp.edgeX;
+              pz = bp.edgeZ;
+              facing = bp.edgeFacing;
+              if (pRig) {
+                pRig.bedStationId = stItem.instanceId;
+                pRig.bedEdgeSign = bp.edgeSign;
+                pRig.lastBedStationId = stItem.instanceId;
+                pRig.lastBedEdgeX = px;
+                pRig.lastBedEdgeZ = pz;
+                pRig.lastBedEdgeFacing = facing;
+              }
+            }
+            if (pRig) {
+              pRig.visX = px;
+              pRig.visZ = pz;
+              pRig.facingRad = facing;
+              pRig.bedPhase = 'sit_edge';
+              pRig.bedTimer = 0;
+              pRig.sitBlend = 1;
+              pRig.walkBlend = 0;
+              pRig.lieBlend = 0;
+              pRig.bodyRoll = 0;
+              pRig.proneBlend = 0;
+              pRig.rightSideBlend = 0;
+              pRig.leftSideBlend = 0;
+            }
+            const stEntry = itemMeshes.get(stItem.instanceId);
+            const magRig = stEntry?.mesh.userData.magnetoRig as MagnetoRigMeta | undefined;
+            if (magRig) {
+              magRig.currentX = 0.5;
+              magRig.solenoidRing.position.x = 0.5;
+              magRig.coilMat.emissiveIntensity = 0.62;
+            }
+            const ttRig = stEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+            if (ttRig) {
+              ttRig.currentTiltAlpha = 0;
+              ttRig.tiltGroup.position.y = 0.45;
+              ttRig.tiltGroup.rotation.z = 0;
+              ttRig.strapsGroup.visible = false;
+              ttRig.ramMesh.position.set(0.18, 0.3, 0);
+              ttRig.ramMesh.rotation.z = -0.62;
+              ttRig.ramMesh.scale.y = 0.68;
+            }
+          }
+        }
+
         const surfPt = getSurfaceElevation(px, pz);
         const pfX = Math.sin(facing);
         const pfZ = Math.cos(facing);
 
-        // Universal enclosed FPP bay: anchor cleanly in front of the bed without clipping outer clinic walls
-        const anchorX = px + pfX * 1.14;
-        const anchorZ = pz + pfZ * 1.14;
+        // Universal enclosed FPP bay: responsive anchor distance frames patient & full specialized bed/device cleanly
+        const anchorDist = camera.aspect < 0.85 ? 1.62 : 1.44;
+        const anchorX = px + pfX * anchorDist;
+        const anchorZ = pz + pfZ * anchorDist;
+
+        const curStationItem = pObj?.assignedStationId
+          ? latestRef.current.placedItems.find((it) => it.instanceId === pObj.assignedStationId)
+          : undefined;
+        const curStationCat = curStationItem
+          ? latestRef.current.catalogMap.get(curStationItem.catalogId)
+          : undefined;
 
         fpp.patientX = px;
         fpp.patientZ = pz;
         fpp.patientFacing = facing;
+        fpp.patientEdgeSign = (pRig?.bedEdgeSign ?? 1) as 1 | -1;
+        fpp.patientStationSprite = curStationCat?.sprite ?? 'treatment_bed';
         fpp.anchorX = anchorX;
         fpp.anchorZ = anchorZ;
         fpp.roomMinX = -999;
         fpp.roomMaxX = 999;
         fpp.roomMinZ = -999;
         fpp.roomMaxZ = 999;
-        fpp.baseY = surfPt.floorY + 1.24;
+        fpp.baseY = surfPt.floorY + 1.28;
         fpp.posX = anchorX;
         fpp.posZ = anchorZ;
         fpp.posY = fpp.baseY;
@@ -4447,13 +5362,33 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         fpp.yawOffset = 0;
         fpp.targetYawOffset = 0;
         fpp.yaw = fpp.baseYaw;
-        fpp.pitch = -0.09;
-        fpp.targetPitch = -0.09;
+        fpp.pitch = -0.14;
+        fpp.targetPitch = -0.14;
         fpp.walkBob = 0;
         fpp.blend = 1;
 
         fppBackdrop.group.position.set(px, surfPt.floorY, pz);
         fppBackdrop.group.rotation.set(0, facing, 0);
+
+        lastFppEquipSig = '';
+        lastFppNearKey = '';
+        lastFppHeldKey = '';
+        for (const eq of fppEquipBayMap.values()) {
+          eq.mode = 'standby';
+          eq.activeBlend = 0;
+          eq.isRunning = false;
+          eq.suppressNearUntilAway = false;
+          eq.curX = eq.standbyX;
+          eq.curY = 0;
+          eq.curZ = eq.standbyZ;
+          eq.curRotY = eq.standbyRotY;
+        }
+        fppDropRingGroup.visible = false;
+        syncFppEquipmentBay(
+          latestRef.current.placedItems,
+          latestRef.current.patients,
+          latestRef.current.rooms
+        );
 
         cs.targetX = px;
         cs.targetZ = pz;
@@ -4462,12 +5397,25 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       } else if (!curFppId && fpp.activeId) {
         fpp.activeId = null;
         fpp.blend = 0;
+        fppDropRingGroup.visible = false;
+        for (const eq of fppEquipBayMap.values()) {
+          eq.mode = 'standby';
+          eq.activeBlend = 0;
+          eq.isRunning = false;
+          eq.suppressNearUntilAway = false;
+        }
       } else {
         fpp.blend = isPureFpp ? 1 : 0;
       }
 
       if (isPureFpp) {
-        // Silky clamped FPP look inside the enclosed bay
+        syncFppEquipmentBay(
+          latestRef.current.placedItems,
+          latestRef.current.patients,
+          latestRef.current.rooms
+        );
+
+        // Silky FPP look inside the expanded examination bay
         fpp.yawOffset = THREE.MathUtils.damp(fpp.yawOffset, fpp.targetYawOffset, 18, dt);
         fpp.pitch = THREE.MathUtils.damp(fpp.pitch, fpp.targetPitch, 18, dt);
         fpp.yaw = fpp.baseYaw + fpp.yawOffset;
@@ -4481,30 +5429,64 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           inRight /= mag;
           inFwd /= mag;
         }
+
+        const pfX = Math.sin(fpp.patientFacing);
+        const pfZ = Math.cos(fpp.patientFacing);
+        const prX = Math.cos(fpp.patientFacing);
+        const prZ = -Math.sin(fpp.patientFacing);
+
         if (mag > 0.04) {
           const fwdX = -Math.sin(fpp.yaw);
           const fwdZ = -Math.cos(fpp.yaw);
           const rightX = Math.cos(fpp.yaw);
           const rightZ = -Math.sin(fpp.yaw);
-          const moveSpeed = 1.24;
+          const moveSpeed = 1.32;
           const rawX = fpp.posX + (fwdX * inFwd + rightX * inRight) * moveSpeed * dt;
           const rawZ = fpp.posZ + (fwdZ * inFwd + rightZ * inRight) * moveSpeed * dt;
 
-          // Keep clinician cleanly inside the universal 4-walled examination bay (and clear of the bed/patient)
-          const pfX = Math.sin(fpp.patientFacing);
-          const pfZ = Math.cos(fpp.patientFacing);
-          const prX = Math.cos(fpp.patientFacing);
-          const prZ = -Math.sin(fpp.patientFacing);
+          // Keep clinician inside the expanded bay (roomW=6.8, backZ=-1.24, frontZ=3.60)
           const relX = rawX - fpp.patientX;
           const relZ = rawZ - fpp.patientZ;
-          let fwdDist = THREE.MathUtils.clamp(relX * pfX + relZ * pfZ, 0.66, 2.25);
-          let sideDist = THREE.MathUtils.clamp(relX * prX + relZ * prZ, -1.65, 1.65);
-          const rDist = Math.hypot(fwdDist, sideDist);
-          if (rDist < 0.78 && rDist > 0.001) {
-            const sc = 0.78 / rDist;
-            fwdDist = Math.max(0.66, fwdDist * sc);
-            sideDist *= sc;
+          let fwdDist = THREE.MathUtils.clamp(relX * pfX + relZ * pfZ, -0.78, 3.12);
+          let sideDist = THREE.MathUtils.clamp(relX * prX + relZ * prZ, -2.96, 2.96);
+
+          // Central bed & standing-patient keep-out box while allowing walking along bed flanks & sides
+          const bedMaxZ = latestRef.current.fppPosture === 'standing' ? 0.84 : 0.62;
+          const bedMinZ = -0.72;
+          const bedHalfW = 1.04;
+          if (Math.abs(sideDist) < bedHalfW && fwdDist > bedMinZ && fwdDist < bedMaxZ) {
+            const penLeft = Math.abs(sideDist + bedHalfW);
+            const penRight = Math.abs(bedHalfW - sideDist);
+            const penFront = Math.abs(bedMaxZ - fwdDist);
+            const penBack = Math.abs(fwdDist - bedMinZ);
+            const minPen = Math.min(penLeft, penRight, penFront, penBack);
+            if (minPen === penFront) fwdDist = bedMaxZ;
+            else if (minPen === penBack) fwdDist = bedMinZ;
+            else if (minPen === penLeft) sideDist = -bedHalfW;
+            else sideDist = bedHalfW;
           }
+
+          // Smooth perimeter push-out around non-held bay equipment carts
+          for (const eq of fppEquipBayMap.values()) {
+            if (eq.mode === 'held') continue;
+            if (eq.mode === 'placed_bed' && eq.sprite === 'cpm_device') continue;
+            const eqHalfW = eq.handle.colliderHalfW + 0.16;
+            const eqHalfD = eq.handle.colliderHalfD + 0.16;
+            const dSide = sideDist - eq.curX;
+            const dFwd = fwdDist - eq.curZ;
+            if (Math.abs(dSide) < eqHalfW && Math.abs(dFwd) < eqHalfD) {
+              const pSide = eqHalfW - Math.abs(dSide);
+              const pFwd = eqHalfD - Math.abs(dFwd);
+              if (pSide < pFwd) {
+                sideDist = eq.curX + (dSide >= 0 ? eqHalfW : -eqHalfW);
+              } else {
+                fwdDist = eq.curZ + (dFwd >= 0 ? eqHalfD : -eqHalfD);
+              }
+            }
+          }
+
+          sideDist = THREE.MathUtils.clamp(sideDist, -2.96, 2.96);
+          fwdDist = THREE.MathUtils.clamp(fwdDist, -0.78, 3.12);
 
           const candX = fpp.patientX + pfX * fwdDist + prX * sideDist;
           const candZ = fpp.patientZ + pfZ * fwdDist + prZ * sideDist;
@@ -4521,6 +5503,246 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
 
         updateCameraTransform();
+
+        // Update standby / held / placed FPP equipment poses, drop preview reticle & two-hand grips
+        const curPosture: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+        const headSign = -(fpp.patientEdgeSign ?? 1);
+        const bedHeight = fpp.patientStationSprite === 'exercise_mat' ? 0.066 : 0.52;
+
+        const dCamWorldX = fpp.posX - fpp.patientX;
+        const dCamWorldZ = fpp.posZ - fpp.patientZ;
+        const camBayX = dCamWorldX * prX + dCamWorldZ * prZ;
+        const camBayZ = dCamWorldX * pfX + dCamWorldZ * pfZ;
+        const bayYaw = fpp.yaw - fpp.patientFacing;
+        const fwdBayX = -Math.sin(bayYaw);
+        const fwdBayZ = -Math.cos(bayYaw);
+
+        const computeTargetZoneInBay = (region: FppTargetRegion, side: FppBedSide) => {
+          if (curPosture === 'standing') {
+            if (region === 'cervical') return { ax: 0, ay: 1.26, az: 0.18 };
+            if (region === 'shoulder') return { ax: side === 'front' ? -0.18 : 0.18, ay: 1.14, az: 0.18 };
+            if (region === 'lumbar') return { ax: 0, ay: 0.90, az: 0.16 };
+            return { ax: 0, ay: 0.44, az: 0.22 };
+          }
+          if (curPosture === 'sitting') {
+            if (region === 'cervical') return { ax: 0, ay: bedHeight + 0.68, az: -0.02 };
+            if (region === 'shoulder') return { ax: -0.18, ay: bedHeight + 0.54, az: 0.02 };
+            if (region === 'lumbar') return { ax: 0, ay: bedHeight + 0.28, az: -0.08 };
+            return { ax: 0, ay: bedHeight - 0.05, az: 0.28 };
+          }
+          const rx =
+            region === 'cervical'
+              ? headSign * 0.42
+              : region === 'shoulder'
+                ? headSign * 0.28
+                : region === 'lumbar'
+                  ? -headSign * 0.02
+                  : -headSign * 0.34;
+          return { ax: rx, ay: bedHeight + 0.18, az: -0.24 };
+        };
+
+        fppBackdrop.group.updateMatrixWorld(true);
+        let heldEntry: FppBayEquipEntry | null = null;
+
+        for (const eq of fppEquipBayMap.values()) {
+          // If patient posture switched to something incompatible with a bedside-deployed device, stow it back to standby
+          if (eq.mode === 'placed_bed') {
+            const eqCap = getFppDeviceCapability(eq.sprite);
+            if (eqCap.requiredPosture && eqCap.requiredPosture !== curPosture) {
+              eq.mode = 'standby';
+              eq.isRunning = false;
+              eq.suppressNearUntilAway = false;
+              if (latestRef.current.fppActiveDevice?.catalogId === eq.catalogId) {
+                latestRef.current.onFppActiveBedDeviceChange?.(null);
+              }
+            }
+          }
+
+          const isHeld = eq.mode === 'held';
+          const isBedActive = eq.mode === 'placed_bed';
+          const isDeviceRunning = (eq.mode === 'placed_bed' || eq.mode === 'placed_room') && eq.isRunning;
+          if (isHeld) heldEntry = eq;
+
+          eq.activeBlend = THREE.MathUtils.damp(eq.activeBlend, isDeviceRunning ? 1 : 0, 8.5, dt);
+
+          const region: FppTargetRegion = isBedActive ? eq.bedRegion : 'lumbar';
+          const side: FppBedSide = isBedActive ? eq.bedSide : 'front';
+          const closeRange = isBedActive ? eq.closeRange : true;
+          const aim = computeTargetZoneInBay(region, side);
+
+          if (isHeld) {
+            const spec = getFppEquipCarrySpec(eq.sprite);
+            let hDist = spec.holdDist;
+            let hx = camBayX + fwdBayX * hDist;
+            let hz = camBayZ + fwdBayZ * hDist;
+
+            // Prevent rolling floor carts from clipping deep into the mattress while pushing close
+            if (spec.carryMode === 'roll') {
+              const bedCoreW = 0.88;
+              const bedCoreMinZ = -0.52;
+              const bedCoreMaxZ = curPosture === 'standing' ? 0.50 : 0.38;
+              if (Math.abs(hx) < bedCoreW && hz > bedCoreMinZ && hz < bedCoreMaxZ) {
+                hDist = Math.max(0.46, hDist - 0.18);
+                hx = camBayX + fwdBayX * hDist;
+                hz = camBayZ + fwdBayZ * hDist;
+                if (Math.abs(hx) < bedCoreW && hz > bedCoreMinZ && hz < bedCoreMaxZ) {
+                  const pF = Math.abs(bedCoreMaxZ - hz);
+                  const pB = Math.abs(hz - bedCoreMinZ);
+                  const pL = Math.abs(hx + bedCoreW);
+                  const pR = Math.abs(bedCoreW - hx);
+                  const m = Math.min(pF, pB, pL, pR);
+                  if (m === pF) hz = bedCoreMaxZ;
+                  else if (m === pB) hz = bedCoreMinZ;
+                  else if (m === pL) hx = -bedCoreW;
+                  else hx = bedCoreW;
+                }
+              }
+            }
+
+            hx = THREE.MathUtils.clamp(hx, -3.02, 3.02);
+            hz = THREE.MathUtils.clamp(hz, -0.96, 3.24);
+            const hy = spec.carryMode === 'lift' ? spec.holdY + Math.cos(fpp.walkBob * 2) * 0.008 : 0;
+            const hRot = bayYaw + spec.holdRotOffset;
+
+            eq.curX = THREE.MathUtils.damp(eq.curX, hx, 18, dt);
+            eq.curY = THREE.MathUtils.damp(eq.curY, hy, 18, dt);
+            eq.curZ = THREE.MathUtils.damp(eq.curZ, hz, 18, dt);
+            eq.curRotY = lerpAngle(eq.curRotY, hRot, Math.min(1, dt * 18));
+          } else {
+            let destX = eq.standbyX;
+            let destY = 0;
+            let destZ = eq.standbyZ;
+            let destRotY = eq.standbyRotY;
+
+            if (eq.mode === 'placed_room' || eq.mode === 'placed_bed') {
+              destX = eq.placedX;
+              destY = eq.placedY;
+              destZ = eq.placedZ;
+              destRotY = eq.placedRotY;
+            }
+
+            eq.curX = THREE.MathUtils.damp(eq.curX, destX, 9.5, dt);
+            eq.curY = THREE.MathUtils.damp(eq.curY, destY, 9.5, dt);
+            eq.curZ = THREE.MathUtils.damp(eq.curZ, destZ, 9.5, dt);
+            eq.curRotY = lerpAngle(eq.curRotY, destRotY, Math.min(1, dt * 9.5));
+          }
+
+          eq.handle.group.position.set(eq.curX, eq.curY, eq.curZ);
+          eq.handle.group.rotation.y = eq.curRotY;
+
+          _fppAimWorld.set(aim.ax, aim.ay, aim.az).applyMatrix4(fppBackdrop.group.matrixWorld);
+          eq.handle.updateMotion({
+            activeBlend: eq.activeBlend,
+            onBedBlend: isBedActive ? 1 : 0,
+            timeSec: tSec,
+            aimWorldX: _fppAimWorld.x,
+            aimWorldY: _fppAimWorld.y,
+            aimWorldZ: _fppAimWorld.z,
+            bedHeight,
+            closeRange,
+          });
+        }
+
+        // Update drop reticle + held info + grip hand IK
+        if (heldEntry) {
+          const plan = computeBayDropPlan(heldEntry);
+          fppDropRingGroup.visible = true;
+          fppDropRingGroup.position.set(plan.finalX, 0.015, plan.finalZ);
+          const pulse = 0.94 + Math.sin(tSec * 5.2) * 0.06;
+          fppDropRingGroup.scale.set(pulse, 1, pulse);
+          fppDropRingMat.color.setHex(
+            plan.postureBlocked ? 0xf59e0b : plan.nearBed ? 0x10b981 : 0x38bdf8
+          );
+          fppDropDiscMat.color.setHex(
+            plan.postureBlocked ? 0xf59e0b : plan.nearBed ? 0x34d399 : 0x38bdf8
+          );
+
+          const heldKey = `${heldEntry.catalogId}|${plan.nearBed ? 1 : 0}|${plan.region}|${plan.postureBlocked ? 1 : 0}`;
+          if (heldKey !== lastFppHeldKey) {
+            lastFppHeldKey = heldKey;
+            latestRef.current.onFppHeldDeviceChange?.({
+              catalogId: heldEntry.catalogId,
+              sprite: heldEntry.sprite,
+              nameEn: heldEntry.nameEn,
+              nameAr: heldEntry.nameAr,
+              nearBed: plan.nearBed,
+              nearBedRegion: plan.region,
+              nearBedPostureBlocked: plan.postureBlocked,
+              requiredPosture: plan.requiredPosture,
+            });
+          }
+
+          if (lastFppNearKey !== '') {
+            lastFppNearKey = '';
+            latestRef.current.onFppNearbyDeviceChange?.(null);
+          }
+
+          // Compute exact world->camera palm grip anchors on the held device
+          heldEntry.handle.group.updateMatrixWorld(true);
+          camera.updateMatrixWorld(true);
+          const spec = getFppEquipCarrySpec(heldEntry.sprite);
+          _lGripWorld.set(spec.leftLocal[0], spec.leftLocal[1], spec.leftLocal[2]);
+          heldEntry.handle.group.localToWorld(_lGripWorld);
+          _lGripCam.copy(_lGripWorld).applyMatrix4(camera.matrixWorldInverse);
+
+          _rGripWorld.set(spec.rightLocal[0], spec.rightLocal[1], spec.rightLocal[2]);
+          heldEntry.handle.group.localToWorld(_rGripWorld);
+          _rGripCam.copy(_rGripWorld).applyMatrix4(camera.matrixWorldInverse);
+
+          _fppGripScratch.active = true;
+          _fppGripScratch.style = spec.gripStyle;
+          _fppGripScratch.leftX = THREE.MathUtils.clamp(_lGripCam.x, -0.28, -0.025);
+          _fppGripScratch.leftY = THREE.MathUtils.clamp(_lGripCam.y, -0.36, -0.05);
+          _fppGripScratch.leftZ = THREE.MathUtils.clamp(_lGripCam.z, -0.66, -0.30);
+          _fppGripScratch.rightX = THREE.MathUtils.clamp(_rGripCam.x, 0.025, 0.28);
+          _fppGripScratch.rightY = THREE.MathUtils.clamp(_rGripCam.y, -0.36, -0.05);
+          _fppGripScratch.rightZ = THREE.MathUtils.clamp(_rGripCam.z, -0.66, -0.30);
+        } else {
+          fppDropRingGroup.visible = false;
+          _fppGripScratch.active = false;
+          if (lastFppHeldKey !== '') {
+            lastFppHeldKey = '';
+            latestRef.current.onFppHeldDeviceChange?.(null);
+          }
+
+          // Proximity detection ONLY for standby/room movable devices (placed_bed stays completely silent until tapped directly)
+          let nearestEntry: FppBayEquipEntry | null = null;
+          let nearestDist = 1.38;
+          for (const eq of fppEquipBayMap.values()) {
+            const eqCap = getFppDeviceCapability(eq.sprite);
+            if (!eqCap.canDeploy) continue;
+            const d = Math.hypot(camBayX - eq.curX, camBayZ - eq.curZ);
+            if (eq.suppressNearUntilAway && eq.mode !== 'placed_bed' && d > 1.62) {
+              eq.suppressNearUntilAway = false;
+            }
+            if (eq.suppressNearUntilAway || eq.mode === 'placed_bed') continue;
+            if (d < nearestDist) {
+              nearestDist = d;
+              nearestEntry = eq;
+            }
+          }
+          const nearIsBedActive = Boolean(nearestEntry && nearestEntry.mode === 'placed_bed');
+          const nearKey = nearestEntry ? `${nearestEntry.catalogId}|${nearIsBedActive ? 1 : 0}` : '';
+          if (nearKey !== lastFppNearKey) {
+            lastFppNearKey = nearKey;
+            if (nearestEntry) {
+              const cap = getFppDeviceCapability(nearestEntry.sprite);
+              latestRef.current.onFppNearbyDeviceChange?.({
+                catalogId: nearestEntry.catalogId,
+                sprite: nearestEntry.sprite,
+                nameEn: nearestEntry.nameEn,
+                nameAr: nearestEntry.nameAr,
+                canDeploy: cap.canDeploy,
+                isActive: nearIsBedActive,
+                isAdjustable: cap.isAdjustable,
+                supportsDistance: cap.supportsDistance,
+                requiredPosture: cap.requiredPosture,
+              });
+            } else {
+              latestRef.current.onFppNearbyDeviceChange?.(null);
+            }
+          }
+        }
 
         // Pure FPP Isolation: hide outside clinic, staff, and non-session patients
         const fppPatient = latestRef.current.patients.find((pt) => pt.id === curFppId);
@@ -4558,7 +5780,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           fpp.walkBob,
           tSec,
           Boolean(latestRef.current.speakingPatientId),
-          camera.aspect
+          camera.aspect,
+          _fppGripScratch
         );
 
         syncAndAnimateActors(tSec, dt, curFppId);
@@ -4566,6 +5789,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       } else {
         if (wasPureFpp) {
           lastIsolatedStationId = null;
+          lastFppNearKey = '';
+          lastFppHeldKey = '';
+          latestRef.current.onFppNearbyDeviceChange?.(null);
+          latestRef.current.onFppHeldDeviceChange?.(null);
+          latestRef.current.onFppActiveBedDeviceChange?.(null);
           worldLayer.visible = true;
           itemsLayer.visible = true;
           for (const entry of itemMeshes.values()) {
@@ -4698,6 +5926,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       for (const entry of staffRigs.values()) disposeHumanoid3D(entry.rig);
       staffRigs.clear();
 
+      for (const eq of fppEquipBayMap.values()) eq.handle.dispose();
+      fppEquipBayMap.clear();
+      fppDropRingGeom.dispose();
+      fppDropRingMat.dispose();
+      fppDropDiscGeom.dispose();
+      fppDropDiscMat.dispose();
+      if (fppCommandRef) fppCommandRef.current = null;
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       if (composer) composer.dispose();
       if (composerRt) composerRt.dispose();
@@ -5120,14 +6355,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         dragRef.current.moved = true;
       }
       fppCamRef.current.targetYawOffset = THREE.MathUtils.clamp(
-        fppCamRef.current.targetYawOffset - ddx * 0.0040,
-        -0.85,
-        0.85
+        fppCamRef.current.targetYawOffset - ddx * 0.0044,
+        -2.6,
+        2.6
       );
       fppCamRef.current.targetPitch = THREE.MathUtils.clamp(
-        fppCamRef.current.targetPitch - ddy * 0.0032,
-        -0.30,
-        0.22
+        fppCamRef.current.targetPitch - ddy * 0.0034,
+        -0.38,
+        0.26
       );
       return;
     }
@@ -5294,6 +6529,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       dragRef.current.active = false;
       dragRef.current.draggingDraft = false;
       dragRef.current.pendingDragItem = null;
+      if (wasTap) {
+        sceneHooksRef.current?.handleFppTap(e.clientX, e.clientY);
+      }
       return;
     }
 

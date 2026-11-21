@@ -20,6 +20,7 @@ import {
   DEFAULT_PLAYER_PROFILE,
   FALLBACK_CLINICAL_CASES,
   FRIEND_CLINICS,
+  getDefaultPostureForStation,
   normalizePlayerProfile,
   SPECIALTY_META,
 } from './data/catalog';
@@ -56,6 +57,11 @@ import {
   ClinicSaveState,
   ClinicalCase,
   FloatingFeedback,
+  FppActiveDeviceState,
+  FppDeviceCommandApi,
+  FppHeldDeviceInfo,
+  FppNearbyDeviceInfo,
+  FppPatientPosture,
   FriendClinic,
   Language,
   LightingMode,
@@ -148,7 +154,12 @@ const FEMALE_SUDANESE_THOBE_LOOKS = [
 ];
 
 const EMPTY_REMOVED_TREES: string[] = [];
-const BED_STATION_SPRITES = new Set(['treatment_bed', 'traction_table', 'tilt_table']);
+const BED_STATION_SPRITES = new Set([
+  'treatment_bed',
+  'traction_table',
+  'magnetotherapy',
+  'tilt_table',
+]);
 
 const TREE_SPECIES_LABELS: Record<WorldTreeSpecies, { ar: string; en: string }> = {
   oak: { ar: 'شجرة بلوط برية', en: 'Wild Oak Tree' },
@@ -182,6 +193,11 @@ export default function App() {
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [selectedBedPatientId, setSelectedBedPatientId] = useState<string | null>(null);
   const [firstPersonPatientId, setFirstPersonPatientId] = useState<string | null>(null);
+  const [fppPosture, setFppPosture] = useState<FppPatientPosture>('sitting');
+  const [fppNearbyDevice, setFppNearbyDevice] = useState<FppNearbyDeviceInfo | null>(null);
+  const [fppHeldDevice, setFppHeldDevice] = useState<FppHeldDeviceInfo | null>(null);
+  const [fppActiveDevice, setFppActiveDevice] = useState<FppActiveDeviceState | null>(null);
+  const fppDeviceCmdRef = useRef<FppDeviceCommandApi | null>(null);
   const [fppBlinkPhase, setFppBlinkPhase] = useState<'idle' | 'closing' | 'hold' | 'opening'>('idle');
   const [fppRecenterNonce, setFppRecenterNonce] = useState(0);
   const [speakingPatientId, setSpeakingPatientId] = useState<string | null>(null);
@@ -503,13 +519,21 @@ export default function App() {
 
       if (bedStations.length === 0) return null;
 
-      const regularBeds = bedStations.filter(
-        (item) => catalogById.get(item.catalogId)?.sprite === 'treatment_bed'
-      );
-      const pool = regularBeds.length > 0 ? regularBeds : bedStations;
-
       if (patientSpecialty) {
-        const directMatches = pool.filter((item) => {
+        // 1. Prioritize specialized treatment couches/devices matching the patient's specialty
+        const specializedMatches = bedStations.filter((item) => {
+          const cat = catalogById.get(item.catalogId);
+          return (
+            cat?.sprite !== 'treatment_bed' &&
+            cat?.stationSpecialty === patientSpecialty
+          );
+        });
+        if (specializedMatches.length > 0) {
+          return specializedMatches[Math.floor(Math.random() * specializedMatches.length)];
+        }
+
+        // 2. Next prefer beds inside a matching specialty room or directly matching this specialty
+        const directMatches = bedStations.filter((item) => {
           const cat = catalogById.get(item.catalogId);
           const room = clinic.rooms.find((r) => r.id === item.roomId);
           return (
@@ -520,14 +544,13 @@ export default function App() {
         if (directMatches.length > 0) {
           return directMatches[Math.floor(Math.random() * directMatches.length)];
         }
-        const generalMatches = pool.filter(
-          (item) => catalogById.get(item.catalogId)?.stationSpecialty === 'any'
-        );
-        if (generalMatches.length > 0) {
-          return generalMatches[Math.floor(Math.random() * generalMatches.length)];
-        }
       }
 
+      // 3. Otherwise prefer regular treatment beds when available, falling back to any free bed-type station
+      const regularBeds = bedStations.filter(
+        (item) => catalogById.get(item.catalogId)?.sprite === 'treatment_bed'
+      );
+      const pool = regularBeds.length > 0 ? regularBeds : bedStations;
       return pool[Math.floor(Math.random() * pool.length)];
     },
     [clinic.placedItems, clinic.rooms, catalogById]
@@ -1883,6 +1906,7 @@ export default function App() {
           const a = nextList[i];
           if (
             a.state === 'ready_for_exam' ||
+            a.state === 'in_exam' ||
             a.state === 'in_treatment' ||
             a.isSeatedWait ||
             (a.state === 'walking_to_station' && a.path.length <= 1) ||
@@ -1893,7 +1917,13 @@ export default function App() {
           for (let j = 0; j < nextList.length; j++) {
             if (i === j) continue;
             const b = nextList[j];
-            if (b.state === 'ready_for_exam' || b.state === 'in_treatment' || b.isSeatedWait) continue;
+            if (
+              b.state === 'ready_for_exam' ||
+              b.state === 'in_exam' ||
+              b.state === 'in_treatment' ||
+              b.isSeatedWait
+            )
+              continue;
             const sx = a.gridX - b.gridX;
             const sy = a.gridY - b.gridY;
             const d = Math.hypot(sx, sy);
@@ -2067,6 +2097,9 @@ export default function App() {
           )
         );
         setFirstPersonPatientId(patientId);
+        setFppNearbyDevice(null);
+        setFppHeldDevice(null);
+        setFppActiveDevice(null);
       });
     },
     [triggerFppBlinkTransition]
@@ -2204,6 +2237,9 @@ export default function App() {
         () => {
           setFocusedPatientId(null);
           setFirstPersonPatientId(null);
+          setFppNearbyDevice(null);
+          setFppHeldDevice(null);
+          setFppActiveDevice(null);
           setSelectedBedPatientId(null);
           setSpeakingPatientId(null);
           if (speakingTimerRef.current) {
@@ -2260,6 +2296,9 @@ export default function App() {
 
     setFocusedPatientId(null);
     setFirstPersonPatientId(null);
+    setFppNearbyDevice(null);
+    setFppHeldDevice(null);
+    setFppActiveDevice(null);
     setSelectedBedPatientId(null);
     setSpeakingPatientId(null);
     if (speakingTimerRef.current) {
@@ -2865,6 +2904,21 @@ export default function App() {
     [patients, firstPersonPatientId]
   );
 
+  const firstPersonStationCat = useMemo(() => {
+    if (!firstPersonPatient?.assignedStationId) return undefined;
+    const item = clinic.placedItems.find(
+      (it) => it.instanceId === firstPersonPatient.assignedStationId
+    );
+    return item ? catalogById.get(item.catalogId) : undefined;
+  }, [firstPersonPatient?.assignedStationId, clinic.placedItems, catalogById]);
+
+  useEffect(() => {
+    setFppPosture(getDefaultPostureForStation(firstPersonStationCat?.sprite));
+    setFppNearbyDevice(null);
+    setFppHeldDevice(null);
+    setFppActiveDevice(null);
+  }, [firstPersonPatientId, firstPersonStationCat?.sprite]);
+
   const selectedBedPatient = useMemo(() => {
     if (!selectedBedPatientId) return null;
     const found = patients.find((p) => p.id === selectedBedPatientId);
@@ -2996,8 +3050,22 @@ export default function App() {
         floatingFeedbacks={floatingFeedbacks}
         focusedPatientId={focusedPatientId}
         firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
+        fppPosture={fppPosture}
+        fppActiveDevice={visitingFriend ? null : fppActiveDevice}
+        fppCommandRef={fppDeviceCmdRef}
         fppRecenterNonce={fppRecenterNonce}
         fppMoveInputRef={fppMoveInputRef}
+        onFppNearbyDeviceChange={setFppNearbyDevice}
+        onFppHeldDeviceChange={setFppHeldDevice}
+        onFppActiveBedDeviceChange={(next) => {
+          setFppActiveDevice((prev) => {
+            if (next && prev?.catalogId !== next.catalogId) {
+              soundFx.tap();
+            }
+            return next;
+          });
+        }}
+        onFppRequirePosture={setFppPosture}
         speakingPatientId={visitingFriend ? null : speakingPatientId}
         selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
         placementDraft={placementDraft}
@@ -3221,6 +3289,36 @@ export default function App() {
         <FirstPersonSessionHud
           key={firstPersonPatient.id}
           patient={firstPersonPatient}
+          stationSprite={firstPersonStationCat?.sprite}
+          stationNameEn={firstPersonStationCat?.nameEn}
+          posture={fppPosture}
+          onChangePosture={(nextPosture) => {
+            soundFx.tap();
+            setFppPosture(nextPosture);
+          }}
+          nearbyDevice={fppNearbyDevice}
+          heldDevice={fppHeldDevice}
+          activeDevice={fppActiveDevice}
+          onGrabDevice={(catalogId) => {
+            soundFx.tap();
+            fppDeviceCmdRef.current?.grabDevice(catalogId);
+          }}
+          onPlaceHeldDevice={() => {
+            soundFx.tap();
+            fppDeviceCmdRef.current?.placeHeldDevice();
+          }}
+          onReturnDevice={(catalogId) => {
+            soundFx.tap();
+            fppDeviceCmdRef.current?.returnDevice(catalogId);
+          }}
+          onUpdateActiveDevice={(next) => {
+            soundFx.tap();
+            fppDeviceCmdRef.current?.updateActiveBedDevice(next);
+          }}
+          onCloseActiveDevice={() => {
+            soundFx.tap();
+            setFppActiveDevice(null);
+          }}
           language={clinic.language}
           lightingMode={lightingMode}
           moveInputRef={fppMoveInputRef}
@@ -3233,6 +3331,9 @@ export default function App() {
             soundFx.tap();
             triggerFppBlinkTransition(() => {
               setFirstPersonPatientId(null);
+              setFppNearbyDevice(null);
+              setFppHeldDevice(null);
+              setFppActiveDevice(null);
               setSpeakingPatientId(null);
               if (speakingTimerRef.current) {
                 clearTimeout(speakingTimerRef.current);
@@ -3582,7 +3683,24 @@ export default function App() {
                     lightingMode === 'night' ? 'text-emerald-300' : 'text-emerald-700'
                   }`}
                 >
-                  {isAr ? 'جالس على السرير — ' : 'Seated on bed — '}
+                  {(() => {
+                    const st = selectedBedPatient.assignedStationId
+                      ? clinic.placedItems.find(
+                          (it) => it.instanceId === selectedBedPatient.assignedStationId
+                        )
+                      : undefined;
+                    const spr = st ? catalogById.get(st.catalogId)?.sprite : undefined;
+                    if (spr === 'magnetotherapy') {
+                      return isAr ? 'جالس على جهاز المغناطيسية — ' : 'Seated on PEMF Magneto — ';
+                    }
+                    if (spr === 'traction_table') {
+                      return isAr ? 'جالس على طاولة الشد — ' : 'Seated on Traction Table — ';
+                    }
+                    if (spr === 'tilt_table') {
+                      return isAr ? 'جالس على طاولة الإمالة — ' : 'Seated on Tilt Table — ';
+                    }
+                    return isAr ? 'جالس على السرير — ' : 'Seated on bed — ';
+                  })()}
                   {isAr
                     ? selectedBedPatient.clinicalCase.chiefComplaintAr
                     : selectedBedPatient.clinicalCase.chiefComplaintEn}

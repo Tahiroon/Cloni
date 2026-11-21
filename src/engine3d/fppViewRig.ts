@@ -11,6 +11,17 @@ export interface FppBackdropHandle {
   dispose: () => void;
 }
 
+export interface FppHandGripTarget {
+  active: boolean;
+  style: 'pole' | 'bar' | 'crate';
+  leftX: number;
+  leftY: number;
+  leftZ: number;
+  rightX: number;
+  rightY: number;
+  rightZ: number;
+}
+
 export interface FppClinicianHandsHandle {
   group: THREE.Group;
   leftArm: THREE.Group;
@@ -21,7 +32,8 @@ export interface FppClinicianHandsHandle {
     walkBob: number,
     timeSec: number,
     isSpeakingOrExam: boolean,
-    aspect?: number
+    aspect?: number,
+    gripTarget?: FppHandGripTarget
   ) => void;
   dispose: () => void;
 }
@@ -92,48 +104,48 @@ function createWallEngravingTextures(maxAniso: number): {
       ctx.fillText(arName, startX + totalW, 390 + offsetY);
     };
 
-    // Subtle crisp lower wall-lip highlight (simulating light catching the bottom edge of engraved letters)
+    // Soft clean wall-plaster recess bevel without milky washout
     drawTextPass(
       cCtx,
-      'rgba(255, 255, 255, 0.78)',
-      'rgba(255, 255, 255, 0.7)',
-      'rgba(255, 255, 255, 0.78)',
-      'rgba(255, 255, 255, 0.6)',
+      'rgba(255, 255, 255, 0.34)',
+      'rgba(255, 255, 255, 0.28)',
+      'rgba(255, 255, 255, 0.34)',
+      'rgba(255, 255, 255, 0.24)',
       0,
-      3.8
+      2.2
     );
 
-    // Subtle deep carved upper recess shadow inside the plaster wall
+    // Crisp recessed shadow rim for high contrast depth
     drawTextPass(
       cCtx,
-      'rgba(10, 32, 58, 0.48)',
-      'rgba(10, 32, 58, 0.42)',
-      'rgba(10, 32, 58, 0.48)',
-      'rgba(10, 32, 58, 0.36)',
+      'rgba(2, 10, 22, 0.72)',
+      'rgba(2, 10, 22, 0.65)',
+      'rgba(2, 10, 22, 0.72)',
+      'rgba(2, 10, 22, 0.55)',
       0,
-      -3.4
+      -2.4
     );
 
-    // Rich azure-cobalt inlaid lettering directly on the wall
+    // Deep dark obsidian-navy inlaid typography for crisp legibility on bright wall
     const titleGrad = cCtx.createLinearGradient(352, 112, 1696, 256);
-    titleGrad.addColorStop(0, '#075985');
-    titleGrad.addColorStop(0.5, '#0284c7');
-    titleGrad.addColorStop(1, '#0369a1');
+    titleGrad.addColorStop(0, '#041426');
+    titleGrad.addColorStop(0.5, '#07223e');
+    titleGrad.addColorStop(1, '#041426');
 
     const lineGrad = cCtx.createLinearGradient(W / 2 - 368, 0, W / 2 + 368, 0);
-    lineGrad.addColorStop(0, 'rgba(14, 165, 233, 0.15)');
-    lineGrad.addColorStop(0.5, '#0ea5e9');
-    lineGrad.addColorStop(1, 'rgba(14, 165, 233, 0.15)');
+    lineGrad.addColorStop(0, 'rgba(7, 34, 62, 0.18)');
+    lineGrad.addColorStop(0.5, '#072b4d');
+    lineGrad.addColorStop(1, 'rgba(7, 34, 62, 0.18)');
 
     const nameGrad = cCtx.createLinearGradient(672, 336, 1472, 448);
-    nameGrad.addColorStop(0, '#0369a1');
-    nameGrad.addColorStop(0.55, '#0284c7');
-    nameGrad.addColorStop(1, '#0ea5e9');
+    nameGrad.addColorStop(0, '#041426');
+    nameGrad.addColorStop(0.55, '#082c4e');
+    nameGrad.addColorStop(1, '#04182e');
 
-    drawTextPass(cCtx, titleGrad, '#1e3a5f', nameGrad, lineGrad, 0, 0);
+    drawTextPass(cCtx, titleGrad, '#091524', nameGrad, lineGrad, 0, 0);
 
-    // Matching negative-engraving bump map (dark strokes = recessed into the wall)
-    drawTextPass(bCtx, '#242424', '#3f3f3f', '#242424', '#484848', 0, 0);
+    // Deeper negative-engraving bump map (dark strokes = recessed into the wall)
+    drawTextPass(bCtx, '#161616', '#282828', '#161616', '#303030', 0, 0);
   }
 
   const aniso = Math.min(16, Math.max(4, maxAniso || 4));
@@ -187,8 +199,8 @@ function applyWallPanelAoShader(
         float hNorm = clamp((vFppLocalPos.y + uHalfH) / max(0.01, uHalfH * 2.0), 0.0, 1.0);
         float botShade = mix(1.0 - uBotAo, 1.0, smoothstep(0.0, 0.14, hNorm));
         float topShade = mix(1.0 - uTopAo, 1.0, smoothstep(0.0, 0.16, 1.0 - hNorm));
-        float endDist = max(0.0, 2.7 - abs(vFppLocalPos.x));
-        float cornerShade = mix(1.0 - uCornerAo, 1.0, smoothstep(0.0, 0.34, endDist));
+        float endDist = max(0.0, 3.4 - abs(vFppLocalPos.x));
+        float cornerShade = mix(1.0 - uCornerAo, 1.0, smoothstep(0.0, 0.36, endDist));
         diffuseColor.rgb *= botShade * topShade * cornerShade;`
       );
   };
@@ -233,9 +245,9 @@ function applyFloorRoomAoShader(
         float dzWall = max(0.0, uHalfD - abs(vFppFloorLocal.y));
         float wallDist = min(dxWall, dzWall);
         float wallAo = mix(0.78, 1.0, smoothstep(0.0, 0.42, wallDist));
-        vec2 bedOffset = vec2(vFppFloorLocal.x, vFppFloorLocal.y + (${centerZ.toFixed(3)}));
-        float bedShadowDist = length(vec2(bedOffset.x * 0.86, bedOffset.y * 1.15));
-        float bedContactAo = mix(0.84, 1.0, smoothstep(0.32, 1.38, bedShadowDist));
+        vec2 bedOffset = vec2(vFppFloorLocal.x, vFppFloorLocal.y - (${(centerZ + 0.25).toFixed(3)}));
+        float bedShadowDist = length(vec2(bedOffset.x * 0.78, bedOffset.y * 1.12));
+        float bedContactAo = mix(0.82, 1.0, smoothstep(0.38, 1.44, bedShadowDist));
         diffuseColor.rgb *= wallAo * bedContactAo;`
       );
   };
@@ -294,24 +306,24 @@ export function createFppRoomBackdrop3D(
   };
 
   // High-resolution textures specifically scaled for close-up examination bay walls & surfaces
-  const fppPlasterAlbedo = cloneTex(textures.plasterAlbedo, 4.6, 2.2);
-  const fppStuccoBump = cloneTex(textures.stuccoBump, 4.6, 2.2);
-  const fppPlasterRough = cloneTex(textures.plasterRough, 4.6, 2.2);
+  const fppPlasterAlbedo = cloneTex(textures.plasterAlbedo, 5.4, 2.2);
+  const fppStuccoBump = cloneTex(textures.stuccoBump, 5.4, 2.2);
+  const fppPlasterRough = cloneTex(textures.plasterRough, 5.4, 2.2);
 
-  const fppWainscotAlbedo = cloneTex(textures.wainscotAlbedo, 6.0, 1.0);
-  const fppWainscotBump = cloneTex(textures.wainscotBump, 6.0, 1.0);
+  const fppWainscotAlbedo = cloneTex(textures.wainscotAlbedo, 7.2, 1.0);
+  const fppWainscotBump = cloneTex(textures.wainscotBump, 7.2, 1.0);
 
   const fppWoodColor = cloneTex(textures.wood, 1.1, 2.4);
   const fppWoodBump = cloneTex(textures.woodBump, 1.1, 2.4);
 
   const fppMetalBump = cloneTex(textures.brushedMetalBump, 3.5, 1.5);
 
-  const roomW = 5.4;
-  const backZ = -0.84;
-  const frontZ = 2.96;
+  const roomW = 6.8;
+  const backZ = -1.24;
+  const frontZ = 3.6;
   const roomD = frontZ - backZ;
   const centerZ = (backZ + frontZ) / 2;
-  const wallH = 2.75;
+  const wallH = 2.78;
   const wainH = 0.88;
   const upperH = wallH - wainH;
 
@@ -412,23 +424,21 @@ export function createFppRoomBackdrop3D(
     new THREE.MeshStandardMaterial({
       map: wallSignColorTex,
       bumpMap: wallSignBumpTex,
-      bumpScale: 0.026,
+      bumpScale: 0.032,
       transparent: true,
-      alphaTest: 0.01,
+      alphaTest: 0.02,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
-      roughness: 0.44,
-      metalness: 0.24,
-      emissiveMap: wallSignColorTex,
-      emissive: 0x0ea5e9,
-      emissiveIntensity: 0.16,
+      roughness: 0.62,
+      metalness: 0.06,
+      envMapIntensity: 0.2,
     })
   );
 
-  const floorColorTex = cloneTex(textures.tileBlue, 3.2, 2.25);
-  const floorRoughTex = cloneTex(textures.tileBlueRough, 3.2, 2.25);
-  const floorNormTex = cloneTex(textures.tileNormal, 3.2, 2.25);
+  const floorColorTex = cloneTex(textures.tileBlue, 4.0, 2.8);
+  const floorRoughTex = cloneTex(textures.tileBlueRough, 4.0, 2.8);
+  const floorNormTex = cloneTex(textures.tileNormal, 4.0, 2.8);
 
   const floorMat = trackMat(
     new THREE.MeshPhysicalMaterial({
@@ -654,7 +664,7 @@ export function createFppRoomBackdrop3D(
   beveledSlatGeom.center();
   beveledSlatGeom.computeVertexNormals();
 
-  for (const flankX of [-1.32, 1.32]) {
+  for (const flankX of [-1.62, 1.62]) {
     const outerFrame = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(0.59, 1.59, 0.018)),
       aluminumMat
@@ -676,12 +686,12 @@ export function createFppRoomBackdrop3D(
     }
   }
 
-  // Wall-engraved typography directly on the plaster wall above the patient's shoulders
+  // Wall-engraved typography directly on the plaster wall above the patient's bed
   const wallEngraving = new THREE.Mesh(
-    trackGeom(new THREE.PlaneGeometry(1.66, 0.46)),
+    trackGeom(new THREE.PlaneGeometry(1.72, 0.48)),
     wallEngravingMat
   );
-  wallEngraving.position.set(0, 1.62, backZ + 0.036);
+  wallEngraving.position.set(0, 1.35, backZ + 0.036);
   wallEngraving.renderOrder = 1;
   group.add(wallEngraving);
 
@@ -699,25 +709,25 @@ export function createFppRoomBackdrop3D(
   group.add(coveHousing, coveBar);
 
   // Calibrated Three-Point Clinical FPP Illumination
-  const wallLight = new THREE.PointLight(0xffe9c8, 1.12, 6.2, 1.2);
+  const wallLight = new THREE.PointLight(0xffe9c8, 1.12, 8.2, 1.15);
   wallLight.castShadow = false;
-  wallLight.position.set(0, 2.26, backZ + 0.72);
+  wallLight.position.set(0, 2.28, backZ + 0.95);
   group.add(wallLight);
 
-  const roomFillLight = new THREE.PointLight(0xeef5ff, 0.88, 8.8, 1.15);
+  const roomFillLight = new THREE.PointLight(0xeef5ff, 0.92, 11.4, 1.1);
   roomFillLight.castShadow = false;
-  roomFillLight.position.set(-0.35, 2.42, 1.1);
+  roomFillLight.position.set(-0.35, 2.46, 1.2);
   group.add(roomFillLight);
 
   // Dedicated ceiling exam-bay key SpotLight casting crisp soft shadows from bed & patient onto floor
-  const examKeySpot = new THREE.SpotLight(0xfffaf0, enableShadows ? 2.45 : 1.35, 8.5, Math.PI / 2.55, 0.82, 1.1);
-  examKeySpot.position.set(0.32, wallH - 0.06, 0.65);
-  examKeySpot.target.position.set(0, 0.42, -0.04);
+  const examKeySpot = new THREE.SpotLight(0xfffaf0, enableShadows ? 2.45 : 1.38, 11.2, Math.PI / 2.2, 0.85, 1.05);
+  examKeySpot.position.set(0.32, wallH - 0.06, 0.72);
+  examKeySpot.target.position.set(0, 0.42, -0.2);
   if (enableShadows) {
     examKeySpot.castShadow = true;
     examKeySpot.shadow.mapSize.set(1024, 1024);
     examKeySpot.shadow.camera.near = 0.4;
-    examKeySpot.shadow.camera.far = 6.5;
+    examKeySpot.shadow.camera.far = 7.8;
     examKeySpot.shadow.bias = -0.00045;
     examKeySpot.shadow.normalBias = 0.016;
     examKeySpot.shadow.radius = 2.8;
@@ -726,9 +736,9 @@ export function createFppRoomBackdrop3D(
 
   const setLightFactor = (alpha: number, isNight = false) => {
     const a = THREE.MathUtils.clamp(alpha, 0, 1);
-    wallLight.intensity = a * (isNight ? 1.48 : 1.12);
-    roomFillLight.intensity = a * (isNight ? 1.18 : 0.86);
-    examKeySpot.intensity = a * (enableShadows ? (isNight ? 2.65 : 2.35) : (isNight ? 1.55 : 1.32));
+    wallLight.intensity = a * (isNight ? 1.52 : 1.14);
+    roomFillLight.intensity = a * (isNight ? 1.24 : 0.92);
+    examKeySpot.intensity = a * (enableShadows ? (isNight ? 2.68 : 2.38) : (isNight ? 1.58 : 1.36));
   };
 
   group.visible = false;
@@ -965,18 +975,57 @@ export function createFppClinicianHands3D(
 
   updateAppearance(initialProfile);
 
-  const halfHeightAtArm = 0.38 * Math.tan(THREE.MathUtils.degToRad(52 * 0.5));
+  const halfHeightAtArm = 0.38 * Math.tan(THREE.MathUtils.degToRad(60 * 0.5));
+  let holdBlend = 0;
+
+  const solveArmGripPose = (
+    side: -1 | 1,
+    tx: number,
+    ty: number,
+    tz: number,
+    style: 'pole' | 'bar' | 'crate'
+  ) => {
+    const shX = side * 0.24;
+    const shY = -0.22;
+    const shZ = 0.04;
+    const dx = tx - shX;
+    const dy = ty - shY;
+    const dz = tz - shZ;
+    const horiz = Math.max(0.12, Math.hypot(dx, dz));
+    const yaw = Math.atan2(-dx, -dz);
+    const pitch = Math.atan2(dy, horiz);
+
+    // Offset arm origin slightly back toward shoulder so palm center (-0.055 Z) clamps directly on target
+    const invLen = 1 / Math.max(0.15, Math.hypot(dx, dy, dz));
+    const backDist = 0.056;
+    const posX = tx - dx * invLen * backDist;
+    const posY = ty - dy * invLen * backDist + 0.008;
+    const posZ = tz - dz * invLen * backDist;
+
+    const roll =
+      style === 'pole'
+        ? -side * 1.12
+        : style === 'crate'
+          ? -side * 0.88
+          : -side * 0.16;
+
+    return { posX, posY, posZ, pitch, yaw, roll };
+  };
 
   const updateMotion = (
     fppSmooth: number,
     walkBob: number,
     timeSec: number,
     isSpeakingOrExam: boolean,
-    aspect = 1.6
+    aspect = 1.6,
+    gripTarget?: FppHandGripTarget
   ) => {
     const visible = fppSmooth > 0.48;
     group.visible = visible;
-    if (!visible) return;
+    if (!visible) {
+      holdBlend = 0;
+      return;
+    }
 
     const t = THREE.MathUtils.clamp((fppSmooth - 0.48) / 0.52, 0, 1);
     const easeIn = t * t * t * (t * (t * 6 - 15) + 10);
@@ -988,29 +1037,57 @@ export function createFppClinicianHands3D(
     const breath = Math.sin(timeSec * 1.75) * 0.0032;
     const walkSin = Math.sin(walkBob);
     const walkCos = Math.cos(walkBob * 2);
-    const examGesture = isSpeakingOrExam ? Math.sin(timeSec * 3.1) * 0.012 : 0;
+    const examGesture = isSpeakingOrExam && !gripTarget?.active ? Math.sin(timeSec * 3.1) * 0.012 : 0;
 
-    leftArm.position.set(
-      -armX,
-      -0.106 + dropY + breath + walkCos * 0.0038,
-      -0.38 + walkSin * 0.011
-    );
-    leftArm.rotation.set(
-      0.24 + breath * 1.6 + examGesture,
-      -0.28,
-      -0.16
-    );
+    const targetHold = gripTarget?.active ? 1 : 0;
+    holdBlend += (targetHold - holdBlend) * 0.22;
 
-    rightArm.position.set(
-      armX,
-      -0.106 + dropY + breath + walkCos * 0.0038 + Math.abs(examGesture) * 0.45,
-      -0.38 - walkSin * 0.011 - (isSpeakingOrExam ? 0.014 : 0)
-    );
-    rightArm.rotation.set(
-      0.26 + breath * 1.6 + examGesture * 1.3,
-      0.30,
-      0.16
-    );
+    const idleLX = -armX;
+    const idleLY = -0.106 + dropY + breath + walkCos * 0.0038;
+    const idleLZ = -0.38 + walkSin * 0.011;
+    const idleLPitch = 0.24 + breath * 1.6 + examGesture;
+    const idleLYaw = -0.28;
+    const idleLRoll = -0.16;
+
+    const idleRX = armX;
+    const idleRY = -0.106 + dropY + breath + walkCos * 0.0038 + Math.abs(examGesture) * 0.45;
+    const idleRZ = -0.38 - walkSin * 0.011 - (isSpeakingOrExam && !gripTarget?.active ? 0.014 : 0);
+    const idleRPitch = 0.26 + breath * 1.6 + examGesture * 1.3;
+    const idleRYaw = 0.30;
+    const idleRRoll = 0.16;
+
+    if (holdBlend > 0.01 && gripTarget) {
+      const lGrip = solveArmGripPose(-1, gripTarget.leftX, gripTarget.leftY, gripTarget.leftZ, gripTarget.style);
+      const rGrip = solveArmGripPose(1, gripTarget.rightX, gripTarget.rightY, gripTarget.rightZ, gripTarget.style);
+      const bobGripY = walkCos * 0.0028;
+
+      leftArm.position.set(
+        THREE.MathUtils.lerp(idleLX, lGrip.posX, holdBlend),
+        THREE.MathUtils.lerp(idleLY, lGrip.posY + bobGripY, holdBlend),
+        THREE.MathUtils.lerp(idleLZ, lGrip.posZ, holdBlend)
+      );
+      leftArm.rotation.set(
+        THREE.MathUtils.lerp(idleLPitch, lGrip.pitch, holdBlend),
+        THREE.MathUtils.lerp(idleLYaw, lGrip.yaw, holdBlend),
+        THREE.MathUtils.lerp(idleLRoll, lGrip.roll, holdBlend)
+      );
+
+      rightArm.position.set(
+        THREE.MathUtils.lerp(idleRX, rGrip.posX, holdBlend),
+        THREE.MathUtils.lerp(idleRY, rGrip.posY + bobGripY, holdBlend),
+        THREE.MathUtils.lerp(idleRZ, rGrip.posZ, holdBlend)
+      );
+      rightArm.rotation.set(
+        THREE.MathUtils.lerp(idleRPitch, rGrip.pitch, holdBlend),
+        THREE.MathUtils.lerp(idleRYaw, rGrip.yaw, holdBlend),
+        THREE.MathUtils.lerp(idleRRoll, rGrip.roll, holdBlend)
+      );
+    } else {
+      leftArm.position.set(idleLX, idleLY, idleLZ);
+      leftArm.rotation.set(idleLPitch, idleLYaw, idleLRoll);
+      rightArm.position.set(idleRX, idleRY, idleRZ);
+      rightArm.rotation.set(idleRPitch, idleRYaw, idleRRoll);
+    }
   };
 
   return {

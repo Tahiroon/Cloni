@@ -225,6 +225,60 @@ export type PatientState =
 
 export type CharacterPose = 'standing' | 'seated' | 'lying';
 
+export type FppPatientPosture =
+  | 'standing'
+  | 'sitting'
+  | 'supine'
+  | 'prone'
+  | 'right_side'
+  | 'left_side';
+
+export type FppTargetRegion = 'cervical' | 'shoulder' | 'lumbar' | 'knee';
+
+export type FppBedSide = 'front' | 'back';
+
+export interface FppActiveDeviceState {
+  catalogId: string;
+  sprite: SpriteKind;
+  nameEn: string;
+  nameAr: string;
+  region: FppTargetRegion;
+  side: FppBedSide;
+  closeRange: boolean;
+  isRunning: boolean;
+  placementMode: 'bed' | 'room';
+}
+
+export interface FppNearbyDeviceInfo {
+  catalogId: string;
+  sprite: SpriteKind;
+  nameEn: string;
+  nameAr: string;
+  canDeploy: boolean;
+  isActive: boolean;
+  isAdjustable: boolean;
+  supportsDistance: boolean;
+  requiredPosture?: FppPatientPosture;
+}
+
+export interface FppHeldDeviceInfo {
+  catalogId: string;
+  sprite: SpriteKind;
+  nameEn: string;
+  nameAr: string;
+  nearBed: boolean;
+  nearBedRegion?: FppTargetRegion;
+  nearBedPostureBlocked?: boolean;
+  requiredPosture?: FppPatientPosture;
+}
+
+export interface FppDeviceCommandApi {
+  grabDevice: (catalogId: string) => void;
+  placeHeldDevice: () => void;
+  returnDevice: (catalogId: string) => void;
+  updateActiveBedDevice: (next: FppActiveDeviceState) => void;
+}
+
 export interface PatientEntity {
   id: string;
   gridX: number;

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Armchair,
+  BedDouble,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -9,15 +11,34 @@ import {
   Coins,
   Eye,
   EyeOff,
+  Hand,
+  Lock,
   LogOut,
+  MoveHorizontal,
+  Pause,
+  PersonStanding,
+  Play,
   RotateCcw,
   ShieldAlert,
   Sparkles,
   Star,
   Stethoscope,
+  Undo2,
   X,
+  Zap,
 } from 'lucide-react';
-import { Language, LightingMode, PatientEntity } from '../types/clinic';
+import { getFppDeviceCapability, getPostureRulesForStation } from '../data/catalog';
+import {
+  FppActiveDeviceState,
+  FppHeldDeviceInfo,
+  FppNearbyDeviceInfo,
+  FppPatientPosture,
+  FppTargetRegion,
+  Language,
+  LightingMode,
+  PatientEntity,
+  SpriteKind,
+} from '../types/clinic';
 
 type SessionStep = 'subjective' | 'redflags' | 'objective' | 'plan' | 'summary';
 
@@ -31,6 +52,18 @@ interface PresetQuestion {
 
 interface FirstPersonSessionHudProps {
   patient: PatientEntity;
+  stationSprite?: SpriteKind;
+  stationNameEn?: string;
+  posture: FppPatientPosture;
+  onChangePosture: (posture: FppPatientPosture) => void;
+  nearbyDevice?: FppNearbyDeviceInfo | null;
+  heldDevice?: FppHeldDeviceInfo | null;
+  activeDevice?: FppActiveDeviceState | null;
+  onGrabDevice?: (catalogId: string) => void;
+  onPlaceHeldDevice?: () => void;
+  onReturnDevice?: (catalogId: string) => void;
+  onUpdateActiveDevice?: (next: FppActiveDeviceState) => void;
+  onCloseActiveDevice?: () => void;
   language: Language;
   lightingMode?: LightingMode;
   moveInputRef: React.MutableRefObject<{ x: number; y: number }>;
@@ -153,6 +186,18 @@ const VirtualJoystick: React.FC<{
 
 export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   patient,
+  stationSprite,
+  stationNameEn,
+  posture,
+  onChangePosture,
+  nearbyDevice = null,
+  heldDevice = null,
+  activeDevice = null,
+  onGrabDevice,
+  onPlaceHeldDevice,
+  onReturnDevice,
+  onUpdateActiveDevice,
+  onCloseActiveDevice,
   language,
   lightingMode = 'day',
   moveInputRef,
@@ -163,6 +208,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
 }) => {
   const [step, setStep] = useState<SessionStep>('subjective');
   const [panelHidden, setPanelHidden] = useState(false);
+  const [postureOpen, setPostureOpen] = useState(false);
+  const postureButtonRef = useRef<HTMLButtonElement | null>(null);
+  const posturePopoverRef = useRef<HTMLDivElement | null>(null);
   const [openQuestionId, setOpenQuestionId] = useState<string | null>(null);
   const [askedIds, setAskedIds] = useState<string[]>([]);
   const [speechCaption, setSpeechCaption] = useState<string | null>(null);
@@ -182,6 +230,36 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const c = patient.clinicalCase;
   const isAr = language === 'ar';
   const isNight = lightingMode === 'night';
+
+  const activeCap = useMemo(
+    () => (activeDevice ? getFppDeviceCapability(activeDevice.sprite) : null),
+    [activeDevice]
+  );
+  const postureRules = useMemo(
+    () => getPostureRulesForStation(stationSprite),
+    [stationSprite]
+  );
+
+  const activePostureRule = useMemo(
+    () => postureRules.find((r) => r.id === posture) ?? postureRules[0],
+    [postureRules, posture]
+  );
+
+  useEffect(() => {
+    if (!postureOpen) return;
+    const handleOutside = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (
+        postureButtonRef.current?.contains(target) ||
+        posturePopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setPostureOpen(false);
+    };
+    window.addEventListener('pointerdown', handleOutside);
+    return () => window.removeEventListener('pointerdown', handleOutside);
+  }, [postureOpen]);
 
   const presetQuestions = useMemo<PresetQuestion[]>(() => {
     const complaintReplyAr = `أشعر بـ${c.chiefComplaintAr}، وقد بدأت المشكلة منذ ${c.onsetAr}.`;
@@ -356,7 +434,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <div dir="ltr" className="hidden md:flex items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-300">
               <span>{c.vitals?.bp ?? '120/78'}</span>
               <span className="text-slate-600">·</span>
@@ -364,6 +442,99 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               <span className="text-slate-600">·</span>
               <span className="text-rose-400 font-bold">VAS {c.vasPain}/10</span>
             </div>
+
+            <button
+              ref={postureButtonRef}
+              type="button"
+              onClick={() => setPostureOpen((v) => !v)}
+              aria-expanded={postureOpen}
+              aria-label={isAr ? 'التحكم بوضعية المريض' : 'Patient Posture'}
+              title={isAr ? 'وضعية المريض' : 'Patient Posture'}
+              className={`h-8 px-2 sm:px-2.5 rounded-xl border flex items-center gap-1.5 text-[11px] font-extrabold transition-colors cursor-pointer ${
+                postureOpen
+                  ? 'bg-sky-500 border-sky-300 text-slate-950'
+                  : 'bg-slate-800 hover:bg-sky-600 border-white/10 text-slate-200 hover:text-white'
+              }`}
+            >
+              <PersonStanding className="w-3.5 h-3.5 shrink-0" />
+              <span dir="ltr" className="hidden sm:inline whitespace-nowrap">
+                {activePostureRule?.labelEn ?? 'Sitting'}
+              </span>
+            </button>
+
+            {postureOpen && (
+              <div
+                ref={posturePopoverRef}
+                dir="ltr"
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto fixed left-1/2 -translate-x-1/2 top-14 sm:top-16 z-50 w-[min(92vw,18.5rem)] rounded-2xl bg-slate-950/96 border border-white/15 p-3 shadow-2xl text-white"
+              >
+                <div className="flex items-center justify-between gap-2 px-0.5 pb-2 mb-2 border-b border-white/10">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-black tracking-wide text-slate-200 whitespace-nowrap">
+                      Patient Posture
+                    </span>
+                    {stationNameEn && (
+                      <span className="text-[10px] font-bold text-sky-400 truncate max-w-[8.5rem]">
+                        · {stationNameEn}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPostureOpen(false)}
+                    aria-label="Close"
+                    className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  {postureRules.map((rule) => {
+                    const isActive = rule.id === posture;
+                    const IconCmp =
+                      rule.id === 'standing'
+                        ? PersonStanding
+                        : rule.id === 'sitting'
+                          ? Armchair
+                          : BedDouble;
+                    return (
+                      <button
+                        key={rule.id}
+                        type="button"
+                        disabled={!rule.available}
+                        onClick={() => {
+                          if (!rule.available) return;
+                          onChangePosture(rule.id);
+                        }}
+                        title={!rule.available ? rule.reason : rule.labelEn}
+                        className={`rounded-xl border px-2.5 py-2 text-left transition-colors flex flex-col gap-0.5 ${
+                          !rule.available
+                            ? 'bg-slate-950/60 border-white/5 text-slate-500 opacity-60 cursor-not-allowed'
+                            : isActive
+                              ? 'bg-sky-500 border-sky-300 text-slate-950 shadow-sm cursor-pointer'
+                              : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-100 cursor-pointer'
+                        }`}
+                      >
+                        <span className="flex items-center justify-between gap-1 text-[11px] font-extrabold">
+                          <span className="flex items-center gap-1.5 truncate">
+                            <IconCmp className="w-3.5 h-3.5 shrink-0" />
+                            <span>{rule.labelEn}</span>
+                          </span>
+                          {!rule.available && <Lock className="w-2.5 h-2.5 shrink-0 text-slate-500" />}
+                        </span>
+                        {!rule.available && rule.reason && (
+                          <span className="text-[9px] leading-tight font-medium text-slate-500 truncate">
+                            {rule.reason}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {onRecenterCamera && (
               <button
@@ -452,6 +623,224 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           </div>
         )}
       </div>
+
+      {/* Direct Single "Use" Button on Proximity + "Place" Bar While Carrying + Tapped Device Controls */}
+      {!heldDevice && !activeDevice && nearbyDevice && nearbyDevice.canDeploy && (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40"
+        >
+          <button
+            type="button"
+            onClick={() => onGrabDevice?.(nearbyDevice.catalogId)}
+            className="h-10 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 border border-sky-300 text-slate-950 shadow-2xl flex items-center gap-2 text-xs font-black transition-colors cursor-pointer"
+          >
+            <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+            <span>{isAr ? 'استخدام' : 'Use'}</span>
+            <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
+              {nearbyDevice.nameEn}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {heldDevice && (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 flex flex-col items-center gap-1.5"
+        >
+          <div className="px-3 py-1 rounded-xl bg-slate-950/90 border border-white/15 text-[11px] font-bold text-slate-200 shadow-lg flex items-center gap-1.5 whitespace-nowrap">
+            <span dir="ltr" className="text-sky-300 font-black">
+              {heldDevice.nameEn}
+            </span>
+            <span className="text-slate-500">·</span>
+            {heldDevice.nearBedPostureBlocked ? (
+              <span className="text-amber-300">
+                {isAr ? 'السرير لا يدعم وضعية الجهاز' : 'Bed posture unsupported'}
+              </span>
+            ) : heldDevice.nearBed ? (
+              <span className="text-emerald-300">
+                {isAr ? `عند المريض (${heldDevice.nearBedRegion ?? ''})` : `Patient · ${heldDevice.nearBedRegion ?? ''}`}
+              </span>
+            ) : (
+              <span className="text-slate-300">
+                {isAr ? 'تحرك للمكان المطلوب ثم اضغط وضع' : 'Walk to target & tap Place'}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onPlaceHeldDevice?.()}
+              className={`h-10 px-5 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-2xl border transition-colors cursor-pointer ${
+                heldDevice.nearBed
+                  ? 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950'
+                  : 'bg-sky-500 hover:bg-sky-400 border-sky-300 text-slate-950'
+              }`}
+            >
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>
+                {heldDevice.nearBed
+                  ? isAr
+                    ? 'وضع عند المريض'
+                    : 'Place at Patient'
+                  : isAr
+                    ? 'وضع'
+                    : 'Place'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onReturnDevice?.(heldDevice.catalogId)}
+              title={isAr ? 'إرجاع لمكانه' : 'Return to standby'}
+              className="h-10 px-3 rounded-xl bg-slate-900/95 hover:bg-rose-600 border border-white/15 text-white text-xs font-bold flex items-center gap-1 shadow-xl transition-colors cursor-pointer"
+            >
+              <Undo2 className="w-3.5 h-3.5 shrink-0" />
+              <span>{isAr ? 'إرجاع' : 'Return'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!heldDevice && activeDevice && (
+        <div
+          dir="ltr"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 max-w-[95vw] rounded-2xl bg-slate-950/94 border border-sky-400/40 px-2.5 py-2 text-white shadow-2xl flex flex-wrap items-center justify-center gap-1.5"
+        >
+          <span className="text-[11px] font-black text-sky-300 px-1.5 flex items-center gap-1.5 whitespace-nowrap">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                activeDevice.isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+              }`}
+            />
+            <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>{activeDevice.nameEn}</span>
+          </span>
+
+          <button
+            type="button"
+            onClick={() =>
+              onUpdateActiveDevice?.({
+                ...activeDevice,
+                isRunning: !activeDevice.isRunning,
+              })
+            }
+            className={`h-7 px-2.5 rounded-lg text-[10px] font-black border flex items-center gap-1 transition-colors cursor-pointer ${
+              activeDevice.isRunning
+                ? 'bg-amber-500 hover:bg-amber-400 border-amber-300 text-slate-950'
+                : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950'
+            }`}
+          >
+            {activeDevice.isRunning ? (
+              <Pause className="w-3 h-3 fill-current shrink-0" />
+            ) : (
+              <Play className="w-3 h-3 fill-current shrink-0" />
+            )}
+            <span>
+              {activeDevice.isRunning
+                ? isAr
+                  ? 'إيقاف'
+                  : 'Stop'
+                : isAr
+                  ? 'تشغيل'
+                  : 'Start'}
+            </span>
+          </button>
+
+          {activeDevice.placementMode === 'bed' && activeCap?.isAdjustable && (
+            <>
+              <span className="text-slate-600" aria-hidden="true">|</span>
+              {(['cervical', 'shoulder', 'lumbar', 'knee'] as FppTargetRegion[]).map((reg) => {
+                const label =
+                  reg === 'cervical'
+                    ? 'Cervical'
+                    : reg === 'shoulder'
+                      ? 'Shoulder'
+                      : reg === 'lumbar'
+                        ? 'Lumbar'
+                        : 'Knee';
+                const isRegActive = activeDevice.region === reg;
+                return (
+                  <button
+                    key={reg}
+                    type="button"
+                    onClick={() =>
+                      onUpdateActiveDevice?.({ ...activeDevice, region: reg })
+                    }
+                    className={`h-7 px-2 rounded-lg text-[10px] font-extrabold border transition-colors cursor-pointer ${
+                      isRegActive
+                        ? 'bg-sky-500 border-sky-300 text-slate-950'
+                        : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateActiveDevice?.({
+                    ...activeDevice,
+                    side: activeDevice.side === 'front' ? 'back' : 'front',
+                  })
+                }
+                title="Switch Bed Side"
+                className="h-7 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/15 text-[10px] font-extrabold text-amber-300 flex items-center gap-1 cursor-pointer"
+              >
+                <MoveHorizontal className="w-3 h-3 shrink-0" />
+                <span>{activeDevice.side === 'front' ? 'Front Side' : 'Back Side'}</span>
+              </button>
+
+              {activeCap.supportsDistance && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateActiveDevice?.({
+                      ...activeDevice,
+                      closeRange: !activeDevice.closeRange,
+                    })
+                  }
+                  className="h-7 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/15 text-[10px] font-extrabold text-emerald-300 cursor-pointer"
+                >
+                  {activeDevice.closeRange ? 'Near' : 'Far'}
+                </button>
+              )}
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={() => onGrabDevice?.(activeDevice.catalogId)}
+            className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-slate-100 text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer"
+          >
+            <Hand className="w-3 h-3 shrink-0" />
+            <span>{isAr ? 'حمل' : 'Pick Up'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onReturnDevice?.(activeDevice.catalogId)}
+            className="h-7 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
+          >
+            <Undo2 className="w-3 h-3 shrink-0" />
+            <span>{isAr ? 'إرجاع' : 'Return'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onCloseActiveDevice?.()}
+            aria-label={isAr ? 'إغلاق' : 'Close'}
+            className="h-7 w-7 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Bottom Row: Compact Joystick + Smart End-Docked Clinical Sheet */}
       <div className="flex items-end justify-between gap-3 w-full">

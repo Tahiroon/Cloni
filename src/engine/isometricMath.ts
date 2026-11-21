@@ -971,10 +971,12 @@ export function getTreatmentBedPose(
 
   const bedCenter =
     sprite === 'tilt_table'
-      ? rotPt(0.074, 0)
+      ? { x: cx, z: cz }
       : sprite === 'traction_table'
-        ? rotPt(-0.066, 0)
-        : { x: cx, z: cz };
+        ? rotPt(-0.08, 0)
+        : sprite === 'magnetotherapy'
+          ? rotPt(-0.04, 0)
+          : { x: cx, z: cz };
 
   const evalSide = (sign: 1 | -1) => {
     const probe = rotPt(0, sign * 0.56);
@@ -1046,7 +1048,7 @@ export function getTreatmentBedPose(
 
   const edgeSign = chosen.sign;
   const edgeOffsetZ =
-    sprite === 'exercise_mat' ? 0.22 : sprite === 'treatment_bed' ? 0.24 : 0.27;
+    sprite === 'exercise_mat' ? 0.22 : sprite === 'treatment_bed' ? 0.24 : 0.25;
   const edgePt = rotPt(0, edgeSign * edgeOffsetZ);
   const edgeFacing =
     edgeSign === 1

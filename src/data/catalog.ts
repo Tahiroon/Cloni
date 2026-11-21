@@ -3,6 +3,9 @@ import {
   ClinicRoom,
   ClinicSaveState,
   ClinicalCase,
+  FppBedSide,
+  FppPatientPosture,
+  FppTargetRegion,
   FriendClinic,
   Mission,
   PlacedItem,
@@ -10,6 +13,7 @@ import {
   PlayerGender,
   PlayerOutfitId,
   RoomSpecialty,
+  SpriteKind,
   StaffMember,
 } from '../types/clinic';
 
@@ -2413,3 +2417,249 @@ export function createInitialSaveState(): ClinicSaveState {
     lastSyncedAt: null,
   };
 }
+
+export interface PostureOptionRule {
+  id: FppPatientPosture;
+  labelEn: string;
+  available: boolean;
+  reason?: string;
+}
+
+export const FPP_POSTURE_DEFS: Array<{ id: FppPatientPosture; labelEn: string }> = [
+  { id: 'standing', labelEn: 'Standing' },
+  { id: 'sitting', labelEn: 'Sitting' },
+  { id: 'supine', labelEn: 'Supine' },
+  { id: 'prone', labelEn: 'Prone' },
+  { id: 'right_side', labelEn: 'Right Side' },
+  { id: 'left_side', labelEn: 'Left Side' },
+];
+
+export function getDefaultPostureForStation(sprite?: SpriteKind): FppPatientPosture {
+  if (
+    sprite === 'treatment_bed' ||
+    sprite === 'traction_table' ||
+    sprite === 'magnetotherapy' ||
+    sprite === 'tilt_table' ||
+    sprite === 'exercise_mat' ||
+    sprite === 'exercise_bike'
+  ) {
+    return 'sitting';
+  }
+  return 'standing';
+}
+
+export function getPostureRulesForStation(sprite?: SpriteKind): PostureOptionRule[] {
+  const unavailable = (
+    id: FppPatientPosture,
+    reasons: Partial<Record<FppPatientPosture, string>>
+  ): { available: boolean; reason?: string } => {
+    const r = reasons[id];
+    return r ? { available: false, reason: r } : { available: true };
+  };
+
+  let blocked: Partial<Record<FppPatientPosture, string>> = {};
+  if (sprite === 'treatment_bed' || sprite === 'exercise_mat') {
+    blocked = {};
+  } else if (sprite === 'tilt_table') {
+    blocked = {
+      prone: 'Anterior straps restrict prone',
+      right_side: 'Requires flat plinth',
+      left_side: 'Requires flat plinth',
+    };
+  } else if (sprite === 'magnetotherapy') {
+    blocked = {
+      standing: 'Recumbent / Seated PEMF only',
+    };
+  } else if (sprite === 'traction_table') {
+    blocked = {
+      standing: 'Decompression bed only',
+      right_side: 'Harness requires Supine/Prone',
+      left_side: 'Harness requires Supine/Prone',
+    };
+  } else if (sprite === 'exercise_bike') {
+    blocked = {
+      standing: 'Cycle ergometer seat',
+      supine: 'Requires treatment bed',
+      prone: 'Requires treatment bed',
+      right_side: 'Requires treatment bed',
+      left_side: 'Requires treatment bed',
+    };
+  } else {
+    blocked = {
+      sitting: 'Requires plinth or seat',
+      supine: 'Requires treatment bed',
+      prone: 'Requires treatment bed',
+      right_side: 'Requires treatment bed',
+      left_side: 'Requires treatment bed',
+    };
+  }
+
+  return FPP_POSTURE_DEFS.map((def) => {
+    const st = unavailable(def.id, blocked);
+    return {
+      id: def.id,
+      labelEn: def.labelEn,
+      available: st.available,
+      reason: st.reason,
+    };
+  });
+}
+
+export const FPP_EXCLUDED_BED_SPRITES = new Set<SpriteKind>([
+  'treatment_bed',
+  'traction_table',
+  'magnetotherapy',
+  'tilt_table',
+  'exercise_mat',
+]);
+
+export interface FppDeviceCapability {
+  canDeploy: boolean;
+  isAdjustable: boolean;
+  supportsDistance: boolean;
+  requiredPosture?: FppPatientPosture;
+  defaultRegion: FppTargetRegion;
+  defaultSide: FppBedSide;
+  stationaryNoteEn?: string;
+  stationaryNoteAr?: string;
+}
+
+export function getFppDeviceCapability(sprite: SpriteKind): FppDeviceCapability {
+  switch (sprite) {
+    case 'infrared_lamp':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: true,
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'swd_unit':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: true,
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'tens_unit':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: false,
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'ultrasound_unit':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: false,
+        defaultRegion: 'shoulder',
+        defaultSide: 'front',
+      };
+    case 'laser_hilt':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: false,
+        defaultRegion: 'knee',
+        defaultSide: 'front',
+      };
+    case 'shockwave_eswt':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: false,
+        defaultRegion: 'knee',
+        defaultSide: 'front',
+      };
+    case 'emg_biofeedback':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: false,
+        defaultRegion: 'shoulder',
+        defaultSide: 'front',
+      };
+    case 'cryo_unit':
+      return {
+        canDeploy: true,
+        isAdjustable: true,
+        supportsDistance: false,
+        defaultRegion: 'knee',
+        defaultSide: 'front',
+      };
+    case 'cpm_device':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        requiredPosture: 'supine',
+        defaultRegion: 'knee',
+        defaultSide: 'front',
+      };
+    case 'hand_rehab_table':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        requiredPosture: 'sitting',
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'paraffin_bath':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        defaultRegion: 'shoulder',
+        defaultSide: 'front',
+      };
+    case 'hydro_sink':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'pt_toolkit_cart':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'ball_rack':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        requiredPosture: 'sitting',
+        defaultRegion: 'lumbar',
+        defaultSide: 'front',
+      };
+    case 'balance_trainer':
+      return {
+        canDeploy: true,
+        isAdjustable: false,
+        supportsDistance: false,
+        requiredPosture: 'standing',
+        defaultRegion: 'knee',
+        defaultSide: 'front',
+      };
+    default:
+      return {
+        canDeploy: false,
+        isAdjustable: false,
+        supportsDistance: false,
+        defaultRegion: 'knee',
+        defaultSide: 'front',
+        stationaryNoteEn: 'Fixed floor/wall gym station — not movable to bedside',
+        stationaryNoteAr: 'جهاز تأهيل أرضي/جداري ثابت ولا يُحرَّك إلى السرير',
+      };
+  }
+}
+
