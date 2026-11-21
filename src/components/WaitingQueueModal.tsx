@@ -141,8 +141,8 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
               }`}
             >
               {isAr
-                ? 'جميع أسرّة الفحص والعلاج مشغولة حالياً. أكمل حالة أو أضف سريراً جديداً لاستدعاء المريض التالي.'
-                : 'All treatment stations are currently occupied. Complete a case or add another bed to call the next patient.'}
+                ? 'جميع الأسرّة ممتلئة حالياً. لن يمكنك استدعاء مريض جديد حتى ينهي المرضى الحاليون جلساتهم.'
+                : 'All treatment beds are currently occupied. You cannot call a new patient until current patients finish their sessions.'}
             </div>
           )}
 
@@ -376,7 +376,7 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
                           }}
                           className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black shrink-0 cursor-pointer active:scale-95"
                         >
-                          {isAr ? 'فحص' : 'Assess'}
+                          {isAr ? 'ابدأ الجلسة' : 'Start Session'}
                         </button>
                       )}
                     </div>

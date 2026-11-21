@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BellRing, Clock, Coins, Trash2, Trees, X } from 'lucide-react';
+import { BellRing, Clock, Coins, Play, Stethoscope, Trash2, Trees, X } from 'lucide-react';
 import { BottomNavBar } from './components/BottomNavBar';
 import { BonusQuizModal } from './components/BonusQuizModal';
 import { ClinicCanvas, PlacementDraft } from './components/ClinicCanvas';
 import { ClinicalAssessmentModal } from './components/ClinicalAssessmentModal';
+import { FirstPersonSessionHud } from './components/FirstPersonSessionHud';
 import { FriendsModal } from './components/FriendsModal';
 import { MissionsModal } from './components/MissionsModal';
 import { PlayerCharacterModal } from './components/PlayerCharacterModal';
@@ -147,6 +148,7 @@ const FEMALE_SUDANESE_THOBE_LOOKS = [
 ];
 
 const EMPTY_REMOVED_TREES: string[] = [];
+const BED_STATION_SPRITES = new Set(['treatment_bed', 'traction_table', 'tilt_table']);
 
 const TREE_SPECIES_LABELS: Record<WorldTreeSpecies, { ar: string; en: string }> = {
   oak: { ar: 'شجرة بلوط برية', en: 'Wild Oak Tree' },
@@ -178,6 +180,10 @@ export default function App() {
   const [unlockTargetRoom, setUnlockTargetRoom] = useState<ClinicRoom | null>(null);
   const [selectedWorldTree, setSelectedWorldTree] = useState<WorldTreeDef | null>(null);
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
+  const [selectedBedPatientId, setSelectedBedPatientId] = useState<string | null>(null);
+  const [firstPersonPatientId, setFirstPersonPatientId] = useState<string | null>(null);
+  const [fppRecenterNonce, setFppRecenterNonce] = useState(0);
+  const [speakingPatientId, setSpeakingPatientId] = useState<string | null>(null);
   const [waitingQueueOpen, setWaitingQueueOpen] = useState(false);
   const [selectedWaitingPatientId, setSelectedWaitingPatientId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -185,6 +191,9 @@ export default function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const treatmentTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const receptionCheckedInIdsRef = useRef<Set<string>>(new Set());
+  const fppMoveInputRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialSpawnTimeRef = useRef<number | null>(null);
 
   const handleReceptionCheckinDone = useCallback((patientId: string) => {
     receptionCheckedInIdsRef.current.add(patientId);
@@ -194,6 +203,17 @@ export default function App() {
     }
   }, []);
 
+  const handlePatientSpeak = useCallback((patientId: string, durationMs = 2600) => {
+    if (speakingTimerRef.current) {
+      clearTimeout(speakingTimerRef.current);
+    }
+    setSpeakingPatientId(patientId);
+    speakingTimerRef.current = setTimeout(() => {
+      speakingTimerRef.current = null;
+      setSpeakingPatientId((cur) => (cur === patientId ? null : cur));
+    }, durationMs);
+  }, []);
+
   const lightingMode: LightingMode = clinic.lightingMode || 'day';
 
   useEffect(() => {
@@ -201,6 +221,10 @@ export default function App() {
     return () => {
       timers.forEach((t) => clearTimeout(t));
       timers.clear();
+      if (speakingTimerRef.current) {
+        clearTimeout(speakingTimerRef.current);
+        speakingTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -420,7 +444,7 @@ export default function App() {
     }));
   }, []);
 
-  // Find available treatment station in unlocked rooms, preferring devices matching the patient's specialty
+  // Find available treatment bed in unlocked rooms, strictly respecting bed capacity
   const findFreeStation = useCallback(
     (currentPatients: PatientEntity[], patientSpecialty?: RoomSpecialty): PlacedItem | null => {
       const occupiedIds = new Set(
@@ -429,17 +453,22 @@ export default function App() {
           .map((p) => p.assignedStationId!)
       );
 
-      const stations = clinic.placedItems.filter((item) => {
+      const bedStations = clinic.placedItems.filter((item) => {
         const cat = catalogById.get(item.catalogId);
-        if (!cat?.isTreatmentStation) return false;
+        if (!cat?.isTreatmentStation || !BED_STATION_SPRITES.has(cat.sprite)) return false;
         const room = clinic.rooms.find((r) => r.id === item.roomId);
         return (!room || room.unlocked) && !occupiedIds.has(item.instanceId);
       });
 
-      if (stations.length === 0) return null;
+      if (bedStations.length === 0) return null;
+
+      const regularBeds = bedStations.filter(
+        (item) => catalogById.get(item.catalogId)?.sprite === 'treatment_bed'
+      );
+      const pool = regularBeds.length > 0 ? regularBeds : bedStations;
 
       if (patientSpecialty) {
-        const directMatches = stations.filter((item) => {
+        const directMatches = pool.filter((item) => {
           const cat = catalogById.get(item.catalogId);
           const room = clinic.rooms.find((r) => r.id === item.roomId);
           return (
@@ -450,7 +479,7 @@ export default function App() {
         if (directMatches.length > 0) {
           return directMatches[Math.floor(Math.random() * directMatches.length)];
         }
-        const generalMatches = stations.filter(
+        const generalMatches = pool.filter(
           (item) => catalogById.get(item.catalogId)?.stationSpecialty === 'any'
         );
         if (generalMatches.length > 0) {
@@ -458,7 +487,7 @@ export default function App() {
         }
       }
 
-      return stations[Math.floor(Math.random() * stations.length)];
+      return pool[Math.floor(Math.random() * pool.length)];
     },
     [clinic.placedItems, clinic.rooms, catalogById]
   );
@@ -678,26 +707,48 @@ export default function App() {
 
     const spawnCheck = () => {
       setPatients((prev) => {
+        const isFirstIntroFlow = clinic.patientsTreatedTotal === 0;
+        if (isFirstIntroFlow && prev.length >= 1) {
+          if (
+            initialSpawnTimeRef.current !== null &&
+            Date.now() - initialSpawnTimeRef.current < 45000
+          ) {
+            return prev;
+          }
+        }
+
         const unlockedTreatmentWings = clinic.rooms.filter(
           (r) => r.unlocked && r.specialty !== 'reception'
         ).length;
-        const stationCount = clinic.placedItems.filter((i) => catalogById.get(i.catalogId)?.isTreatmentStation).length;
+        const bedCount = clinic.placedItems.filter((i) => {
+          const cat = catalogById.get(i.catalogId);
+          return Boolean(cat?.isTreatmentStation && BED_STATION_SPRITES.has(cat.sprite));
+        }).length;
         // Allow an active waiting lounge queue while keeping performance crisp
         const maxActive = Math.min(
           unlockedTreatmentWings >= 2 ? 5 : 4,
-          Math.max(3, stationCount + 2)
+          Math.max(3, bedCount + 2)
         );
         const activeCount = prev.filter((p) => p.state !== 'treated_leaving').length;
         if (activeCount >= maxActive) return prev;
+
+        const isInitialSinglePatient = isFirstIntroFlow && prev.length === 0;
+        if (isInitialSinglePatient && initialSpawnTimeRef.current === null) {
+          initialSpawnTimeRef.current = Date.now();
+        }
 
         const activeBaseIds = new Set(
           prev.map((p) => p.clinicalCase.id.replace(/_\d+$/, ''))
         );
         const unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
         const casePool = unseenPool.length > 0 ? unseenPool : FALLBACK_CLINICAL_CASES;
-        const fallbackCase = casePool[Math.floor(Math.random() * casePool.length)];
+        const fallbackCase = isInitialSinglePatient
+          ? FALLBACK_CLINICAL_CASES[0]
+          : casePool[Math.floor(Math.random() * casePool.length)];
         const chosenCase = { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
-        const skin = SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
+        const skin = isInitialSinglePatient
+          ? '#9e6847'
+          : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
         const receptionSpot = getReceptionCheckinSpot(prev);
         const startX = 27.9;
@@ -729,7 +780,14 @@ export default function App() {
           return pool[Math.floor(Math.random() * pool.length)];
         };
 
-        if (isFemale) {
+        if (isInitialSinglePatient) {
+          outfitStyle = 'casual';
+          shirtStyle = 'shirt';
+          shirtColor = '#bfdbfe';
+          pantsColor = '#1e293b';
+          hasHijab = false;
+          hasTurban = false;
+        } else if (isFemale) {
           hasHijab = true; // All women wear a Tarha/Hijab or Sudanese Thobe cleanly
           const thobeChance = chosenCase.age >= 48 ? 0.75 : chosenCase.age >= 28 ? 0.38 : 0.16;
           if (Math.random() < thobeChance) {
@@ -784,7 +842,9 @@ export default function App() {
         }
 
         const newPatient: PatientEntity = {
-          id: 'pat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+          id: isInitialSinglePatient
+            ? 'pat_' + Date.now() + '_a3'
+            : 'pat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
           gridX: startX,
           gridY: startY,
           targetX: receptionSpot.x,
@@ -801,7 +861,7 @@ export default function App() {
           outfitStyle,
           shirtStyle,
           heightScale,
-          hasBeard: !isFemale && chosenCase.age >= 28,
+          hasBeard: isInitialSinglePatient ? false : !isFemale && chosenCase.age >= 28,
           state: 'arriving',
           assignedStationId: null,
           waitTimer: 0,
@@ -823,6 +883,7 @@ export default function App() {
     visitingFriend,
     clinic.placedItems,
     clinic.rooms,
+    clinic.patientsTreatedTotal,
     catalogById,
     itemFootprints,
     obstacleBoxes,
@@ -1854,7 +1915,9 @@ export default function App() {
         addFloatingFeedback(
           patient.gridX,
           patient.gridY,
-          clinic.language === 'ar' ? 'لا يوجد سرير فارغ!' : 'No free station!',
+          clinic.language === 'ar'
+            ? 'جميع الأسرّة ممتلئة! أكمل الجلسة الحالية أولاً'
+            : 'All beds are full! Finish current session first',
           '#f59e0b'
         );
         return false;
@@ -1934,6 +1997,31 @@ export default function App() {
     ]
   );
 
+  const startFirstPersonSession = useCallback((patientId: string) => {
+    soundFx.tap();
+    setSelectedBedPatientId(null);
+    setSelectedWaitingPatientId(null);
+    setFocusedPatientId(null);
+    setWaitingQueueOpen(false);
+    setStoreOpen(false);
+    setMissionsOpen(false);
+    setFriendsOpen(false);
+    setSettingsOpen(false);
+    setBonusOpen(false);
+    setCharacterModalOpen(false);
+    setEditMode(false);
+    setPlacementDraft(null);
+    setActiveNavTab(null);
+    setPatients((prev) =>
+      prev.map((pt) =>
+        pt.id === patientId && pt.state === 'ready_for_exam'
+          ? { ...pt, state: 'in_exam' }
+          : pt
+      )
+    );
+    setFirstPersonPatientId(patientId);
+  }, []);
+
   // Handle tapping a patient
   const handleTapPatient = (patient: PatientEntity) => {
     if (visitingFriend) return;
@@ -1955,17 +2043,25 @@ export default function App() {
       patient.state === 'walking_to_water' ||
       patient.state === 'drinking_water'
     ) {
+      setSelectedBedPatientId(null);
       setSelectedWaitingPatientId((cur) => (cur === patient.id ? null : patient.id));
       return;
     }
 
-    if (
-      patient.state === 'ready_for_exam' ||
-      patient.state === 'in_exam' ||
-      patient.state === 'walking_to_station'
-    ) {
+    if (patient.state === 'walking_to_station') {
       setSelectedWaitingPatientId(null);
-      setFocusedPatientId(patient.id);
+      addFloatingFeedback(
+        patient.gridX,
+        patient.gridY,
+        clinic.language === 'ar' ? 'المريض في طريقه إلى السرير...' : 'Walking to treatment bed...',
+        '#38bdf8'
+      );
+      return;
+    }
+
+    if (patient.state === 'ready_for_exam' || patient.state === 'in_exam') {
+      setSelectedWaitingPatientId(null);
+      setSelectedBedPatientId((cur) => (cur === patient.id ? null : patient.id));
     }
   };
 
@@ -2042,7 +2138,7 @@ export default function App() {
     [addFloatingFeedback, bumpMission, buildPatientPath]
   );
 
-  // Complete clinical reasoning modal -> run live 3D therapy session (or immediate ER referral)
+  // Complete clinical reasoning session -> run live 3D therapy session (or immediate ER referral)
   const handleCompleteCase = (result: {
     patientId: string;
     coinsEarned: number;
@@ -2052,6 +2148,13 @@ export default function App() {
   }) => {
     const p = patients.find((pt) => pt.id === result.patientId);
     setFocusedPatientId(null);
+    setFirstPersonPatientId(null);
+    setSelectedBedPatientId(null);
+    setSpeakingPatientId(null);
+    if (speakingTimerRef.current) {
+      clearTimeout(speakingTimerRef.current);
+      speakingTimerRef.current = null;
+    }
     if (!p) return;
 
     if (p.clinicalCase.redFlagsPresent) {
@@ -2617,12 +2720,20 @@ export default function App() {
   const handleResetClinic = () => {
     treatmentTimersRef.current.forEach((t) => clearTimeout(t));
     treatmentTimersRef.current.clear();
+    if (speakingTimerRef.current) {
+      clearTimeout(speakingTimerRef.current);
+      speakingTimerRef.current = null;
+    }
+    initialSpawnTimeRef.current = null;
     const fresh = createInitialSaveState();
     fresh.language = clinic.language;
     setClinic(fresh);
     setLastSyncedAt(null);
     setPatients([]);
     setFocusedPatientId(null);
+    setSelectedBedPatientId(null);
+    setFirstPersonPatientId(null);
+    setSpeakingPatientId(null);
     setSelectedWaitingPatientId(null);
     setWaitingQueueOpen(false);
     setPlacementDraft(null);
@@ -2634,6 +2745,20 @@ export default function App() {
     () => patients.find((p) => p.id === focusedPatientId) || null,
     [patients, focusedPatientId]
   );
+
+  const firstPersonPatient = useMemo(
+    () => patients.find((p) => p.id === firstPersonPatientId) || null,
+    [patients, firstPersonPatientId]
+  );
+
+  const selectedBedPatient = useMemo(() => {
+    if (!selectedBedPatientId) return null;
+    const found = patients.find((p) => p.id === selectedBedPatientId);
+    if (!found || (found.state !== 'ready_for_exam' && found.state !== 'in_exam')) {
+      return null;
+    }
+    return found;
+  }, [patients, selectedBedPatientId]);
 
   const selectedWaitingPatient = useMemo(() => {
     if (!selectedWaitingPatientId) return null;
@@ -2663,17 +2788,17 @@ export default function App() {
         .filter((p) => p.state !== 'treated_leaving' && p.assignedStationId)
         .map((p) => p.assignedStationId!)
     );
-    const unlockedStations = clinic.placedItems.filter((item) => {
+    const unlockedBeds = clinic.placedItems.filter((item) => {
       const cat = catalogById.get(item.catalogId);
-      if (!cat?.isTreatmentStation) return false;
+      if (!cat?.isTreatmentStation || !BED_STATION_SPRITES.has(cat.sprite)) return false;
       const room = clinic.rooms.find((r) => r.id === item.roomId);
       return !room || room.unlocked;
     });
-    const free = unlockedStations.filter((st) => !occupiedIds.has(st.instanceId)).length;
+    const free = unlockedBeds.filter((st) => !occupiedIds.has(st.instanceId)).length;
     return {
       waitingPatientsCount: waiting,
       freeStationsCount: free,
-      totalStationsCount: unlockedStations.length,
+      totalStationsCount: unlockedBeds.length,
     };
   }, [patients, clinic.placedItems, clinic.rooms, catalogById]);
 
@@ -2756,6 +2881,11 @@ export default function App() {
         showPlayerCharacter={!visitingFriend}
         floatingFeedbacks={floatingFeedbacks}
         focusedPatientId={focusedPatientId}
+        firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
+        fppRecenterNonce={fppRecenterNonce}
+        fppMoveInputRef={fppMoveInputRef}
+        speakingPatientId={visitingFriend ? null : speakingPatientId}
+        selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
         placementDraft={placementDraft}
         editMode={editMode && !visitingFriend}
         isBlurred={Boolean(focusedPatient)}
@@ -2934,40 +3064,69 @@ export default function App() {
         onSellMovingDraft={handleSellMovingDraft}
       />
 
-      {/* Top HUD Cluster: Compact Student Profile (Left) & Controls (Right) */}
-      <TopHudBar
-        coins={clinic.coins}
-        stars={clinic.stars}
-        level={clinic.level || 1}
-        xp={clinic.xp || 0}
-        waitingCount={waitingPatientsCount}
-        onlineFriends={onlineFriendsCount}
-        satisfaction={clinic.satisfaction}
-        language={clinic.language}
-        lightingMode={lightingMode}
-        playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
-        visitingFriendName={
-          visitingFriend ? (isAr ? visitingFriend.nameAr : visitingFriend.nameEn) : null
-        }
-        onOpenBonus={handleOpenBonus}
-        onOpenWaitingQueue={handleOpenWaitingQueue}
-        onOpenFriends={handleOpenFriends}
-        onOpenSettings={handleOpenSettings}
-        onOpenPlayerProfile={handleOpenPlayerProfile}
-        onExitFriendVisit={handleExitFriendVisit}
-      />
+      {/* Top HUD Cluster & Bottom Navigation (hidden in First-Person Clinical Session) */}
+      {!firstPersonPatient && (
+        <>
+          <TopHudBar
+            coins={clinic.coins}
+            stars={clinic.stars}
+            level={clinic.level || 1}
+            xp={clinic.xp || 0}
+            waitingCount={waitingPatientsCount}
+            onlineFriends={onlineFriendsCount}
+            satisfaction={clinic.satisfaction}
+            language={clinic.language}
+            lightingMode={lightingMode}
+            playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
+            visitingFriendName={
+              visitingFriend ? (isAr ? visitingFriend.nameAr : visitingFriend.nameEn) : null
+            }
+            onOpenBonus={handleOpenBonus}
+            onOpenWaitingQueue={handleOpenWaitingQueue}
+            onOpenFriends={handleOpenFriends}
+            onOpenSettings={handleOpenSettings}
+            onOpenPlayerProfile={handleOpenPlayerProfile}
+            onExitFriendVisit={handleExitFriendVisit}
+          />
 
-      {/* Two-Corner Bottom Navigation (Store & Rearrange) */}
-      <BottomNavBar
-        activeTab={activeNavTab}
-        editMode={editMode && !visitingFriend}
-        language={clinic.language}
-        lightingMode={lightingMode}
-        storeAlert={canUnlockAnyRoom}
-        disabled={Boolean(visitingFriend) || Boolean(focusedPatient)}
-        onSelectTab={handleSelectNavTab}
-        onToggleEditMode={handleToggleEditMode}
-      />
+          <BottomNavBar
+            activeTab={activeNavTab}
+            editMode={editMode && !visitingFriend}
+            language={clinic.language}
+            lightingMode={lightingMode}
+            storeAlert={canUnlockAnyRoom}
+            disabled={Boolean(visitingFriend) || Boolean(focusedPatient)}
+            onSelectTab={handleSelectNavTab}
+            onToggleEditMode={handleToggleEditMode}
+          />
+        </>
+      )}
+
+      {/* First-Person Bedside Examination & Treatment HUD */}
+      {firstPersonPatient && !visitingFriend && (
+        <FirstPersonSessionHud
+          key={firstPersonPatient.id}
+          patient={firstPersonPatient}
+          language={clinic.language}
+          lightingMode={lightingMode}
+          moveInputRef={fppMoveInputRef}
+          onPatientSpeak={handlePatientSpeak}
+          onRecenterCamera={() => {
+            soundFx.tap();
+            setFppRecenterNonce((n) => n + 1);
+          }}
+          onExit={() => {
+            soundFx.tap();
+            setFirstPersonPatientId(null);
+            setSpeakingPatientId(null);
+            if (speakingTimerRef.current) {
+              clearTimeout(speakingTimerRef.current);
+              speakingTimerRef.current = null;
+            }
+          }}
+          onCompleteCase={handleCompleteCase}
+        />
+      )}
 
       {/* Store / Build / Equipment / Decor Drawer */}
       <StoreSheet
@@ -3266,6 +3425,92 @@ export default function App() {
         </div>
       )}
 
+      {/* Tapped Bed-Seated Patient Quick Start-Session Action Card */}
+      {selectedBedPatient && !firstPersonPatient && !focusedPatient && !visitingFriend && (
+        <div
+          dir={isAr ? 'rtl' : 'ltr'}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed bottom-20 sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-sm"
+        >
+          <div
+            className={`rounded-3xl border shadow-2xl p-4 ${
+              lightingMode === 'night'
+                ? 'bg-slate-900 border-emerald-400/35 text-slate-100'
+                : 'bg-white border-emerald-200 text-slate-900'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2.5">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Stethoscope className="w-4 h-4 text-emerald-500 shrink-0" />
+                  <span className="text-sm font-black truncate">
+                    {isAr
+                      ? selectedBedPatient.clinicalCase.patientNameAr
+                      : selectedBedPatient.clinicalCase.patientNameEn}
+                  </span>
+                </div>
+                <div
+                  className={`text-xs mt-0.5 truncate ${
+                    lightingMode === 'night' ? 'text-slate-300' : 'text-slate-600'
+                  }`}
+                >
+                  {selectedBedPatient.clinicalCase.age} {isAr ? 'سنة' : 'y'} ·{' '}
+                  {isAr
+                    ? SPECIALTY_META[selectedBedPatient.clinicalCase.specialty]?.nameAr ||
+                      selectedBedPatient.clinicalCase.specialty
+                    : SPECIALTY_META[selectedBedPatient.clinicalCase.specialty]?.nameEn ||
+                      selectedBedPatient.clinicalCase.specialty}
+                </div>
+                <div
+                  className={`text-[11px] mt-1 truncate ${
+                    lightingMode === 'night' ? 'text-emerald-300' : 'text-emerald-700'
+                  }`}
+                >
+                  {isAr ? 'جالس على السرير — ' : 'Seated on bed — '}
+                  {isAr
+                    ? selectedBedPatient.clinicalCase.chiefComplaintAr
+                    : selectedBedPatient.clinicalCase.chiefComplaintEn}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedBedPatientId(null)}
+                aria-label={isAr ? 'إغلاق' : 'Close'}
+                className={`p-1.5 rounded-xl shrink-0 transition-colors cursor-pointer ${
+                  lightingMode === 'night'
+                    ? 'text-slate-400 hover:bg-slate-800'
+                    : 'text-slate-400 hover:bg-slate-100'
+                }`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedBedPatientId(null)}
+                className={`px-3.5 min-h-[42px] rounded-2xl text-xs font-extrabold transition-colors cursor-pointer ${
+                  lightingMode === 'night'
+                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                {isAr ? 'إغلاق' : 'Dismiss'}
+              </button>
+              <button
+                type="button"
+                onClick={() => startFirstPersonSession(selectedBedPatient.id)}
+                className="flex-1 min-h-[42px] px-4 rounded-2xl text-xs font-black flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white shadow cursor-pointer transition-all active:scale-95"
+              >
+                <Play className="w-4 h-4 shrink-0 fill-current" />
+                <span>{isAr ? 'ابدأ الجلسة' : 'Start Session'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Smart Waiting Room Queue Manager Modal */}
       <WaitingQueueModal
         open={waitingQueueOpen && !visitingFriend}
@@ -3279,7 +3524,7 @@ export default function App() {
           callPatientToStation(patientId);
         }}
         onInspectActivePatient={(patientId) => {
-          setFocusedPatientId(patientId);
+          startFirstPersonSession(patientId);
         }}
       />
 

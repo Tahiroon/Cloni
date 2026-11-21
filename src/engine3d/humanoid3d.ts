@@ -47,10 +47,75 @@ export interface HumanoidRig {
   handCup?: THREE.Group;
   handFile?: THREE.Group;
   blinkLids?: [THREE.Mesh, THREE.Mesh];
+  mouthLower?: THREE.Mesh;
+  mouthSeam?: THREE.Mesh;
   isSkinnedGlb: boolean;
   hipHeight?: number;
   heightScale?: number;
   bones?: Record<string, SkinnedBoneRef>;
+}
+
+let cachedIrisTex: THREE.CanvasTexture | null = null;
+function getIrisTexture(): THREE.CanvasTexture {
+  if (cachedIrisTex) return cachedIrisTex;
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  const cx = 128;
+  const cy = 128;
+  const r = 124;
+
+  ctx.clearRect(0, 0, 256, 256);
+
+  // Outer limbal ring + base dark warm hazel-brown iris
+  const baseGrad = ctx.createRadialGradient(cx, cy, r * 0.28, cx, cy, r);
+  baseGrad.addColorStop(0, '#5a361d');
+  baseGrad.addColorStop(0.32, '#4d2c18');
+  baseGrad.addColorStop(0.74, '#321b0f');
+  baseGrad.addColorStop(0.92, '#1d100a');
+  baseGrad.addColorStop(1, '#140b07');
+  ctx.fillStyle = baseGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Organic radial iris stroma fibers
+  for (let i = 0; i < 160; i++) {
+    const a = (i / 160) * Math.PI * 2 + Math.sin(i * 3.7) * 0.04;
+    const innerR = r * (0.34 + (i % 5) * 0.025);
+    const outerR = r * (0.86 + ((i * 7) % 4) * 0.022);
+    ctx.strokeStyle =
+      i % 3 === 0 ? 'rgba(138, 89, 50, 0.34)' : i % 2 === 0 ? 'rgba(92, 54, 28, 0.38)' : 'rgba(34, 18, 10, 0.42)';
+    ctx.lineWidth = i % 4 === 0 ? 2.2 : 1.3;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * innerR, cy + Math.sin(a) * innerR);
+    ctx.lineTo(cx + Math.cos(a + 0.02) * outerR, cy + Math.sin(a + 0.02) * outerR);
+    ctx.stroke();
+  }
+
+  // Subtle warm collarette ring around pupil
+  ctx.strokeStyle = 'rgba(148, 96, 52, 0.36)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Deep natural pupil with soft anti-aliased edge
+  const pupilGrad = ctx.createRadialGradient(cx, cy, r * 0.24, cx, cy, r * 0.34);
+  pupilGrad.addColorStop(0, '#070606');
+  pupilGrad.addColorStop(0.84, '#090707');
+  pupilGrad.addColorStop(1, 'rgba(9, 7, 7, 0)');
+  ctx.fillStyle = pupilGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.34, 0, Math.PI * 2);
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  cachedIrisTex = tex;
+  return tex;
 }
 
 let sharedGeomPool: {
@@ -58,11 +123,11 @@ let sharedGeomPool: {
   selectRing: THREE.RingGeometry;
   hitCyl: THREE.CylinderGeometry;
   sclera: THREE.SphereGeometry;
-  iris: THREE.SphereGeometry;
-  pupil: THREE.SphereGeometry;
+  iris: THREE.CircleGeometry;
   catchlight: THREE.SphereGeometry;
   blinkLid: THREE.SphereGeometry;
   upperLid: THREE.TorusGeometry;
+  lowerLid: THREE.TorusGeometry;
   lashFemale: THREE.TorusGeometry;
   lashMale: THREE.TorusGeometry;
   browFemaleL: THREE.TubeGeometry;
@@ -94,32 +159,32 @@ function getSharedHumanoidGeoms() {
   if (sharedGeomPool) return sharedGeomPool;
   const makeBrowTube = (side: -1 | 1, isFem: boolean) => {
     const ex = isFem ? 0.0462 : 0.0443;
-    const by = isFem ? 0.1165 : 0.1205;
-    const bz = isFem ? 0.1615 : 0.1605;
+    const by = isFem ? 0.1165 : 0.1202;
+    const bz = isFem ? 0.1605 : 0.1592;
     const curve = new THREE.CatmullRomCurve3([
       new THREE.Vector3(side * (ex - 0.017), by - 0.001, bz + 0.002),
-      new THREE.Vector3(side * ex, by + (isFem ? 0.0042 : 0.0022), bz + 0.003),
-      new THREE.Vector3(side * (ex + 0.018), by - 0.002, bz - 0.005),
+      new THREE.Vector3(side * ex, by + (isFem ? 0.0040 : 0.0020), bz + 0.003),
+      new THREE.Vector3(side * (ex + 0.018), by - 0.0022, bz - 0.005),
     ]);
-    return new THREE.TubeGeometry(curve, 10, isFem ? 0.0032 : 0.0044, 8, false);
+    return new THREE.TubeGeometry(curve, 12, isFem ? 0.0028 : 0.0038, 8, false);
   };
   sharedGeomPool = {
     contactShadowPlane: new THREE.PlaneGeometry(0.68, 0.68),
     selectRing: new THREE.RingGeometry(0.25, 0.32, 24),
     hitCyl: new THREE.CylinderGeometry(0.3, 0.3, 1.15, 10),
-    sclera: new THREE.SphereGeometry(0.0138, 16, 12),
-    iris: new THREE.SphereGeometry(0.0078, 14, 10),
-    pupil: new THREE.SphereGeometry(0.0042, 10, 8),
-    catchlight: new THREE.SphereGeometry(0.0017, 6, 6),
-    blinkLid: new THREE.SphereGeometry(0.0145, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.52),
-    upperLid: new THREE.TorusGeometry(0.0136, 0.0034, 8, 16, Math.PI * 0.92),
-    lashFemale: new THREE.TorusGeometry(0.0132, 0.0022, 8, 16, Math.PI * 0.88),
-    lashMale: new THREE.TorusGeometry(0.0132, 0.0015, 8, 16, Math.PI * 0.88),
+    sclera: new THREE.SphereGeometry(0.0136, 18, 14),
+    iris: new THREE.CircleGeometry(0.0074, 24),
+    catchlight: new THREE.SphereGeometry(0.0013, 6, 6),
+    blinkLid: new THREE.SphereGeometry(0.0143, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    upperLid: new THREE.TorusGeometry(0.0134, 0.0028, 8, 18, Math.PI * 0.92),
+    lowerLid: new THREE.TorusGeometry(0.0130, 0.0018, 8, 16, Math.PI * 0.84),
+    lashFemale: new THREE.TorusGeometry(0.0132, 0.0020, 8, 16, Math.PI * 0.88),
+    lashMale: new THREE.TorusGeometry(0.0132, 0.0013, 8, 16, Math.PI * 0.88),
     browFemaleL: makeBrowTube(-1, true),
     browFemaleR: makeBrowTube(1, true),
     browMaleL: makeBrowTube(-1, false),
     browMaleR: makeBrowTube(1, false),
-    nostril: new THREE.SphereGeometry(0.0034, 8, 6),
+    nostril: new THREE.SphereGeometry(0.0025, 8, 6),
     cupBody: new THREE.CylinderGeometry(0.036, 0.025, 0.085, 16),
     cupRim: new THREE.TorusGeometry(0.036, 0.004, 8, 18),
     cupWater: new THREE.CylinderGeometry(0.032, 0.029, 0.016, 16),
@@ -148,7 +213,6 @@ let sharedFixedMats: {
   invisibleMat: THREE.MeshStandardMaterial;
   sclera: THREE.MeshPhysicalMaterial;
   iris: THREE.MeshPhysicalMaterial;
-  pupil: THREE.MeshBasicMaterial;
   catchlight: THREE.MeshBasicMaterial;
   lash: THREE.MeshStandardMaterial;
   cupBody: THREE.MeshStandardMaterial;
@@ -176,22 +240,23 @@ function getSharedFixedMats() {
     hitInvisible: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
     invisibleMat: invis,
     sclera: new THREE.MeshPhysicalMaterial({
-      color: 0xf4efe9,
-      roughness: 0.18,
+      color: 0xf1ece5,
+      roughness: 0.16,
       metalness: 0.0,
-      clearcoat: 0.65,
-      clearcoatRoughness: 0.1,
+      clearcoat: 0.72,
+      clearcoatRoughness: 0.08,
     }),
     iris: new THREE.MeshPhysicalMaterial({
-      color: 0x351e12,
-      roughness: 0.10,
+      map: getIrisTexture(),
+      roughness: 0.06,
       metalness: 0.0,
       clearcoat: 1.0,
-      clearcoatRoughness: 0.05,
+      clearcoatRoughness: 0.04,
+      transparent: true,
+      alphaTest: 0.15,
     }),
-    pupil: new THREE.MeshBasicMaterial({ color: 0x090808 }),
     catchlight: new THREE.MeshBasicMaterial({ color: 0xffffff }),
-    lash: new THREE.MeshStandardMaterial({ color: 0x16100c, roughness: 0.55, metalness: 0.0 }),
+    lash: new THREE.MeshStandardMaterial({ color: 0x16100c, roughness: 0.58, metalness: 0.0 }),
     cupBody: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.45, metalness: 0.02 }),
     cupRim: new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.35, metalness: 0.05 }),
     cupWater: new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.18, metalness: 0.05 }),
@@ -1051,13 +1116,19 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             if (mName === 'LightBrown' || (mName === 'Suit' && isSuitBody)) {
               mat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.45);
             } else if (mName === 'Tie') {
-              if (appearance.isPlayer) {
+              if (
+                appearance.isPlayer ||
+                (!appearance.isStaff && !isFemaleLook && outfitStyle === 'casual' && medicalWear === 'none' && appearance.shirtStyle === 'shirt')
+              ) {
                 mat = sMats.invisibleMat;
               } else {
                 mat = makeClothMat(tieColorHex, appearance, 0.74, 0.52);
               }
             } else if (mName === 'White' && isSuitBody) {
-              const innerTint = appearance.isPlayer
+              const useShirtCollarTint =
+                appearance.isPlayer ||
+                (!appearance.isStaff && !isFemaleLook && outfitStyle === 'casual' && medicalWear === 'none' && appearance.shirtStyle === 'shirt');
+              const innerTint = useShirtCollarTint
                 ? shirtCol.clone().lerp(new THREE.Color(0xffffff), 0.24).getHex()
                 : contrastInnerHex;
               mat = makeClothMat(innerTint, appearance, 0.76, 0.45);
@@ -1509,7 +1580,14 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
         medAcc.add(stethTube, chestDiaphragm, earTipL, badgeCard, badgeClip, pocketPen);
         bones['Chest'].bone.add(medAcc);
-      } else if (appearance.isPlayer && outfitStyle === 'casual') {
+      } else if (
+        (appearance.isPlayer && outfitStyle === 'casual') ||
+        (!appearance.isStaff &&
+          !isFemaleLook &&
+          outfitStyle === 'casual' &&
+          medicalWear === 'none' &&
+          appearance.shirtStyle === 'shirt')
+      ) {
         // Tailored contoured shirt collar + central button placket flush outside male/female chest
         const shirtGrp = new THREE.Group();
         shirtGrp.scale.setScalar(0.01);
@@ -1739,6 +1817,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     }
 
     let blinkLids: [THREE.Mesh, THREE.Mesh] | undefined;
+    let mouthLower: THREE.Mesh | undefined;
+    let mouthSeam: THREE.Mesh | undefined;
 
     // Realistic Human Facial Anatomy + Authentic Headwear, Tarha & Contoured 3D Niqab
     if (bones['Head']) {
@@ -1748,53 +1828,57 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         faceGrp.scale.setScalar(0.01);
         const eyeX = isFemaleLook ? 0.0462 : 0.0443;
         const eyeY = isFemaleLook ? 0.1004 : 0.1082;
-        const eyeZ = isFemaleLook ? 0.1465 : 0.1450;
+        const eyeZ = isFemaleLook ? 0.1450 : 0.1438;
 
         const scleraMat = sMats.sclera;
         const irisMat = sMats.iris;
-        const pupilMat = sMats.pupil;
         const catchlightMat = sMats.catchlight;
-        const browMat = colorMat(hairCol.getHex(), 0.65, 0.0);
-        const lidMat = colorMat(darkerSkinCol.getHex(), 0.56, 0.0);
-        const blinkSkinMat = colorMat(skinCol.clone().multiplyScalar(0.9).getHex(), 0.56, 0.0);
+        const browMat = new THREE.MeshStandardMaterial({
+          color: hairCol.getHex(),
+          bumpMap: getHairStrandBump(),
+          bumpScale: 0.0022,
+          roughness: 0.68,
+          metalness: 0.0,
+        });
+        const lidMat = colorMat(skinCol.clone().multiplyScalar(0.80).getHex(), 0.54, 0.0);
+        const lowerLidMat = colorMat(skinCol.clone().multiplyScalar(0.86).getHex(), 0.56, 0.0);
+        const blinkSkinMat = colorMat(skinCol.clone().multiplyScalar(0.90).getHex(), 0.54, 0.0);
         const lashMat = sMats.lash;
         const lidList: THREE.Mesh[] = [];
 
         for (const side of [-1, 1]) {
-          // Sclera orb fitted directly into exact GLB eye socket
+          // Sclera orb nested softly into eye orbit
           const sclera = new THREE.Mesh(sGeoms.sclera, scleraMat);
           sclera.userData.sharedGlbGeom = true;
           sclera.userData.sharedGlbMat = true;
-          sclera.scale.set(1.08, 0.80, 0.82);
+          sclera.scale.set(0.98, 0.74, 0.76);
           sclera.position.set(side * eyeX, eyeY, eyeZ);
 
-          // Warm dark brown Iris + black Pupil + tiny specular catchlight
+          // Procedural hazel-brown radial iris + corneal clearcoat + crisp catchlight
           const iris = new THREE.Mesh(sGeoms.iris, irisMat);
           iris.userData.sharedGlbGeom = true;
           iris.userData.sharedGlbMat = true;
-          iris.scale.set(1.0, 1.0, 0.45);
-          iris.position.set(side * eyeX, eyeY, eyeZ + 0.0096);
-
-          const pupil = new THREE.Mesh(sGeoms.pupil, pupilMat);
-          pupil.userData.sharedGlbGeom = true;
-          pupil.userData.sharedGlbMat = true;
-          pupil.scale.set(1.0, 1.0, 0.38);
-          pupil.position.set(side * eyeX, eyeY, eyeZ + 0.0124);
+          iris.position.set(side * eyeX, eyeY, eyeZ + 0.0106);
 
           const catchlight = new THREE.Mesh(sGeoms.catchlight, catchlightMat);
           catchlight.userData.sharedGlbGeom = true;
           catchlight.userData.sharedGlbMat = true;
-          catchlight.position.set(side * eyeX + 0.0024, eyeY + 0.0024, eyeZ + 0.0135);
+          catchlight.position.set(side * eyeX + 0.0021, eyeY + 0.0021, eyeZ + 0.0110);
 
-          // Upper eyelid contour + natural lash line + animated natural blink cap
+          // Upper & lower eyelid contours + natural lash rim + blink cap
           const upperLid = new THREE.Mesh(sGeoms.upperLid, lidMat);
           upperLid.userData.sharedGlbGeom = true;
-          upperLid.position.set(side * eyeX, eyeY + 0.0022, eyeZ + 0.0068);
+          upperLid.position.set(side * eyeX, eyeY + 0.0020, eyeZ + 0.0066);
           upperLid.rotation.set(0.22, 0, Math.PI * 0.04);
+
+          const lowerLid = new THREE.Mesh(sGeoms.lowerLid, lowerLidMat);
+          lowerLid.userData.sharedGlbGeom = true;
+          lowerLid.position.set(side * eyeX, eyeY - 0.0046, eyeZ + 0.0062);
+          lowerLid.rotation.set(Math.PI - 0.24, 0, Math.PI * 0.04);
 
           const blinkLid = new THREE.Mesh(sGeoms.blinkLid, blinkSkinMat);
           blinkLid.userData.sharedGlbGeom = true;
-          blinkLid.scale.set(1.10, 0.84, 0.86);
+          blinkLid.scale.set(1.06, 0.80, 0.82);
           blinkLid.position.set(side * eyeX, eyeY, eyeZ + 0.0005);
           blinkLid.rotation.set(-0.98, 0, 0);
           lidList.push(blinkLid);
@@ -1805,7 +1889,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           );
           lashRim.userData.sharedGlbGeom = true;
           lashRim.userData.sharedGlbMat = true;
-          lashRim.position.set(side * eyeX, eyeY + 0.0008, eyeZ + 0.0092);
+          lashRim.position.set(side * eyeX, eyeY + 0.0008, eyeZ + 0.0086);
           lashRim.rotation.set(0.18, 0, Math.PI * 0.06);
 
           const browGeom = isFemaleLook
@@ -1817,71 +1901,74 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
               : sGeoms.browMaleR;
           const browMesh = new THREE.Mesh(browGeom, browMat);
           browMesh.userData.sharedGlbGeom = true;
-          browMesh.scale.set(1.0, 0.82, 0.72);
+          browMesh.scale.set(1.0, 0.72, 0.65);
 
-          faceGrp.add(sclera, iris, pupil, catchlight, upperLid, blinkLid, lashRim, browMesh);
+          faceGrp.add(sclera, iris, catchlight, upperLid, lowerLid, blinkLid, lashRim, browMesh);
         }
         if (lidList.length === 2) {
           blinkLids = [lidList[0], lidList[1]];
         }
 
         // Subtle nostril shadows under nose tip (nose tip is at z=0.177)
-        const nostrilMat = colorMat(skinCol.clone().multiplyScalar(0.56).getHex(), 0.72, 0.0);
+        const nostrilMat = colorMat(skinCol.clone().multiplyScalar(0.68).getHex(), 0.70, 0.0);
         const nostrilY = isFemaleLook ? 0.0425 : 0.0470;
-        const nostrilZ = isFemaleLook ? 0.1635 : 0.1625;
+        const nostrilZ = isFemaleLook ? 0.1630 : 0.1620;
         for (const side of [-1, 1]) {
           const nostril = new THREE.Mesh(sGeoms.nostril, nostrilMat);
           nostril.userData.sharedGlbGeom = true;
-          nostril.scale.set(1.1, 0.65, 0.75);
-          nostril.position.set(side * 0.0086, nostrilY, nostrilZ);
+          nostril.scale.set(1.05, 0.62, 0.70);
+          nostril.position.set(side * 0.0078, nostrilY, nostrilZ);
           faceGrp.add(nostril);
         }
 
-        // Sculpted natural lips aligned flush on mouthFaceZ (z=0.1545..0.1560)
+        // Sculpted natural lips aligned flush on mouthFaceZ (z=0.1545..0.1566)
         const lipHex = skinCol
           .clone()
-          .lerp(new THREE.Color(isFemaleLook ? 0x7d3f36 : 0x6b3b30), isFemaleLook ? 0.56 : 0.44)
+          .lerp(new THREE.Color(isFemaleLook ? 0x82443a : 0x6f3f34), isFemaleLook ? 0.50 : 0.36)
           .getHex();
-        const lipMat = colorMat(lipHex, isFemaleLook ? 0.40 : 0.50, 0.0);
+        const lipMat = colorMat(lipHex, isFemaleLook ? 0.38 : 0.48, 0.0);
+        const seamMat = colorMat(skinCol.clone().multiplyScalar(0.55).getHex(), 0.65, 0.0);
         const mouthY = isFemaleLook ? 0.0172 : 0.0252;
         const mouthZ = isFemaleLook ? 0.1552 : 0.1566;
         const upperLipCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(-0.018, mouthY + 0.001, mouthZ - 0.006),
-          new THREE.Vector3(-0.007, mouthY + 0.0044, mouthZ + 0.0020),
-          new THREE.Vector3(0, mouthY + 0.0028, mouthZ + 0.0026),
-          new THREE.Vector3(0.007, mouthY + 0.0044, mouthZ + 0.0020),
-          new THREE.Vector3(0.018, mouthY + 0.001, mouthZ - 0.006),
+          new THREE.Vector3(-0.018, mouthY + 0.0008, mouthZ - 0.006),
+          new THREE.Vector3(-0.007, mouthY + 0.0040, mouthZ + 0.0018),
+          new THREE.Vector3(0, mouthY + 0.0026, mouthZ + 0.0024),
+          new THREE.Vector3(0.007, mouthY + 0.0040, mouthZ + 0.0018),
+          new THREE.Vector3(0.018, mouthY + 0.0008, mouthZ - 0.006),
         ]);
-        const upperLip = new THREE.Mesh(new THREE.TubeGeometry(upperLipCurve, 14, 0.0038, 8, false), lipMat);
-        upperLip.scale.set(1.0, 0.78, 0.82);
+        const upperLip = new THREE.Mesh(new THREE.TubeGeometry(upperLipCurve, 14, 0.0035, 8, false), lipMat);
+        upperLip.scale.set(1.0, 0.76, 0.80);
 
         const lowerLipCurve = new THREE.CatmullRomCurve3([
           new THREE.Vector3(-0.015, mouthY - 0.0005, mouthZ - 0.005),
-          new THREE.Vector3(0, mouthY - 0.0044, mouthZ + 0.0028),
+          new THREE.Vector3(0, mouthY - 0.0042, mouthZ + 0.0026),
           new THREE.Vector3(0.015, mouthY - 0.0005, mouthZ - 0.005),
         ]);
         const lowerLip = new THREE.Mesh(
-          new THREE.TubeGeometry(lowerLipCurve, 12, isFemaleLook ? 0.0046 : 0.0042, 8, false),
+          new THREE.TubeGeometry(lowerLipCurve, 12, isFemaleLook ? 0.0043 : 0.0040, 8, false),
           lipMat
         );
-        lowerLip.scale.set(1.0, 0.80, 0.85);
+        lowerLip.scale.set(1.0, 0.78, 0.82);
 
-        const mouthSeam = new THREE.Mesh(
+        const mouthSeamMesh = new THREE.Mesh(
           new THREE.TubeGeometry(
             new THREE.CatmullRomCurve3([
               new THREE.Vector3(-0.017, mouthY + 0.0004, mouthZ - 0.005),
-              new THREE.Vector3(0, mouthY - 0.0004, mouthZ + 0.0034),
+              new THREE.Vector3(0, mouthY - 0.0004, mouthZ + 0.0030),
               new THREE.Vector3(0.017, mouthY + 0.0004, mouthZ - 0.005),
             ]),
             12,
-            0.0012,
+            0.0010,
             6,
             false
           ),
-          nostrilMat
+          seamMat
         );
+        mouthLower = lowerLip;
+        mouthSeam = mouthSeamMesh;
 
-        faceGrp.add(upperLip, lowerLip, mouthSeam);
+        faceGrp.add(upperLip, lowerLip, mouthSeamMesh);
         bones['Head'].bone.add(faceGrp);
       }
 
@@ -2231,12 +2318,18 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       if (appearance.hasBeard && !isFemaleLook) {
         const beardGrp = new THREE.Group();
         beardGrp.scale.setScalar(0.01);
-        const beardMat = colorMat(hairCol.getHex(), 0.86, 0.0);
-        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.056, 14, 12), beardMat);
-        chinBeard.scale.set(1.0, 0.90, 0.84);
-        chinBeard.position.set(0, 0.008, 0.116);
+        const beardMat = new THREE.MeshStandardMaterial({
+          color: hairCol.getHex(),
+          bumpMap: getHairStrandBump(),
+          bumpScale: 0.0026,
+          roughness: 0.82,
+          metalness: 0.0,
+        });
+        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.048, 14, 12), beardMat);
+        chinBeard.scale.set(1.0, 0.88, 0.80);
+        chinBeard.position.set(0, 0.008, 0.115);
         const jawBeard = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.084, 0.068, 0.048, 16, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+          new THREE.CylinderGeometry(0.082, 0.066, 0.044, 16, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
           beardMat
         );
         jawBeard.position.set(0, 0.032, 0.078);
@@ -2357,6 +2450,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       handCup,
       handFile,
       blinkLids,
+      mouthLower,
+      mouthSeam,
       isSkinnedGlb: true,
       hipHeight: measuredHipH,
       heightScale: hScale,
@@ -2468,6 +2563,8 @@ export function animateHumanoid3D(
     seatedActivity?: 'idle' | 'typing' | 'writing' | 'glance' | 'rest';
     stairClimb?: number;
     turnLean?: number;
+    lookTargetWorld?: { x: number; y: number; z: number } | null;
+    isSpeaking?: boolean;
   }
 ) {
   const {
@@ -2499,6 +2596,8 @@ export function animateHumanoid3D(
     seatedActivity = 'idle',
     stairClimb = 0,
     turnLean = 0,
+    lookTargetWorld = null,
+    isSpeaking = false,
   } = opts;
 
   // Individualized phase & cadence so people never breathe, fidget, blink, or glance in lockstep
@@ -2520,6 +2619,18 @@ export function animateHumanoid3D(
     const lidRx = THREE.MathUtils.lerp(-0.98, 0.42, blinkAmt);
     rig.blinkLids[0].rotation.x = lidRx;
     rig.blinkLids[1].rotation.x = lidRx;
+  }
+
+  const speakingActive = isSpeaking && (lieBlend ?? (pose === 'lying' ? 1 : 0)) < 0.2;
+  if (rig.mouthLower && rig.mouthSeam) {
+    if (speakingActive) {
+      const cadence = Math.max(0, Math.sin(t * 9.5) * 0.65 + Math.sin(t * 14.3) * 0.35);
+      rig.mouthLower.position.y = -cadence * 0.0040;
+      rig.mouthSeam.position.y = -cadence * 0.0014;
+    } else {
+      rig.mouthLower.position.y = 0;
+      rig.mouthSeam.position.y = 0;
+    }
   }
 
   rig.selectRing.visible = isSelected;
@@ -3206,24 +3317,45 @@ export function animateHumanoid3D(
         : Math.sin(t * 0.37) * 0.035 * (1 - activeBlend * 0.7) * (1 - pushAmt)) -
       walkTurnLean * 0.7;
 
+    let finalLookYaw = lookYaw;
+    let finalLookPitch = lookPitch;
+    if (lookTargetWorld && lie < 0.2 && !activeDrink && !activePickFile && !activePlaceFile) {
+      const dx = lookTargetWorld.x - rig.root.position.x;
+      const dz = lookTargetWorld.z - rig.root.position.z;
+      const distXZ = Math.hypot(dx, dz);
+      let dYaw = Math.atan2(dx, dz) - facingRad;
+      while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+      while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+      const clampedYaw = THREE.MathUtils.clamp(dYaw, -0.58, 0.58);
+      const eyeRefY = rig.root.position.y + 1.02 * hScale;
+      const targetPitch = THREE.MathUtils.clamp(
+        -Math.atan2(lookTargetWorld.y - eyeRefY, Math.max(0.35, distXZ)),
+        -0.28,
+        0.22
+      );
+      const speakNod = isSpeaking ? Math.sin(t * 4.4) * 0.028 : Math.sin(t * 0.7) * 0.012;
+      finalLookYaw = clampedYaw;
+      finalLookPitch = targetPitch + speakNod;
+    }
+
     const baseNeckX = activeDrink
       ? drinkNeckPitch
       : THREE.MathUtils.lerp(
           0.012 * activeBlend + (activePlaceFile ? 0.1 * placeReach : 0),
-          -0.025 + sitLookPitch * 0.25,
+          -0.025 + finalLookPitch * 0.28,
           sit
         );
-    const baseHeadX = THREE.MathUtils.lerp(lookPitch, -0.02 + lookPitch, sit);
+    const baseHeadX = THREE.MathUtils.lerp(finalLookPitch, -0.02 + finalLookPitch, sit);
     applyCharEuler(
       b['Neck'],
       THREE.MathUtils.lerp(baseNeckX, 0.045, lie),
-      THREE.MathUtils.lerp(lookYaw * 0.45, lieHeadYaw * 0.4, lie),
+      THREE.MathUtils.lerp(finalLookYaw * 0.45, lieHeadYaw * 0.4, lie),
       THREE.MathUtils.lerp(headTiltZ * 0.35, lieHeadRoll * 0.35, lie)
     );
     applyCharEuler(
       b['Head'],
       THREE.MathUtils.lerp(baseHeadX, lieHeadPitch, lie),
-      THREE.MathUtils.lerp(lookYaw, lieHeadYaw * 0.72, lie),
+      THREE.MathUtils.lerp(finalLookYaw, lieHeadYaw * 0.72, lie),
       THREE.MathUtils.lerp(headTiltZ, lieHeadRoll, lie)
     );
     return;

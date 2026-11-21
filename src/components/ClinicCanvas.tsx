@@ -18,6 +18,7 @@ import {
   CLINIC_FLOOR_ELEV,
   findGridPath,
   findNearestWalkableTile,
+  findNearestWalkableWorld,
   getCabinetApproachPoints,
   getReceptionDeskPose,
   getSurfaceElevation,
@@ -59,6 +60,10 @@ import {
   WORLD_TREES,
   WorldTreeDef,
 } from '../engine3d/models3d';
+import {
+  createFppClinicianHands3D,
+  createFppRoomBackdrop3D,
+} from '../engine3d/fppViewRig';
 import { createTextureBundle, TextureBundle } from '../engine3d/textures3d';
 import {
   CatalogItem,
@@ -97,6 +102,11 @@ interface ClinicCanvasProps {
   lightingMode?: LightingMode;
   removedTreeIds?: string[];
   selectedTreeId?: string | null;
+  firstPersonPatientId?: string | null;
+  fppRecenterNonce?: number;
+  fppMoveInputRef?: React.MutableRefObject<{ x: number; y: number }>;
+  speakingPatientId?: string | null;
+  selectedBedPatientId?: string | null;
   onTapPatient: (patient: PatientEntity) => void;
   onTapLockedRoom: (room: ClinicRoom) => void;
   onTapPlacedItem: (item: PlacedItem) => void;
@@ -209,6 +219,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   lightingMode = 'day',
   removedTreeIds = [],
   selectedTreeId = null,
+  firstPersonPatientId = null,
+  fppRecenterNonce = 0,
+  fppMoveInputRef,
+  speakingPatientId = null,
+  selectedBedPatientId = null,
   onTapPatient,
   onTapLockedRoom,
   onTapPlacedItem,
@@ -233,6 +248,32 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const hoveredEditItemIdRef = useRef<string | null>(null);
   const draggingDraftActiveRef = useRef(false);
   const liveDragDraftRef = useRef<PlacementDraft | null>(null);
+  const fppKeysRef = useRef({ w: false, a: false, s: false, d: false });
+  const fppLastPointerRef = useRef({ x: 0, y: 0 });
+  const fppCamRef = useRef({
+    activeId: null as string | null,
+    blend: 0,
+    patientX: 4.5,
+    patientZ: 16.5,
+    patientFacing: 0,
+    anchorX: 4.5,
+    anchorZ: 17.5,
+    roomMinX: 2.35,
+    roomMaxX: 21.65,
+    roomMinZ: 2.35,
+    roomMaxZ: 21.65,
+    posX: 4.5,
+    posY: 1.38,
+    posZ: 17.5,
+    baseY: 1.38,
+    baseYaw: 0,
+    yawOffset: 0,
+    targetYawOffset: 0,
+    yaw: 0,
+    pitch: -0.09,
+    targetPitch: -0.09,
+    walkBob: 0,
+  });
 
   const catalogMap = useMemo(() => {
     const map = new Map<string, CatalogItem>();
@@ -367,6 +408,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     lightingMode,
     removedTreeIds,
     selectedTreeId,
+    firstPersonPatientId,
+    fppMoveInputRef,
+    speakingPatientId,
+    selectedBedPatientId,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -394,6 +439,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     lightingMode,
     removedTreeIds,
     selectedTreeId,
+    firstPersonPatientId,
+    fppMoveInputRef,
+    speakingPatientId,
+    selectedBedPatientId,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -438,6 +487,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     getRayGroundDistSq: (rawX: number, rawZ: number) => number;
     hitTestDraftGhost: (clientX: number, clientY: number) => boolean;
     getPanVectors: () => { right: THREE.Vector3; forward: THREE.Vector3; scale: number };
+    updateFppHandsAppearance: (profile?: PlayerCharacterConfig) => void;
   } | null>(null);
 
   useEffect(() => {
@@ -487,6 +537,40 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   useEffect(() => {
     camStateRef.current.targetYaw = Math.PI / 4 + orbitStep * (Math.PI / 2);
   }, [orbitStep]);
+
+  useEffect(() => {
+    if (!firstPersonPatientId || !fppRecenterNonce) return;
+    const fpp = fppCamRef.current;
+    fpp.targetYawOffset = 0;
+    fpp.targetPitch = -0.09;
+  }, [fppRecenterNonce, firstPersonPatientId]);
+
+  useEffect(() => {
+    fppKeysRef.current = { w: false, a: false, s: false, d: false };
+    if (!firstPersonPatientId) return;
+    const updateKey = (e: KeyboardEvent, down: boolean) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const k = e.key.toLowerCase();
+      if (k === 'w' || e.key === 'ArrowUp') fppKeysRef.current.w = down;
+      else if (k === 's' || e.key === 'ArrowDown') fppKeysRef.current.s = down;
+      else if (k === 'a' || e.key === 'ArrowLeft') fppKeysRef.current.a = down;
+      else if (k === 'd' || e.key === 'ArrowRight') fppKeysRef.current.d = down;
+    };
+    const onKeyDown = (e: KeyboardEvent) => updateKey(e, true);
+    const onKeyUp = (e: KeyboardEvent) => updateKey(e, false);
+    const onBlur = () => {
+      fppKeysRef.current = { w: false, a: false, s: false, d: false };
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [firstPersonPatientId]);
 
   // Mount Three.js Perspective 3D Engine ONCE
   useEffect(() => {
@@ -638,7 +722,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const actorsLayer = new THREE.Group();
     const birdsLayer = new THREE.Group();
     const lightsLayer = new THREE.Group();
+    scene.add(camera);
     scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer, birdsLayer, lightsLayer);
+
+    const fppBackdrop = createFppRoomBackdrop3D(textures, maxAniso);
+    scene.add(fppBackdrop.group);
+    const fppHands = createFppClinicianHands3D(textures, latestRef.current.playerProfile);
+    camera.add(fppHands.group);
+    fppBackdrop.group.visible = true;
+    fppHands.group.visible = true;
+    renderer.compile(scene, camera);
+    fppBackdrop.group.visible = false;
+    fppHands.group.visible = false;
 
     // Pre-allocated PointLight Pool (capped tightly on mobile GPUs: wall-wash & lamp halos illuminate standby lights at 0 shader cost)
     const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 5 : isMobileGpu ? 7 : 9;
@@ -2193,7 +2288,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       initSceneAssets();
     }
 
-    // Pre-allocated scratch vectors
+    // Pre-allocated scratch vectors & quaternions
     const _raycaster = new THREE.Raycaster();
     const _ndc = new THREE.Vector2();
     const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.07);
@@ -2204,14 +2299,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const _camFwd = new THREE.Vector3();
     const _camRight = new THREE.Vector3();
     const _upVec = new THREE.Vector3(0, 1, 0);
+    const _fppIsoPos = new THREE.Vector3();
+    const _fppIsoQuat = new THREE.Quaternion();
+    const _fppCamPos = new THREE.Vector3();
+    const _fppCamQuat = new THREE.Quaternion();
+    const _fppEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+    const _fppLookMat = new THREE.Matrix4();
+    const _fppTargetVec = new THREE.Vector3();
 
     const updateCameraTransform = () => {
       const w = containerW;
       const h = containerH;
       const aspect = w / h;
+      let projDirty = false;
       if (Math.abs(camera.aspect - aspect) > 0.001) {
         camera.aspect = aspect;
-        camera.updateProjectionMatrix();
+        projDirty = true;
       }
       const cs = camStateRef.current;
       // Tighter architectural framing so zoom-out stays cleanly around the clinic grounds
@@ -2220,12 +2323,48 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const pitch = 0.6;
       const horiz = Math.cos(pitch) * dist;
       const vert = Math.sin(pitch) * dist;
-      camera.position.set(
+      _fppIsoPos.set(
         cs.curX + Math.sin(cs.curYaw) * horiz,
         vert,
         cs.curZ + Math.cos(cs.curYaw) * horiz
       );
-      camera.lookAt(cs.curX, 0.45, cs.curZ);
+
+      const fpp = fppCamRef.current;
+      const b = fpp.blend;
+      if (b <= 0.001) {
+        camera.position.copy(_fppIsoPos);
+        camera.lookAt(cs.curX, 0.45, cs.curZ);
+        if (Math.abs(camera.fov - 30) > 0.02 || Math.abs(camera.near - 0.5) > 0.002) {
+          camera.fov = 30;
+          camera.near = 0.5;
+          projDirty = true;
+        }
+      } else {
+        // Silky single-phase quintic dive straight into real clinic bedside FPP
+        const s = b * b * b * (b * (b * 6 - 15) + 10);
+        _fppTargetVec.set(cs.curX, 0.45, cs.curZ);
+        _fppLookMat.lookAt(_fppIsoPos, _fppTargetVec, _upVec);
+        _fppIsoQuat.setFromRotationMatrix(_fppLookMat);
+
+        _fppCamPos.set(fpp.posX, fpp.posY, fpp.posZ);
+        _fppEuler.set(fpp.pitch, fpp.yaw, 0, 'YXZ');
+        _fppCamQuat.setFromEuler(_fppEuler);
+
+        camera.position.copy(_fppIsoPos).lerp(_fppCamPos, s);
+        camera.position.y += Math.sin(Math.PI * s) * 0.42;
+        camera.quaternion.copy(_fppIsoQuat).slerp(_fppCamQuat, s);
+
+        const nextFov = THREE.MathUtils.lerp(30, 52, s);
+        const nextNear = THREE.MathUtils.lerp(0.5, 0.08, s);
+        if (Math.abs(camera.fov - nextFov) > 0.02 || Math.abs(camera.near - nextNear) > 0.002) {
+          camera.fov = nextFov;
+          camera.near = nextNear;
+          projDirty = true;
+        }
+      }
+      if (projDirty) {
+        camera.updateProjectionMatrix();
+      }
     };
 
     const screenToGrid = (clientX: number, clientY: number) => {
@@ -2506,6 +2645,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       getRayGroundDistSq,
       hitTestDraftGhost,
       getPanVectors,
+      updateFppHandsAppearance: fppHands.updateAppearance,
     };
 
     let lastComposerDpr = dpr;
@@ -2610,7 +2750,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         placedItems: curItems,
         catalogMap: cMap,
         focusedPatientId: focId,
+        firstPersonPatientId: curFppId,
+        speakingPatientId: curSpeakId,
+        selectedBedPatientId: curSelBedId,
       } = latestRef.current;
+      const fppBlendNow = fppCamRef.current.blend;
+      const fppSmoothNow =
+        fppBlendNow * fppBlendNow * fppBlendNow * (fppBlendNow * (fppBlendNow * 6 - 15) + 10);
 
       const curRooms = latestRef.current.rooms;
       const { obstacles, changed: layoutChanged } = getWalkerObstacles(
@@ -2784,6 +2930,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           entry.lastLogicalX = p.gridX;
           entry.lastLogicalZ = p.gridY;
         }
+
+        entry.rig.root.visible = true;
 
         const isAtStation =
           (p.state === 'ready_for_exam' || p.state === 'in_exam' || p.state === 'in_treatment') &&
@@ -3421,6 +3569,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         entry.rig.root.position.set(entry.visX, entry.groundY, entry.visZ);
 
+        const isFppTarget = curFppId === p.id;
         animateHumanoid3D(entry.rig, {
           pose,
           walkPhase: entry.walkPhase,
@@ -3436,7 +3585,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           facingRad: entry.facingRad,
           turnLean: entry.turnLean,
           timeSec,
-          isSelected: focId === p.id,
+          isSelected: fppSmoothNow < 0.35 && (focId === p.id || curSelBedId === p.id),
           inTreatment: p.state === 'in_treatment',
           activeGait: p.state === 'in_treatment' && isActiveGaitStation,
           isDrinking: p.state === 'drinking_water',
@@ -3444,6 +3593,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           drinkElapsedMs: p.state === 'drinking_water' ? p.waitTimer : undefined,
           actorSeed: entry.actorSeed,
           stairClimb: entry.stairClimb,
+          lookTargetWorld: isFppTarget
+            ? { x: camera.position.x, y: camera.position.y, z: camera.position.z }
+            : null,
+          isSpeaking: isFppTarget && curSpeakId === p.id,
         });
       }
 
@@ -4667,6 +4820,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         entry.turnLean = THREE.MathUtils.damp(entry.turnLean, rawTurnSt, 9.0, dt);
 
         entry.rig.root.position.set(entry.visX, entry.groundY, entry.visZ);
+        entry.rig.root.visible = !(isPlayerActor && fppSmoothNow > 0.45);
         animateHumanoid3D(entry.rig, {
           pose: shouldStaffSit ? 'seated' : 'standing',
           walkPhase: entry.walkPhase,
@@ -4720,6 +4874,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       // Sync Natural Outdoor Garden-Lane & Courtyard Walkers (fewer crowd, zero indoor clutter)
       for (let wi = 0; wi < walkerRigs.length; wi++) {
         const w = walkerRigs[wi];
+        w.rig.root.visible = true;
         const resetWalkerStall = (pause = 0.08) => {
           w.path = [];
           w.seatedMode = false;
@@ -5248,6 +5403,23 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       ctx.setTransform(targetOvW / w, 0, 0, targetOvH / h, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
+      if (fppCamRef.current.blend > 0.08) {
+        if (overlayWasNonEmpty) {
+          const wClr = Math.max(1, overlay.clientWidth || containerW);
+          const hClr = Math.max(1, overlay.clientHeight || containerH);
+          if (overlay !== cachedOverlayCanvas) {
+            cachedOverlayCanvas = overlay;
+            cachedOverlayCtx = overlay.getContext('2d');
+          }
+          if (cachedOverlayCtx) {
+            cachedOverlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+            cachedOverlayCtx.clearRect(0, 0, overlay.width || wClr, overlay.height || hClr);
+          }
+          overlayWasNonEmpty = false;
+        }
+        return;
+      }
+
       if (isEmptyOverlay) {
         overlayWasNonEmpty = false;
         return;
@@ -5543,7 +5715,174 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       lastMs = nowMs;
 
       const cs = camStateRef.current;
-      if (!latestRef.current.focusedPatientId && (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005)) {
+      const fpp = fppCamRef.current;
+      const curFppId = latestRef.current.firstPersonPatientId ?? null;
+
+      const curRoomsNow = latestRef.current.rooms;
+      const { obstacles: curObs } = getWalkerObstacles(
+        curRoomsNow,
+        latestRef.current.placedItems,
+        latestRef.current.removedTreeIds || []
+      );
+
+      if (curFppId && curFppId !== fpp.activeId) {
+        fpp.activeId = curFppId;
+        const pRig = patientRigs.get(curFppId);
+        const pObj = latestRef.current.patients.find((pt) => pt.id === curFppId);
+        const px = pRig ? pRig.visX : pObj ? pObj.gridX + 0.5 : 4.5;
+        const pz = pRig ? pRig.visZ : pObj ? pObj.gridY + 0.5 : 16.5;
+        const facing = pRig ? pRig.facingRad : 0;
+        const surfPt = getSurfaceElevation(px, pz);
+        const pfX = Math.sin(facing);
+        const pfZ = Math.cos(facing);
+
+        const ptRoom = curRoomsNow.find(
+          (r) =>
+            r.unlocked &&
+            px >= r.minX &&
+            px <= r.maxX + 1 &&
+            pz >= r.minY &&
+            pz <= r.maxY + 1
+        );
+        const roomMinX = ptRoom ? ptRoom.minX + 0.32 : 2.32;
+        const roomMaxX = ptRoom ? ptRoom.maxX + 0.68 : 21.68;
+        const roomMinZ = ptRoom ? ptRoom.minY + 0.32 : 2.32;
+        const roomMaxZ = ptRoom ? ptRoom.maxY + 0.68 : 21.68;
+
+        let anchorX = THREE.MathUtils.clamp(px + pfX * 1.08, roomMinX, roomMaxX);
+        let anchorZ = THREE.MathUtils.clamp(pz + pfZ * 1.08, roomMinZ, roomMaxZ);
+        if (!isWorldWalkable(anchorX, anchorZ, 0.22, curObs)) {
+          const safeAnchor = findNearestWalkableWorld(anchorX, anchorZ, 0.22, curObs);
+          const safeFwd = (safeAnchor.x - px) * pfX + (safeAnchor.z - pz) * pfZ;
+          if (safeFwd >= 0.48) {
+            anchorX = THREE.MathUtils.clamp(safeAnchor.x, roomMinX, roomMaxX);
+            anchorZ = THREE.MathUtils.clamp(safeAnchor.z, roomMinZ, roomMaxZ);
+          }
+        }
+
+        fpp.patientX = px;
+        fpp.patientZ = pz;
+        fpp.patientFacing = facing;
+        fpp.anchorX = anchorX;
+        fpp.anchorZ = anchorZ;
+        fpp.roomMinX = roomMinX;
+        fpp.roomMaxX = roomMaxX;
+        fpp.roomMinZ = roomMinZ;
+        fpp.roomMaxZ = roomMaxZ;
+        fpp.baseY = surfPt.floorY + 1.24;
+        fpp.posX = anchorX;
+        fpp.posZ = anchorZ;
+        fpp.posY = fpp.baseY;
+        fpp.baseYaw = Math.atan2(-(px - anchorX), -(pz - anchorZ));
+        fpp.yawOffset = 0;
+        fpp.targetYawOffset = 0;
+        fpp.yaw = fpp.baseYaw;
+        fpp.pitch = -0.09;
+        fpp.targetPitch = -0.09;
+        fpp.walkBob = 0;
+
+        fppBackdrop.group.position.set(px, surfPt.floorY, pz);
+        fppBackdrop.group.rotation.set(0, facing, 0);
+
+        cs.targetX = px;
+        cs.targetZ = pz;
+        cs.panVelX = 0;
+        cs.panVelZ = 0;
+      } else if (!curFppId && fpp.activeId) {
+        fpp.activeId = null;
+      }
+
+      const blendRate = curFppId ? dt / 0.72 : dt / 0.62;
+      if (curFppId) {
+        fpp.blend = Math.min(1, fpp.blend + blendRate);
+      } else {
+        fpp.blend = Math.max(0, fpp.blend - blendRate);
+      }
+
+      const fppSmooth =
+        fpp.blend * fpp.blend * fpp.blend * (fpp.blend * (fpp.blend * 6 - 15) + 10);
+
+      if (curFppId && fpp.blend > 0.35) {
+        // Silky clamped FPP look (never spins behind patient)
+        fpp.yawOffset = THREE.MathUtils.damp(fpp.yawOffset, fpp.targetYawOffset, 18, dt);
+        fpp.pitch = THREE.MathUtils.damp(fpp.pitch, fpp.targetPitch, 18, dt);
+        fpp.yaw = fpp.baseYaw + fpp.yawOffset;
+
+        const joy = latestRef.current.fppMoveInputRef?.current ?? { x: 0, y: 0 };
+        const keys = fppKeysRef.current;
+        let inRight = THREE.MathUtils.clamp(joy.x + (keys.d ? 1 : 0) - (keys.a ? 1 : 0), -1, 1);
+        let inFwd = THREE.MathUtils.clamp(joy.y + (keys.w ? 1 : 0) - (keys.s ? 1 : 0), -1, 1);
+        const mag = Math.hypot(inRight, inFwd);
+        if (mag > 1) {
+          inRight /= mag;
+          inFwd /= mag;
+        }
+        if (mag > 0.04) {
+          const fwdX = -Math.sin(fpp.yaw);
+          const fwdZ = -Math.cos(fpp.yaw);
+          const rightX = Math.cos(fpp.yaw);
+          const rightZ = -Math.sin(fpp.yaw);
+          const moveSpeed = 1.24;
+          const rawX = fpp.posX + (fwdX * inFwd + rightX * inRight) * moveSpeed * dt;
+          const rawZ = fpp.posZ + (fwdZ * inFwd + rightZ * inRight) * moveSpeed * dt;
+
+          // Keep clinician strictly in front of the patient & within treatment bay + real obstacle collision
+          const pfX = Math.sin(fpp.patientFacing);
+          const pfZ = Math.cos(fpp.patientFacing);
+          const prX = Math.cos(fpp.patientFacing);
+          const prZ = -Math.sin(fpp.patientFacing);
+          const relX = rawX - fpp.patientX;
+          const relZ = rawZ - fpp.patientZ;
+          let fwdDist = THREE.MathUtils.clamp(relX * pfX + relZ * pfZ, 0.50, 1.56);
+          let sideDist = THREE.MathUtils.clamp(relX * prX + relZ * prZ, -1.06, 1.06);
+          const rDist = Math.hypot(fwdDist, sideDist);
+          if (rDist < 0.76 && rDist > 0.001) {
+            const sc = 0.76 / rDist;
+            fwdDist = Math.max(0.50, fwdDist * sc);
+            sideDist *= sc;
+          } else if (rDist > 1.70) {
+            const sc = 1.70 / rDist;
+            fwdDist = Math.max(0.50, fwdDist * sc);
+            sideDist *= sc;
+          }
+
+          const candX = THREE.MathUtils.clamp(
+            fpp.patientX + pfX * fwdDist + prX * sideDist,
+            fpp.roomMinX,
+            fpp.roomMaxX
+          );
+          const candZ = THREE.MathUtils.clamp(
+            fpp.patientZ + pfZ * fwdDist + prZ * sideDist,
+            fpp.roomMinZ,
+            fpp.roomMaxZ
+          );
+          const step = resolveWorldStep(
+            fpp.posX,
+            fpp.posZ,
+            candX,
+            candZ,
+            0.22,
+            curObs
+          );
+          const stepFwd = (step.x - fpp.patientX) * pfX + (step.z - fpp.patientZ) * pfZ;
+          if (stepFwd >= 0.46) {
+            const moved = Math.hypot(step.x - fpp.posX, step.z - fpp.posZ);
+            fpp.posX = step.x;
+            fpp.posZ = step.z;
+            if (moved > 0.0008) {
+              fpp.walkBob += moved * 7.5;
+            }
+            const bobOffset = moved > 0.0005 ? Math.sin(fpp.walkBob) * 0.013 : 0;
+            fpp.posY = THREE.MathUtils.damp(fpp.posY, fpp.baseY + bobOffset, 14, dt);
+          } else {
+            fpp.posY = THREE.MathUtils.damp(fpp.posY, fpp.baseY, 12, dt);
+          }
+        } else {
+          fpp.posY = THREE.MathUtils.damp(fpp.posY, fpp.baseY, 12, dt);
+        }
+      }
+
+      if (!curFppId && !latestRef.current.focusedPatientId && (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005)) {
         cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + cs.panVelX * dt));
         cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + cs.panVelZ * dt));
         cs.panVelX = THREE.MathUtils.damp(cs.panVelX, 0, 6.5, dt);
@@ -5558,14 +5897,33 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       cs.curYaw = THREE.MathUtils.damp(cs.curYaw, cs.targetYaw, 8, dt);
       updateCameraTransform();
 
-      // Living world subtle animations & zoom-out LOD culling
+      worldLayer.visible = true;
+      itemsLayer.visible = true;
+      draftLayer.visible = true;
+      birdsLayer.visible = true;
+      lightsLayer.visible = true;
+      const showFppWall = fppSmooth > 0.58;
+      fppBackdrop.group.visible = showFppWall;
+      fppBackdrop.setLightFactor(
+        showFppWall ? THREE.MathUtils.clamp((fppSmooth - 0.58) / 0.42, 0, 1) : 0
+      );
+
       const tSec = nowMs * 0.001;
+      fppHands.updateMotion(
+        fppSmooth,
+        fpp.walkBob,
+        tSec,
+        Boolean(latestRef.current.speakingPatientId),
+        camera.aspect
+      );
+
+      const effectiveLodZoom = curFppId ? Math.max(cs.curZoom, 1.45) : cs.curZoom;
       if (worldHandle) {
         textures.waterNormal.offset.x = (tSec * 0.045) % 1;
         textures.waterNormal.offset.y = (tSec * 0.032) % 1;
-        worldHandle.setZoomLod(cs.curZoom);
+        worldHandle.setZoomLod(effectiveLodZoom);
       }
-      if (animatedFountains.length > 0 && cs.curZoom >= 0.85) {
+      if (animatedFountains.length > 0 && effectiveLodZoom >= 0.85) {
         for (let fi = 0; fi < animatedFountains.length; fi++) {
           const f = animatedFountains[fi];
           const shimmer = 0.92 + 0.1 * Math.sin(tSec * 8.5 + fi);
@@ -5583,10 +5941,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         }
       }
       updateFoliageWindTime(textures, tSec);
-      updateAmbientSongbirds(tSec, dt, cs.curZoom);
-      updateFallingLeaves(tSec, dt, cs.curZoom);
+      updateAmbientSongbirds(tSec, dt, effectiveLodZoom);
+      updateFallingLeaves(tSec, dt, effectiveLodZoom);
 
-      const showItemMicro = cs.curZoom >= 0.98;
+      const showItemMicro = effectiveLodZoom >= 0.98;
       if (showItemMicro !== lastShowItemMicro) {
         lastShowItemMicro = showItemMicro;
         itemsLayer.traverse((obj) => {
@@ -5673,6 +6031,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       if (composer) composer.dispose();
       if (composerRt) composerRt.dispose();
+      fppBackdrop.dispose();
+      fppHands.dispose();
+      camera.remove(fppHands.group);
       envTarget.dispose();
       textures.dispose();
       renderer.dispose();
@@ -5686,6 +6047,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   useEffect(() => {
     sceneHooksRef.current?.rebuildWorld(rooms, removedTreeIds);
   }, [rooms, removedTreeKey]);
+
+  useEffect(() => {
+    sceneHooksRef.current?.updateFppHandsAppearance?.(playerProfile);
+  }, [playerProfile]);
 
   useEffect(() => {
     sceneHooksRef.current?.syncItems(placedItems, placementDraft?.movingInstanceId);
@@ -5950,6 +6315,34 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (firstPersonPatientId) {
+      clearLongPress();
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointersRef.current.size === 1) {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // Ignore synthetic pointer events
+        }
+        fppLastPointerRef.current = { x: e.clientX, y: e.clientY };
+        dragRef.current = {
+          active: true,
+          moved: false,
+          draggingDraft: false,
+          pendingDragItem: null,
+          startX: e.clientX,
+          startY: e.clientY,
+          camStartX: fppCamRef.current.targetYawOffset,
+          camStartZ: fppCamRef.current.targetPitch,
+          hasGrabOffset: false,
+          grabOffX: 0,
+          grabOffZ: 0,
+        };
+      } else {
+        dragRef.current.active = false;
+      }
+      return;
+    }
     if (focusedPatientId) return;
     clearLongPress();
     if (hoverRafRef.current !== null) {
@@ -6046,6 +6439,27 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pointersRef.current.has(e.pointerId)) {
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (firstPersonPatientId) {
+      if (!dragRef.current.active) return;
+      const ddx = e.clientX - fppLastPointerRef.current.x;
+      const ddy = e.clientY - fppLastPointerRef.current.y;
+      fppLastPointerRef.current = { x: e.clientX, y: e.clientY };
+      if (Math.hypot(e.clientX - dragRef.current.startX, e.clientY - dragRef.current.startY) > 4) {
+        dragRef.current.moved = true;
+      }
+      fppCamRef.current.targetYawOffset = THREE.MathUtils.clamp(
+        fppCamRef.current.targetYawOffset - ddx * 0.0040,
+        -0.62,
+        0.62
+      );
+      fppCamRef.current.targetPitch = THREE.MathUtils.clamp(
+        fppCamRef.current.targetPitch - ddy * 0.0032,
+        -0.26,
+        0.16
+      );
+      return;
     }
 
     if (pointersRef.current.size === 2 && pinchRef.current) {
@@ -6206,6 +6620,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const activeDraft = liveDragDraftRef.current || placementDraft;
     liveDragDraftRef.current = null;
 
+    if (firstPersonPatientId) {
+      dragRef.current.active = false;
+      dragRef.current.draggingDraft = false;
+      dragRef.current.pendingDragItem = null;
+      return;
+    }
+
     if (wasTap) {
       handleTap(e.clientX, e.clientY);
     } else if (wasDraggingDraft && activeDraft) {
@@ -6223,7 +6644,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (focusedPatientId) return;
+    if (focusedPatientId || firstPersonPatientId) return;
     const cs = camStateRef.current;
     const curZoom = cs.targetZoom;
     const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZoom - e.deltaY * 0.0008));
@@ -6289,7 +6710,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       </div>
 
       {/* Minimal Corner Center-Camera Control (safely above Store button) */}
-      {!focusedPatientId && (
+      {!focusedPatientId && !firstPersonPatientId && (
         <div className="absolute left-3.5 bottom-20 z-20 flex flex-col gap-2">
           <button
             type="button"
