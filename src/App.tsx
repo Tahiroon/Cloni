@@ -182,6 +182,7 @@ export default function App() {
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [selectedBedPatientId, setSelectedBedPatientId] = useState<string | null>(null);
   const [firstPersonPatientId, setFirstPersonPatientId] = useState<string | null>(null);
+  const [fppBlinkPhase, setFppBlinkPhase] = useState<'idle' | 'closing' | 'hold' | 'opening'>('idle');
   const [fppRecenterNonce, setFppRecenterNonce] = useState(0);
   const [speakingPatientId, setSpeakingPatientId] = useState<string | null>(null);
   const [waitingQueueOpen, setWaitingQueueOpen] = useState(false);
@@ -194,6 +195,45 @@ export default function App() {
   const fppMoveInputRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialSpawnTimeRef = useRef<number | null>(null);
+  const fppBlinkLockRef = useRef(false);
+  const fppBlinkTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const isFppSessionActive = Boolean(firstPersonPatientId);
+
+  const clearFppBlinkTimers = useCallback(() => {
+    for (const t of fppBlinkTimersRef.current) {
+      clearTimeout(t);
+    }
+    fppBlinkTimersRef.current = [];
+  }, []);
+
+  const triggerFppBlinkTransition = useCallback(
+    (onHoldSwap: () => void, onOpeningStart?: () => void) => {
+      if (fppBlinkLockRef.current) return;
+      fppBlinkLockRef.current = true;
+      clearFppBlinkTimers();
+      setFppBlinkPhase('closing');
+
+      const tHold = setTimeout(() => {
+        setFppBlinkPhase('hold');
+        onHoldSwap();
+
+        const tOpen = setTimeout(() => {
+          setFppBlinkPhase('opening');
+          onOpeningStart?.();
+
+          const tDone = setTimeout(() => {
+            setFppBlinkPhase('idle');
+            fppBlinkLockRef.current = false;
+            fppBlinkTimersRef.current = [];
+          }, 245);
+          fppBlinkTimersRef.current.push(tDone);
+        }, 110);
+        fppBlinkTimersRef.current.push(tOpen);
+      }, 155);
+      fppBlinkTimersRef.current.push(tHold);
+    },
+    [clearFppBlinkTimers]
+  );
 
   const handleReceptionCheckinDone = useCallback((patientId: string) => {
     receptionCheckedInIdsRef.current.add(patientId);
@@ -221,12 +261,13 @@ export default function App() {
     return () => {
       timers.forEach((t) => clearTimeout(t));
       timers.clear();
+      clearFppBlinkTimers();
       if (speakingTimerRef.current) {
         clearTimeout(speakingTimerRef.current);
         speakingTimerRef.current = null;
       }
     };
-  }, []);
+  }, [clearFppBlinkTimers]);
 
   // On-demand patient case updater (used when the student explicitly requests a fresh Gemini AI case)
   const handleUpdatePatientCase = useCallback((patientId: string, nextCase: ClinicalCase) => {
@@ -703,7 +744,7 @@ export default function App() {
 
   // Patient Spawner (always arrives -> Reception Desk -> nearest free seat or calm standing wait -> treatment wing)
   useEffect(() => {
-    if (!hydrated || visitingFriend) return;
+    if (!hydrated || visitingFriend || isFppSessionActive) return;
 
     const spawnCheck = () => {
       setPatients((prev) => {
@@ -881,6 +922,7 @@ export default function App() {
   }, [
     hydrated,
     visitingFriend,
+    isFppSessionActive,
     clinic.placedItems,
     clinic.rooms,
     clinic.patientsTreatedTotal,
@@ -971,7 +1013,7 @@ export default function App() {
 
   // Immediately re-route & re-validate seats/stations whenever the student places, moves, rotates, or sells furniture
   useEffect(() => {
-    if (!hydrated || visitingFriend) return;
+    if (!hydrated || visitingFriend || isFppSessionActive) return;
     setPatients((prev) => {
       if (prev.length === 0) return prev;
       const receptionSeats = getReceptionWaitSeatSlots();
@@ -1273,6 +1315,7 @@ export default function App() {
   }, [
     hydrated,
     visitingFriend,
+    isFppSessionActive,
     obstacleBoxes,
     clinic.placedItems,
     clinic.rooms,
@@ -1289,7 +1332,7 @@ export default function App() {
 
   // Smooth dt-driven ~10Hz simulation tick (zero IndexedDB thrashing, brisk natural speed, optional water-cooler sips)
   useEffect(() => {
-    if (!hydrated || visitingFriend) return;
+    if (!hydrated || visitingFriend || isFppSessionActive) return;
 
     const receptionistHired = clinic.staff.some((s) => s.role === 'receptionist' && s.hired);
     let lastTickMs = performance.now();
@@ -1877,6 +1920,7 @@ export default function App() {
   }, [
     hydrated,
     visitingFriend,
+    isFppSessionActive,
     clinic.rooms,
     clinic.placedItems,
     clinic.staff,
@@ -1997,30 +2041,36 @@ export default function App() {
     ]
   );
 
-  const startFirstPersonSession = useCallback((patientId: string) => {
-    soundFx.tap();
-    setSelectedBedPatientId(null);
-    setSelectedWaitingPatientId(null);
-    setFocusedPatientId(null);
-    setWaitingQueueOpen(false);
-    setStoreOpen(false);
-    setMissionsOpen(false);
-    setFriendsOpen(false);
-    setSettingsOpen(false);
-    setBonusOpen(false);
-    setCharacterModalOpen(false);
-    setEditMode(false);
-    setPlacementDraft(null);
-    setActiveNavTab(null);
-    setPatients((prev) =>
-      prev.map((pt) =>
-        pt.id === patientId && pt.state === 'ready_for_exam'
-          ? { ...pt, state: 'in_exam' }
-          : pt
-      )
-    );
-    setFirstPersonPatientId(patientId);
-  }, []);
+  const startFirstPersonSession = useCallback(
+    (patientId: string) => {
+      if (fppBlinkLockRef.current) return;
+      soundFx.tap();
+      setSelectedBedPatientId(null);
+      setSelectedWaitingPatientId(null);
+      setFocusedPatientId(null);
+      setWaitingQueueOpen(false);
+      setStoreOpen(false);
+      setMissionsOpen(false);
+      setFriendsOpen(false);
+      setSettingsOpen(false);
+      setBonusOpen(false);
+      setCharacterModalOpen(false);
+      setEditMode(false);
+      setPlacementDraft(null);
+      setActiveNavTab(null);
+      triggerFppBlinkTransition(() => {
+        setPatients((prev) =>
+          prev.map((pt) =>
+            pt.id === patientId && pt.state === 'ready_for_exam'
+              ? { ...pt, state: 'in_exam' }
+              : pt
+          )
+        );
+        setFirstPersonPatientId(patientId);
+      });
+    },
+    [triggerFppBlinkTransition]
+  );
 
   // Handle tapping a patient
   const handleTapPatient = (patient: PatientEntity) => {
@@ -2147,6 +2197,67 @@ export default function App() {
     caughtRedFlag: boolean;
   }) => {
     const p = patients.find((pt) => pt.id === result.patientId);
+    const wasInFpp = Boolean(firstPersonPatientId);
+
+    if (wasInFpp) {
+      triggerFppBlinkTransition(
+        () => {
+          setFocusedPatientId(null);
+          setFirstPersonPatientId(null);
+          setSelectedBedPatientId(null);
+          setSpeakingPatientId(null);
+          if (speakingTimerRef.current) {
+            clearTimeout(speakingTimerRef.current);
+            speakingTimerRef.current = null;
+          }
+          if (p && !p.clinicalCase.redFlagsPresent) {
+            setPatients((prev) =>
+              prev.map((pt) =>
+                pt.id === result.patientId
+                  ? { ...pt, state: 'in_treatment', treatmentProgress: 0.04 }
+                  : pt
+              )
+            );
+          }
+        },
+        () => {
+          if (!p) return;
+          if (p.clinicalCase.redFlagsPresent) {
+            finishTreatmentAndReward({ ...result, gridX: p.gridX, gridY: p.gridY });
+            return;
+          }
+
+          const station = p.assignedStationId
+            ? clinic.placedItems.find((it) => it.instanceId === p.assignedStationId)
+            : undefined;
+          const stationCat = station ? catalogById.get(station.catalogId) : undefined;
+          const speedBoost = stationCat?.speedBonus || 0;
+          const durationMs = Math.max(2900, Math.round(4600 / (1 + speedBoost / 100)));
+
+          soundFx.tap();
+          addFloatingFeedback(
+            p.gridX,
+            p.gridY,
+            clinic.language === 'ar'
+              ? stationCat
+                ? `جلسة ${stationCat.nameEn} ⚡`
+                : 'جلسة علاج نشطة ⚡'
+              : stationCat
+                ? `${stationCat.nameEn} Session ⚡`
+                : 'Therapy Active ⚡',
+            '#38bdf8'
+          );
+
+          const timer = setTimeout(() => {
+            treatmentTimersRef.current.delete(timer);
+            finishTreatmentAndReward({ ...result, gridX: p.gridX, gridY: p.gridY });
+          }, durationMs);
+          treatmentTimersRef.current.add(timer);
+        }
+      );
+      return;
+    }
+
     setFocusedPatientId(null);
     setFirstPersonPatientId(null);
     setSelectedBedPatientId(null);
@@ -2720,6 +2831,9 @@ export default function App() {
   const handleResetClinic = () => {
     treatmentTimersRef.current.forEach((t) => clearTimeout(t));
     treatmentTimersRef.current.clear();
+    clearFppBlinkTimers();
+    fppBlinkLockRef.current = false;
+    setFppBlinkPhase('idle');
     if (speakingTimerRef.current) {
       clearTimeout(speakingTimerRef.current);
       speakingTimerRef.current = null;
@@ -3117,12 +3231,14 @@ export default function App() {
           }}
           onExit={() => {
             soundFx.tap();
-            setFirstPersonPatientId(null);
-            setSpeakingPatientId(null);
-            if (speakingTimerRef.current) {
-              clearTimeout(speakingTimerRef.current);
-              speakingTimerRef.current = null;
-            }
+            triggerFppBlinkTransition(() => {
+              setFirstPersonPatientId(null);
+              setSpeakingPatientId(null);
+              if (speakingTimerRef.current) {
+                clearTimeout(speakingTimerRef.current);
+                speakingTimerRef.current = null;
+              }
+            });
           }}
           onCompleteCase={handleCompleteCase}
         />
@@ -3543,6 +3659,108 @@ export default function App() {
           }));
         }}
       />
+
+      {/* Anatomical Curved Eye-Blink Transition for First-Person Session Mode (GPU-composited, zero backdrop-filter) */}
+      <div
+        aria-hidden="true"
+        className={`fixed inset-0 z-[70] overflow-hidden select-none ${
+          fppBlinkPhase === 'idle' ? 'pointer-events-none' : 'pointer-events-auto'
+        }`}
+      >
+        {/* Peripheral ocular vignette narrowing field of view during blink */}
+        <div
+          className={`absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_32%,rgba(2,4,10,0.68)_74%,rgba(2,4,10,0.98)_100%)] will-change-[opacity] transition-opacity ${
+            fppBlinkPhase === 'closing'
+              ? 'opacity-100 duration-[140ms] ease-in'
+              : fppBlinkPhase === 'hold'
+                ? 'opacity-100 duration-0'
+                : fppBlinkPhase === 'opening'
+                  ? 'opacity-0 duration-[240ms] ease-out'
+                  : 'opacity-0 duration-0'
+          }`}
+        />
+
+        {/* Core dark seal right as the almond slit closes */}
+        <div
+          className={`absolute inset-0 bg-[#02040a] will-change-[opacity] transition-opacity ${
+            fppBlinkPhase === 'closing'
+              ? 'opacity-100 duration-[95ms] delay-[55ms] ease-in'
+              : fppBlinkPhase === 'hold'
+                ? 'opacity-100 duration-0'
+                : fppBlinkPhase === 'opening'
+                  ? 'opacity-0 duration-[185ms] ease-out'
+                  : 'opacity-0 duration-0'
+          }`}
+        />
+
+        {/* Curved Upper Eyelid (sweeps ~75% travel with corner-first almond arch & feathered lash shadow) */}
+        <div
+          className={`absolute inset-x-0 top-0 h-[78vh] will-change-transform transition-transform ${
+            fppBlinkPhase === 'closing'
+              ? 'translate-y-0 duration-[155ms] ease-[cubic-bezier(0.42,0,0.88,0.52)]'
+              : fppBlinkPhase === 'hold'
+                ? 'translate-y-0 duration-0'
+                : fppBlinkPhase === 'opening'
+                  ? '-translate-y-[104%] duration-[245ms] ease-[cubic-bezier(0.16,1,0.3,1)]'
+                  : '-translate-y-[104%] duration-0'
+          }`}
+        >
+          <svg
+            viewBox="0 0 1000 780"
+            preserveAspectRatio="none"
+            className="w-full h-full block"
+          >
+            <path
+              d="M0,0 L1000,0 L1000,780 Q500,665 0,780 Z"
+              fill="#060b16"
+              fillOpacity="0.34"
+            />
+            <path
+              d="M0,0 L1000,0 L1000,780 Q500,618 0,780 Z"
+              fill="#040812"
+              fillOpacity="0.72"
+            />
+            <path
+              d="M0,0 L1000,0 L1000,780 Q500,575 0,780 Z"
+              fill="#02040a"
+            />
+          </svg>
+        </div>
+
+        {/* Curved Lower Eyelid (rises gently ~25% travel to meet slightly below midline) */}
+        <div
+          className={`absolute inset-x-0 bottom-0 h-[64vh] will-change-transform transition-transform ${
+            fppBlinkPhase === 'closing'
+              ? 'translate-y-0 duration-[155ms] ease-[cubic-bezier(0.42,0,0.88,0.52)]'
+              : fppBlinkPhase === 'hold'
+                ? 'translate-y-0 duration-0'
+                : fppBlinkPhase === 'opening'
+                  ? 'translate-y-[104%] duration-[245ms] ease-[cubic-bezier(0.16,1,0.3,1)]'
+                  : 'translate-y-[104%] duration-0'
+          }`}
+        >
+          <svg
+            viewBox="0 0 1000 640"
+            preserveAspectRatio="none"
+            className="w-full h-full block"
+          >
+            <path
+              d="M0,640 L0,0 Q500,45 1000,0 L1000,640 Z"
+              fill="#060b16"
+              fillOpacity="0.32"
+            />
+            <path
+              d="M0,640 L0,0 Q500,82 1000,0 L1000,640 Z"
+              fill="#040812"
+              fillOpacity="0.7"
+            />
+            <path
+              d="M0,640 L0,0 Q500,115 1000,0 L1000,640 Z"
+              fill="#02040a"
+            />
+          </svg>
+        </div>
+      </div>
     </main>
   );
 }

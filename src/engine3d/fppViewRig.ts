@@ -6,7 +6,8 @@ import { PlayerCharacterConfig } from '../types/clinic';
 export interface FppBackdropHandle {
   group: THREE.Group;
   wallLight: THREE.PointLight;
-  setLightFactor: (alpha: number) => void;
+  roomFillLight: THREE.PointLight;
+  setLightFactor: (alpha: number, isNight?: boolean) => void;
   dispose: () => void;
 }
 
@@ -245,51 +246,126 @@ export function createFppRoomBackdrop3D(
     })
   );
 
-  const backZ = -0.56;
-  const wallW = 3.2;
-  const wallH = 2.62;
+  const floorColorTex = textures.tileBlue.clone();
+  floorColorTex.repeat.set(3.6, 2.6);
+  floorColorTex.needsUpdate = true;
+  disposables.push(floorColorTex);
+
+  const floorNormTex = textures.tileNormal.clone();
+  floorNormTex.repeat.set(3.6, 2.6);
+  floorNormTex.needsUpdate = true;
+  disposables.push(floorNormTex);
+
+  const floorMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: floorColorTex,
+      normalMap: floorNormTex,
+      normalScale: new THREE.Vector2(0.32, 0.32),
+      roughness: 0.46,
+      metalness: 0.04,
+      envMapIntensity: 0.45,
+    })
+  );
+
+  const ceilingMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xf1f5f9,
+      roughness: 0.92,
+      metalness: 0.0,
+      envMapIntensity: 0.35,
+    })
+  );
+
+  const ceilingPanelMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xfff8eb,
+      emissiveIntensity: 0.72,
+      roughness: 0.24,
+    })
+  );
+
+  // Enclosed universal examination bay template (completely isolates session from outer clinic landmarks)
+  const backZ = -0.84;
+  const frontZ = 2.96;
+  const roomW = 5.4;
+  const roomD = frontZ - backZ;
+  const centerZ = (backZ + frontZ) / 2;
+  const wallH = 2.75;
   const wainH = 0.88;
   const upperH = wallH - wainH;
 
-  // Open treatment-bay feature wall placed cleanly behind the patient (keeps real clinic floor, bed & nearby equipment untouched)
-  const wg = new THREE.Group();
-  wg.position.set(0, 0, backZ);
+  const buildWallSpan = (spanLen: number, x: number, z: number, rotY: number) => {
+    const wg = new THREE.Group();
+    wg.position.set(x, 0, z);
+    wg.rotation.y = rotY;
 
-  const skirt = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(wallW, 0.1, 0.08)),
-    darkTrimMat
+    const skirt = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(spanLen, 0.1, 0.08)),
+      darkTrimMat
+    );
+    skirt.position.set(0, 0.05, 0);
+
+    const wain = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(spanLen, wainH, 0.065)),
+      wainscotMat
+    );
+    wain.position.set(0, wainH / 2, 0);
+
+    const dado = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(spanLen + 0.02, 0.05, 0.09)),
+      aluminumMat
+    );
+    dado.position.set(0, wainH + 0.015, 0.008);
+
+    const upper = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(spanLen, upperH, 0.06)),
+      plasterMat
+    );
+    upper.position.set(0, wainH + upperH / 2, 0);
+
+    const crown = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(spanLen + 0.02, 0.065, 0.09)),
+      darkTrimMat
+    );
+    crown.position.set(0, wallH - 0.032, 0.008);
+
+    wg.add(skirt, wain, dado, upper, crown);
+    group.add(wg);
+  };
+
+  // Back wall (behind patient), Front wall (behind camera), and extended Left & Right walls
+  buildWallSpan(roomW + 0.12, 0, backZ, 0);
+  buildWallSpan(roomW + 0.12, 0, frontZ, Math.PI);
+  buildWallSpan(roomD + 0.12, -roomW / 2, centerZ, Math.PI / 2);
+  buildWallSpan(roomD + 0.12, roomW / 2, centerZ, -Math.PI / 2);
+
+  // Seamless universal floor & ceiling
+  const floorMesh = new THREE.Mesh(
+    trackGeom(new THREE.PlaneGeometry(roomW + 0.14, roomD + 0.14)),
+    floorMat
   );
-  skirt.position.set(0, 0.05, 0);
+  floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.position.set(0, -0.002, centerZ);
+  group.add(floorMesh);
 
-  const wain = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(wallW, wainH, 0.065)),
-    wainscotMat
+  const ceilingMesh = new THREE.Mesh(
+    trackGeom(new THREE.PlaneGeometry(roomW + 0.14, roomD + 0.14)),
+    ceilingMat
   );
-  wain.position.set(0, wainH / 2, 0);
+  ceilingMesh.rotation.x = Math.PI / 2;
+  ceilingMesh.position.set(0, wallH, centerZ);
+  group.add(ceilingMesh);
 
-  const dado = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(wallW + 0.02, 0.05, 0.09)),
-    aluminumMat
+  const ceilingLightPanel = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(1.18, 0.02, 0.46)),
+    ceilingPanelMat
   );
-  dado.position.set(0, wainH + 0.015, 0.008);
-
-  const upper = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(wallW, upperH, 0.06)),
-    plasterMat
-  );
-  upper.position.set(0, wainH + upperH / 2, 0);
-
-  const crown = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(wallW + 0.02, 0.065, 0.09)),
-    darkTrimMat
-  );
-  crown.position.set(0, wallH - 0.032, 0.008);
-
-  wg.add(skirt, wain, dado, upper, crown);
-  group.add(wg);
+  ceilingLightPanel.position.set(0, wallH - 0.01, 0.52);
+  group.add(ceilingLightPanel);
 
   // Back wall oak acoustic wood-slat flanks
-  for (const flankX of [-1.22, 1.22]) {
+  for (const flankX of [-1.32, 1.32]) {
     const backing = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(0.56, 1.56, 0.02)),
       darkTrimMat
@@ -311,25 +387,31 @@ export function createFppRoomBackdrop3D(
     trackGeom(new THREE.PlaneGeometry(1.66, 0.46)),
     wallEngravingMat
   );
-  wallEngraving.position.set(0, 1.60, backZ + 0.036);
+  wallEngraving.position.set(0, 1.62, backZ + 0.036);
   wallEngraving.renderOrder = 1;
   group.add(wallEngraving);
 
   const coveBar = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.85, 0.026, 0.05)),
+    trackGeom(new THREE.BoxGeometry(1.95, 0.026, 0.05)),
     warmCoveMat
   );
   coveBar.position.set(0, wallH - 0.06, backZ + 0.08);
   group.add(coveBar);
 
-  const wallLight = new THREE.PointLight(0xfff7ea, 1.15, 5.0, 1.1);
+  const wallLight = new THREE.PointLight(0xfff7ea, 1.15, 6.5, 1.0);
   wallLight.castShadow = false;
   wallLight.position.set(0, 2.24, backZ + 0.85);
   group.add(wallLight);
 
-  const setLightFactor = (alpha: number) => {
+  const roomFillLight = new THREE.PointLight(0xf8fbff, 1.0, 8.5, 1.0);
+  roomFillLight.castShadow = false;
+  roomFillLight.position.set(0, 2.48, 0.85);
+  group.add(roomFillLight);
+
+  const setLightFactor = (alpha: number, isNight = false) => {
     const a = THREE.MathUtils.clamp(alpha, 0, 1);
-    wallLight.intensity = a * 1.15;
+    wallLight.intensity = a * (isNight ? 1.48 : 1.15);
+    roomFillLight.intensity = a * (isNight ? 1.38 : 0.95);
   };
 
   group.visible = false;
@@ -337,6 +419,7 @@ export function createFppRoomBackdrop3D(
   return {
     group,
     wallLight,
+    roomFillLight,
     setLightFactor,
     dispose: () => {
       for (const d of disposables) d.dispose();
