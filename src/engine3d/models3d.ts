@@ -23,6 +23,11 @@ function setShadow(obj: THREE.Object3D, cast = true, receive = true) {
         child.receiveShadow = false;
         return;
       }
+      if (child.userData.receiveOnly) {
+        child.castShadow = false;
+        child.receiveShadow = receive;
+        return;
+      }
       child.castShadow = cast;
       child.receiveShadow = receive;
     }
@@ -2737,11 +2742,13 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
   const pool: SharedCatalogMats = {
     whiteBody: new THREE.MeshPhysicalMaterial({
       color: 0xdadfe6,
-      roughness: 0.46,
+      bumpMap: textures.brushedMetalBump,
+      bumpScale: 0.0014,
+      roughness: 0.44,
       metalness: 0.04,
       clearcoat: 0.34,
-      clearcoatRoughness: 0.38,
-      envMapIntensity: 0.6,
+      clearcoatRoughness: 0.36,
+      envMapIntensity: 0.64,
     }),
     silverMetal: makeMat({
       color: 0xbac2cc,
@@ -2761,11 +2768,13 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
     blueUpholstery: new THREE.MeshPhysicalMaterial({
       color: 0x225d8a,
       bumpMap: textures.leatherBump,
-      bumpScale: 0.005,
-      roughness: 0.54,
+      bumpScale: 0.0075,
+      roughness: 0.48,
       metalness: 0.03,
-      sheen: 0.24,
-      sheenRoughness: 0.65,
+      clearcoat: 0.14,
+      clearcoatRoughness: 0.48,
+      sheen: 0.3,
+      sheenRoughness: 0.58,
     }),
     cyanAccent: new THREE.MeshPhysicalMaterial({
       color: 0x2e7fa8,
@@ -3074,8 +3083,76 @@ export function createCatalogMesh3D(
     inner.add(m);
     return m;
   };
+  const bevelBox = (
+    w: number,
+    h: number,
+    d: number,
+    radius: number,
+    bevel: number,
+    mat: THREE.Material,
+    x = 0,
+    y = 0,
+    z = 0
+  ) => {
+    const b = Math.max(0, Math.min(bevel, h * 0.4, w * 0.25, d * 0.25));
+    const iw = Math.max(0.002, w - b * 2);
+    const id = Math.max(0.002, d - b * 2);
+    const ih = Math.max(0.002, h - b * 2);
+    const r = Math.max(0.0015, Math.min(radius, iw * 0.46, id * 0.46));
+    const hw = iw * 0.5;
+    const hd = id * 0.5;
+    const s = new THREE.Shape();
+    s.moveTo(-hw + r, -hd);
+    s.lineTo(hw - r, -hd);
+    s.quadraticCurveTo(hw, -hd, hw, -hd + r);
+    s.lineTo(hw, hd - r);
+    s.quadraticCurveTo(hw, hd, hw - r, hd);
+    s.lineTo(-hw + r, hd);
+    s.quadraticCurveTo(-hw, hd, -hw, hd - r);
+    s.lineTo(-hw, -hd + r);
+    s.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+    const geom = new THREE.ExtrudeGeometry(s, {
+      depth: ih,
+      bevelEnabled: b > 0.0005,
+      bevelSize: b,
+      bevelThickness: b,
+      bevelSegments: 2,
+      curveSegments: 5,
+    });
+    geom.rotateX(-Math.PI / 2);
+    geom.center();
+    geom.computeVertexNormals();
+    const m = new THREE.Mesh(geom, mat);
+    m.position.set(x, y, z);
+    if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
+    inner.add(m);
+    return m;
+  };
   const cyl = (rt: number, rb: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 14), mat);
+    m.position.set(x, y, z);
+    if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
+    inner.add(m);
+    return m;
+  };
+  const smoothCyl = (
+    rt: number,
+    rb: number,
+    h: number,
+    mat: THREE.Material,
+    x = 0,
+    y = 0,
+    z = 0,
+    radialSegs = 24
+  ) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, radialSegs), mat);
+    m.position.set(x, y, z);
+    if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
+    inner.add(m);
+    return m;
+  };
+  const sphereCap = (r: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat);
     m.position.set(x, y, z);
     if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
     inner.add(m);
@@ -3117,33 +3194,94 @@ export function createCatalogMesh3D(
     case 'treatment_bed': {
       // Authentic hospital & physiotherapy electric hi-lo examination/treatment bed
       // Head end at -X (-0.86), foot end at +X (+0.86), sitting/lying deck top strictly at y = 0.52
-      const medicalSteel = makeMat({ color: 0xe6ecf2, roughness: 0.36, metalness: 0.22 });
-      const plinthVinyl = makeMat({ color: 0x166982, roughness: 0.44, metalness: 0.04 });
-      const plinthBorder = makeMat({ color: 0x0f4c5c, roughness: 0.52, metalness: 0.06 });
-      const pillowMat = makeMat({ color: 0xe8f4f8, roughness: 0.55, metalness: 0.02 });
-      const paperMat = makeMat({ color: 0xfafcff, roughness: 0.72, metalness: 0.0 });
-      const panelSlate = makeMat({ color: 0x2b3b4e, roughness: 0.42, metalness: 0.14 });
+      const medicalSteel = new THREE.MeshPhysicalMaterial({
+        color: 0xe6ecf2,
+        bumpMap: textures.brushedMetalBump,
+        bumpScale: 0.0025,
+        roughness: 0.32,
+        metalness: 0.24,
+        clearcoat: 0.24,
+        clearcoatRoughness: 0.36,
+      });
+      const plinthVinyl = new THREE.MeshPhysicalMaterial({
+        color: 0x166982,
+        bumpMap: textures.leatherBump,
+        bumpScale: 0.0085,
+        roughness: 0.44,
+        metalness: 0.03,
+        clearcoat: 0.14,
+        clearcoatRoughness: 0.48,
+        sheen: 0.28,
+        sheenRoughness: 0.56,
+      });
+      const plinthBorder = new THREE.MeshPhysicalMaterial({
+        color: 0x0f4c5c,
+        bumpMap: textures.leatherBump,
+        bumpScale: 0.006,
+        roughness: 0.5,
+        metalness: 0.05,
+      });
+      const plinthSeam = makeMat({ color: 0x0c3d4a, roughness: 0.58, metalness: 0.06 });
+      const pillowMat = new THREE.MeshPhysicalMaterial({
+        color: 0xeaf4f8,
+        bumpMap: textures.fabricWeaveBump,
+        bumpScale: 0.008,
+        roughness: 0.62,
+        metalness: 0.01,
+        sheen: 0.42,
+        sheenRoughness: 0.7,
+      });
+      const paperMat = new THREE.MeshPhysicalMaterial({
+        color: 0xfbfdff,
+        bumpMap: textures.fabricWeaveBump,
+        bumpScale: 0.003,
+        roughness: 0.76,
+        metalness: 0.0,
+        sheen: 0.14,
+        sheenRoughness: 0.85,
+      });
+      const panelSlate = new THREE.MeshPhysicalMaterial({
+        color: 0x2b3b4e,
+        bumpMap: textures.brushedMetalBump,
+        bumpScale: 0.003,
+        roughness: 0.4,
+        metalness: 0.22,
+        clearcoat: 0.14,
+        clearcoatRoughness: 0.42,
+      });
+      const chromeMat = new THREE.MeshPhysicalMaterial({
+        color: 0xd4dde8,
+        bumpMap: textures.brushedMetalBump,
+        bumpScale: 0.002,
+        roughness: 0.18,
+        metalness: 0.88,
+        clearcoat: 0.2,
+        envMapIntensity: 0.96,
+      });
 
       // 1. Lower powder-coated steel H-base + 4 heavy-duty locking hospital casters
       for (const bz of [-0.26, 0.26]) {
-        box(1.44, 0.046, 0.078, medicalSteel, 0, 0.122, bz);
+        bevelBox(1.44, 0.046, 0.078, 0.016, 0.005, medicalSteel, 0, 0.122, bz);
       }
       for (const cxPos of [-0.66, 0.66]) {
-        box(0.088, 0.052, 0.58, medicalSteel, cxPos, 0.125, 0);
+        bevelBox(0.088, 0.052, 0.58, 0.018, 0.005, medicalSteel, cxPos, 0.125, 0);
         for (const czPos of [-0.29, 0.29]) {
-          // Swivel fork housing
-          cyl(0.022, 0.026, 0.036, silverMetal, cxPos, 0.088, czPos);
-          // Twin rubber hospital caster wheel
-          const wheel = cyl(0.048, 0.048, 0.034, blackRubber, cxPos, 0.048, czPos);
+          // Swivel fork housing + collar
+          smoothCyl(0.022, 0.026, 0.036, chromeMat, cxPos, 0.088, czPos, 20);
+          smoothCyl(0.028, 0.028, 0.012, panelSlate, cxPos, 0.104, czPos, 20);
+          // Smooth rubber hospital caster wheel + brushed metallic hub cap
+          const wheel = smoothCyl(0.048, 0.048, 0.034, blackRubber, cxPos, 0.048, czPos, 24);
           wheel.rotation.x = Math.PI / 2;
-          const hub = cyl(0.024, 0.024, 0.038, silverMetal, cxPos, 0.048, czPos);
+          const hub = smoothCyl(0.024, 0.024, 0.038, chromeMat, cxPos, 0.048, czPos, 20);
           hub.rotation.x = Math.PI / 2;
           hub.userData.noCastShadow = true;
           // Brake pedal tab (emerald/red lock toggle)
-          const brake = box(
+          const brake = bevelBox(
             0.036,
             0.012,
             0.018,
+            0.004,
+            0.002,
             cxPos > 0 ? emeraldAccent : redAccent,
             cxPos + (cxPos > 0 ? 0.045 : -0.045),
             0.088,
@@ -3156,95 +3294,119 @@ export function createCatalogMesh3D(
 
       // 2. Twin telescoping electric hydraulic lift columns + X-scissor braces + side foot-control bar
       for (const colX of [-0.26, 0.28]) {
-        box(0.18, 0.24, 0.22, panelSlate, colX, 0.245, 0);
-        box(0.14, 0.14, 0.18, silverMetal, colX, 0.30, 0);
+        bevelBox(0.18, 0.24, 0.22, 0.02, 0.006, panelSlate, colX, 0.245, 0);
+        bevelBox(0.14, 0.14, 0.18, 0.016, 0.005, chromeMat, colX, 0.30, 0);
+        // Column hydraulic seal ring
+        bevelBox(0.19, 0.014, 0.23, 0.022, 0.003, medicalSteel, colX, 0.352, 0);
       }
-      const scissorA = box(0.76, 0.036, 0.04, silverMetal, 0, 0.25, 0.14);
+      const scissorA = bevelBox(0.76, 0.036, 0.04, 0.012, 0.004, chromeMat, 0, 0.25, 0.14);
       scissorA.rotation.z = 0.34;
-      const scissorB = box(0.76, 0.036, 0.04, silverMetal, 0, 0.25, -0.14);
+      const scissorB = bevelBox(0.76, 0.036, 0.04, 0.012, 0.004, chromeMat, 0, 0.25, -0.14);
       scissorB.rotation.z = -0.34;
+      for (const pz of [-0.162, 0.162]) {
+        const bolt = smoothCyl(0.014, 0.014, 0.014, panelSlate, 0, 0.25, pz, 16);
+        bolt.rotation.x = Math.PI / 2;
+      }
 
       // Side height-control foot pedal bars along front & rear base rails
       for (const pz of [-0.335, 0.335]) {
-        box(0.44, 0.016, 0.032, silverMetal, 0, 0.116, pz).userData.noCastShadow = true;
-        box(0.075, 0.014, 0.046, cyanAccent, -0.12, 0.122, pz).userData.noCastShadow = true;
-        box(0.075, 0.014, 0.046, darkSlate, 0.12, 0.122, pz).userData.noCastShadow = true;
+        bevelBox(0.44, 0.016, 0.032, 0.008, 0.003, chromeMat, 0, 0.116, pz).userData.noCastShadow = true;
+        bevelBox(0.075, 0.014, 0.046, 0.008, 0.003, cyanAccent, -0.12, 0.122, pz).userData.noCastShadow = true;
+        bevelBox(0.075, 0.014, 0.046, 0.008, 0.003, panelSlate, 0.12, 0.122, pz).userData.noCastShadow = true;
       }
 
       // 3. Upper perimeter chassis deck + 4 soft corner bumper rollers
-      box(1.68, 0.044, 0.76, medicalSteel, 0, 0.394, 0);
-      box(1.56, 0.022, 0.70, panelSlate, 0, 0.368, 0);
+      bevelBox(1.68, 0.044, 0.76, 0.036, 0.006, medicalSteel, 0, 0.394, 0);
+      bevelBox(1.56, 0.022, 0.70, 0.03, 0.004, panelSlate, 0, 0.368, 0);
       for (const [rx, rz] of [
         [-0.85, -0.39],
         [-0.85, 0.39],
         [0.85, -0.39],
         [0.85, 0.39],
       ]) {
-        const bumper = cyl(0.042, 0.042, 0.026, panelSlate, rx, 0.396, rz);
+        const bumper = smoothCyl(0.042, 0.042, 0.026, panelSlate, rx, 0.396, rz, 24);
         bumper.userData.noCastShadow = true;
+        const cap = smoothCyl(0.014, 0.014, 0.03, chromeMat, rx, 0.396, rz, 16);
+        cap.userData.noCastShadow = true;
       }
 
       // 4. Molded hospital headboard (-X) & footboard (+X) with curved grab rails + chart pocket
-      box(0.044, 0.39, 0.78, whiteBody, -0.86, 0.565, 0);
-      box(0.048, 0.056, 0.80, cyanAccent, -0.86, 0.768, 0);
-      box(0.026, 0.09, 0.28, panelSlate, -0.84, 0.69, 0).userData.noCastShadow = true;
+      bevelBox(0.044, 0.39, 0.78, 0.014, 0.007, whiteBody, -0.86, 0.565, 0);
+      bevelBox(0.048, 0.056, 0.80, 0.016, 0.008, cyanAccent, -0.86, 0.768, 0);
+      bevelBox(0.026, 0.09, 0.28, 0.01, 0.004, panelSlate, -0.84, 0.69, 0).userData.receiveOnly = true;
       for (const gz of [-0.34, 0.34]) {
-        cyl(0.016, 0.016, 0.42, silverMetal, -0.86, 0.55, gz);
+        smoothCyl(0.016, 0.016, 0.42, chromeMat, -0.86, 0.55, gz, 20);
       }
 
-      box(0.044, 0.31, 0.78, whiteBody, 0.86, 0.525, 0);
-      box(0.048, 0.052, 0.80, cyanAccent, 0.86, 0.692, 0);
+      bevelBox(0.044, 0.31, 0.78, 0.014, 0.007, whiteBody, 0.86, 0.525, 0);
+      bevelBox(0.048, 0.052, 0.80, 0.016, 0.008, cyanAccent, 0.86, 0.692, 0);
       for (const gz of [-0.34, 0.34]) {
-        cyl(0.016, 0.016, 0.34, silverMetal, 0.86, 0.51, gz);
+        smoothCyl(0.016, 0.016, 0.34, chromeMat, 0.86, 0.51, gz, 20);
       }
-      // Footboard external clipboard / chart pocket
-      box(0.02, 0.17, 0.23, panelSlate, 0.892, 0.54, 0).userData.noCastShadow = true;
-      box(0.008, 0.145, 0.19, paperMat, 0.903, 0.545, 0).userData.noCastShadow = true;
+      // Footboard external clipboard / chart pocket + stainless top clip
+      bevelBox(0.02, 0.17, 0.23, 0.006, 0.003, panelSlate, 0.892, 0.54, 0).userData.receiveOnly = true;
+      bevelBox(0.008, 0.145, 0.19, 0.002, 0.001, paperMat, 0.903, 0.545, 0).userData.receiveOnly = true;
+      bevelBox(0.01, 0.018, 0.08, 0.003, 0.002, chromeMat, 0.906, 0.614, 0).userData.receiveOnly = true;
 
       // 5. Telescoping split hospital safety rails (retracted smoothly below mattress top for easy transfer/sitting)
       for (const sz of [-0.408, 0.408]) {
         // Upper torso folded rail + pivot arms + teal release handle
-        box(0.62, 0.024, 0.024, whiteBody, -0.34, 0.445, sz);
-        box(0.62, 0.02, 0.02, silverMetal, -0.34, 0.355, sz);
+        bevelBox(0.62, 0.024, 0.024, 0.008, 0.004, whiteBody, -0.34, 0.445, sz);
+        const lowRailU = smoothCyl(0.01, 0.01, 0.62, chromeMat, -0.34, 0.355, sz, 16);
+        lowRailU.rotation.z = Math.PI / 2;
         for (const px of [-0.56, -0.12]) {
-          cyl(0.012, 0.012, 0.12, silverMetal, px, 0.40, sz).userData.noCastShadow = true;
+          smoothCyl(0.012, 0.012, 0.12, chromeMat, px, 0.40, sz, 16).userData.noCastShadow = true;
         }
-        box(0.09, 0.026, 0.028, cyanAccent, -0.34, 0.46, sz).userData.noCastShadow = true;
+        bevelBox(0.09, 0.026, 0.028, 0.006, 0.004, cyanAccent, -0.34, 0.46, sz).userData.noCastShadow = true;
 
         // Lower leg folded rail segment
-        box(0.56, 0.022, 0.024, whiteBody, 0.38, 0.44, sz);
-        box(0.56, 0.018, 0.02, silverMetal, 0.38, 0.355, sz);
+        bevelBox(0.56, 0.022, 0.024, 0.008, 0.004, whiteBody, 0.38, 0.44, sz);
+        const lowRailL = smoothCyl(0.009, 0.009, 0.56, chromeMat, 0.38, 0.355, sz, 16);
+        lowRailL.rotation.z = Math.PI / 2;
         for (const px of [0.18, 0.58]) {
-          cyl(0.012, 0.012, 0.11, silverMetal, px, 0.398, sz).userData.noCastShadow = true;
+          smoothCyl(0.012, 0.012, 0.11, chromeMat, px, 0.398, sz, 16).userData.noCastShadow = true;
         }
       }
 
       // 6. Antimicrobial medical vinyl multi-section mattress (main flat deck top strictly at y = 0.52)
-      box(1.62, 0.024, 0.74, plinthBorder, -0.01, 0.428, 0);
+      bevelBox(1.62, 0.024, 0.74, 0.036, 0.004, plinthBorder, -0.01, 0.428, 0);
       // Main torso & leg deck: center y=0.475, h=0.09 -> top = 0.520!
-      box(1.06, 0.09, 0.72, plinthVinyl, 0.25, 0.475, 0);
-      // Articulated knee-break seam crease
-      box(0.014, 0.092, 0.726, plinthBorder, 0.32, 0.476, 0).userData.noCastShadow = true;
+      bevelBox(1.06, 0.09, 0.72, 0.04, 0.014, plinthVinyl, 0.25, 0.475, 0);
+      // Articulated knee-break seam crease + tailored piping seam
+      const kneeCrease = box(0.014, 0.088, 0.722, plinthSeam, 0.32, 0.475, 0);
+      kneeCrease.userData.receiveOnly = true;
       // Gently angled head/backrest cushion (+6.5° incline toward headboard)
-      const backrestDeck = box(0.54, 0.088, 0.72, plinthVinyl, -0.53, 0.492, 0);
+      const backrestDeck = bevelBox(0.54, 0.088, 0.72, 0.04, 0.014, plinthVinyl, -0.53, 0.492, 0);
       backrestDeck.rotation.z = -0.105;
-      // Rounded plush side bolsters along the mattress edges
+      // Rounded plush side bolsters + smooth hemispherical caps along mattress edges
       for (const mz of [-0.358, 0.358]) {
-        const edgeBolster = cyl(0.024, 0.024, 1.56, plinthVinyl, 0, 0.502, mz);
+        const edgeBolster = smoothCyl(0.024, 0.024, 1.54, plinthVinyl, 0, 0.502, mz, 20);
         edgeBolster.rotation.z = Math.PI / 2;
-        edgeBolster.userData.noCastShadow = true;
+        edgeBolster.userData.receiveOnly = true;
+        sphereCap(0.024, plinthVinyl, -0.77, 0.502, mz).userData.receiveOnly = true;
+        sphereCap(0.024, plinthVinyl, 0.77, 0.502, mz).userData.receiveOnly = true;
       }
 
-      // Contoured clinical headrest pillow at -X head end
-      const pillow = box(0.24, 0.042, 0.44, pillowMat, -0.66, 0.556, 0);
+      // Contoured clinical headrest pillow at -X head end (receives patient head shadow)
+      const pillow = bevelBox(0.24, 0.046, 0.44, 0.06, 0.016, pillowMat, -0.66, 0.556, 0);
       pillow.rotation.z = -0.09;
-      pillow.userData.noCastShadow = true;
+      pillow.userData.receiveOnly = true;
 
-      // Sanitary paper roll bar under head + draped white exam paper sheet over center deck
-      const paperRoll = cyl(0.036, 0.036, 0.56, paperMat, -0.78, 0.455, 0);
+      // Sanitary paper roll bar under head + draped white exam paper sheet over center deck (top strictly y = 0.522)
+      const paperRoll = smoothCyl(0.036, 0.036, 0.56, paperMat, -0.78, 0.455, 0, 24);
       paperRoll.rotation.x = Math.PI / 2;
-      paperRoll.userData.noCastShadow = true;
-      box(0.76, 0.005, 0.56, paperMat, 0.10, 0.522, 0).userData.noCastShadow = true;
+      paperRoll.userData.receiveOnly = true;
+      const rollCore = smoothCyl(0.014, 0.014, 0.58, chromeMat, -0.78, 0.455, 0, 16);
+      rollCore.rotation.x = Math.PI / 2;
+      rollCore.userData.noCastShadow = true;
+
+      const sheetMain = bevelBox(0.76, 0.005, 0.56, 0.012, 0.0015, paperMat, 0.10, 0.522, 0);
+      sheetMain.userData.receiveOnly = true;
+      for (const sz of [-0.285, 0.285]) {
+        const drape = bevelBox(0.74, 0.004, 0.028, 0.004, 0.001, paperMat, 0.10, 0.514, sz);
+        drape.rotation.x = sz > 0 ? 1.15 : -1.15;
+        drape.userData.receiveOnly = true;
+      }
       break;
     }
 
@@ -4112,23 +4274,24 @@ export function createCatalogMesh3D(
 
     case 'traction_table': {
       // Split-Section Spinal Decompression Plinth + Motorized Head Traction Tower, Spreader Bar & Knee Bolster
-      box(1.56, 0.07, 0.68, silverMetal, -0.06, 0.045, 0);
+      bevelBox(1.56, 0.07, 0.68, 0.02, 0.006, silverMetal, -0.06, 0.045, 0);
       for (const sz of [-0.24, 0.24]) {
-        const s1 = box(0.95, 0.07, 0.06, darkSlate, -0.06, 0.26, sz);
+        const s1 = bevelBox(0.95, 0.07, 0.06, 0.012, 0.005, darkSlate, -0.06, 0.26, sz);
         s1.rotation.z = 0.4;
-        const s2 = box(0.95, 0.07, 0.06, darkSlate, -0.06, 0.26, sz);
+        const s2 = bevelBox(0.95, 0.07, 0.06, 0.012, 0.005, darkSlate, -0.06, 0.26, sz);
         s2.rotation.z = -0.4;
       }
-      box(1.66, 0.06, 0.72, whiteBody, 0, 0.46, 0);
+      bevelBox(1.66, 0.06, 0.72, 0.03, 0.006, whiteBody, 0, 0.46, 0);
       // Rolling split-section thoracic & lumbar upholstered decks
-      box(0.72, 0.1, 0.68, blueUpholstery, -0.44, 0.54, 0);
-      box(0.68, 0.1, 0.68, blueUpholstery, 0.34, 0.54, 0);
+      bevelBox(0.72, 0.1, 0.68, 0.04, 0.014, blueUpholstery, -0.44, 0.54, 0);
+      bevelBox(0.68, 0.1, 0.68, 0.04, 0.014, blueUpholstery, 0.34, 0.54, 0);
       // Pelvic stabilization belt & half-moon orthopedic knee bolster
-      box(0.16, 0.11, 0.7, darkSlate, -0.04, 0.545, 0);
-      const bolster = cyl(0.085, 0.085, 0.56, cyanAccent, -0.58, 0.62, 0);
+      bevelBox(0.16, 0.11, 0.7, 0.02, 0.008, darkSlate, -0.04, 0.545, 0);
+      const bolster = smoothCyl(0.085, 0.085, 0.56, cyanAccent, -0.58, 0.62, 0, 24);
       bolster.rotation.x = Math.PI / 2;
+      bolster.userData.receiveOnly = true;
       // Motorized Traction Console Tower + winch drum + taut traction strap to spreader bar
-      box(0.24, 0.8, 0.44, whiteBody, 0.78, 0.82, 0);
+      bevelBox(0.24, 0.8, 0.44, 0.025, 0.008, whiteBody, 0.78, 0.82, 0);
       const fScreen = box(
         0.03,
         0.2,
@@ -4139,12 +4302,12 @@ export function createCatalogMesh3D(
         0
       );
       fScreen.userData.noCastShadow = true;
-      cyl(0.055, 0.055, 0.14, silverMetal, 0.62, 0.78, 0).rotation.z = Math.PI / 2;
-      box(0.04, 0.04, 0.36, darkSlate, 0.5, 0.66, 0);
+      smoothCyl(0.055, 0.055, 0.14, silverMetal, 0.62, 0.78, 0, 20).rotation.z = Math.PI / 2;
+      bevelBox(0.04, 0.04, 0.36, 0.01, 0.004, darkSlate, 0.5, 0.66, 0);
       tube([[0.62, 0.78, 0], [0.56, 0.72, 0], [0.5, 0.66, 0]], 0.008, blackRubber, 6);
       // Patient hand emergency stop pendant hanging on side
       tube([[0.7, 0.65, 0.2], [0.64, 0.5, 0.36], [0.52, 0.56, 0.35]], 0.008, darkSlate, 8);
-      box(0.07, 0.04, 0.04, redAccent, 0.5, 0.56, 0.35);
+      bevelBox(0.07, 0.04, 0.04, 0.008, 0.004, redAccent, 0.5, 0.56, 0.35);
       inner.scale.set(0.95, 0.78, 0.94);
       break;
     }
@@ -4542,34 +4705,37 @@ export function createCatalogMesh3D(
 
     case 'magnetotherapy': {
       // Clinical PEMF Magnetotherapy Plinth + Sliding Dual-Track Solenoid Ring Drum & Gauss Console (2x1)
-      box(1.62, 0.06, 0.72, darkSlate, 0, 0.04, 0);
+      bevelBox(1.62, 0.06, 0.72, 0.024, 0.006, darkSlate, 0, 0.04, 0);
       for (const sz of [-0.26, 0.26]) {
-        const rail = cyl(0.022, 0.022, 1.56, silverMetal, 0, 0.44, sz);
+        const rail = smoothCyl(0.022, 0.022, 1.56, silverMetal, 0, 0.44, sz, 20);
         rail.rotation.z = Math.PI / 2;
       }
-      box(1.56, 0.07, 0.66, whiteBody, 0, 0.42, 0);
-      box(1.5, 0.09, 0.62, blueUpholstery, 0, 0.49, 0);
-      box(0.26, 0.06, 0.4, whiteBody, -0.58, 0.56, 0);
+      bevelBox(1.56, 0.07, 0.66, 0.03, 0.006, whiteBody, 0, 0.42, 0);
+      bevelBox(1.5, 0.09, 0.62, 0.036, 0.014, blueUpholstery, 0, 0.49, 0);
+      const mPill = bevelBox(0.26, 0.06, 0.4, 0.045, 0.012, whiteBody, -0.58, 0.56, 0);
+      mPill.userData.receiveOnly = true;
       // Iconic cylindrical PEMF Solenoid Treatment Ring spanning the bed
-      const outerSolenoid = new THREE.Mesh(new THREE.TorusGeometry(0.41, 0.085, 10, 26), whiteBody);
+      const outerSolenoid = new THREE.Mesh(new THREE.TorusGeometry(0.41, 0.085, 16, 36), whiteBody);
       outerSolenoid.rotation.y = Math.PI / 2;
       outerSolenoid.position.set(0.08, 0.66, 0);
-      const trimSolenoid = new THREE.Mesh(new THREE.TorusGeometry(0.415, 0.024, 6, 26), cyanAccent);
+      outerSolenoid.userData.sharedGlbMat = true;
+      const trimSolenoid = new THREE.Mesh(new THREE.TorusGeometry(0.415, 0.024, 12, 36), cyanAccent);
       trimSolenoid.rotation.y = Math.PI / 2;
       trimSolenoid.position.set(0.15, 0.66, 0);
+      trimSolenoid.userData.sharedGlbMat = true;
       const pemfCoilMat = makeMat({
         color: 0x38bdf8,
         emissive: 0x0ea5e9,
         emissiveIntensity: 0.72,
         roughness: 0.2,
       });
-      const innerCoil = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.016, 6, 24), pemfCoilMat);
+      const innerCoil = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.016, 10, 32), pemfCoilMat);
       innerCoil.rotation.y = Math.PI / 2;
       innerCoil.position.set(0.08, 0.66, 0);
       innerCoil.userData.noCastShadow = true;
       inner.add(outerSolenoid, trimSolenoid, innerCoil);
       // Side PEMF Gauss Generator Tower + armored conduit to solenoid ring
-      box(0.24, 0.74, 0.22, whiteBody, 0.68, 0.4, -0.34);
+      bevelBox(0.24, 0.74, 0.22, 0.024, 0.006, whiteBody, 0.68, 0.4, -0.34);
       const pScr = box(
         0.16,
         0.11,
@@ -4587,39 +4753,34 @@ export function createCatalogMesh3D(
 
     case 'tilt_table': {
       // Neurorehabilitation Electric Standing Tilt Table (2x1) with Footboard, Grab Rails & Safety Straps
-      box(1.48, 0.08, 0.72, silverMetal, 0, 0.05, 0);
+      bevelBox(1.48, 0.08, 0.72, 0.024, 0.006, silverMetal, 0, 0.05, 0);
       for (const lx of [-0.64, 0.64]) {
         for (const lz of [-0.3, 0.3]) {
-          cyl(0.036, 0.036, 0.05, blackRubber, lx, 0.025, lz);
+          smoothCyl(0.036, 0.036, 0.05, blackRubber, lx, 0.025, lz, 20);
         }
       }
       // Dual heavy electric lift actuator columns
-      box(0.28, 0.56, 0.34, darkSlate, -0.08, 0.34, 0);
-      const ram = cyl(0.036, 0.04, 0.48, silverMetal, 0.2, 0.42, 0);
+      bevelBox(0.28, 0.56, 0.34, 0.024, 0.008, darkSlate, -0.08, 0.34, 0);
+      const ram = smoothCyl(0.036, 0.04, 0.48, silverMetal, 0.2, 0.42, 0, 20);
       ram.rotation.z = -0.35;
       // Tilted neuro standing plinth group (~30 deg incline, head at -X, footboard at +X for consistent orientation)
       const tiltGroup = new THREE.Group();
       tiltGroup.position.set(0.02, 0.68, 0);
       tiltGroup.rotation.z = -0.52;
-      const tDeck = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.06, 0.68), whiteBody);
-      const tPad = new THREE.Mesh(new THREE.BoxGeometry(1.56, 0.09, 0.64), blueUpholstery);
-      tPad.position.y = 0.075;
-      const tPill = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.06, 0.42), whiteBody);
-      tPill.position.set(-0.6, 0.14, 0);
+      const tDeck = bevelBox(1.62, 0.06, 0.68, 0.03, 0.006, whiteBody, 0, 0, 0);
+      const tPad = bevelBox(1.56, 0.09, 0.64, 0.04, 0.014, blueUpholstery, 0, 0.075, 0);
+      const tPill = bevelBox(0.24, 0.06, 0.42, 0.04, 0.012, whiteBody, -0.6, 0.14, 0);
+      tPill.userData.receiveOnly = true;
       // Perpendicular steel & non-slip rubber Footboard at bottom (+x)
-      const footBoard = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.34, 0.64), darkSlate);
-      footBoard.position.set(0.78, 0.22, 0);
+      const footBoard = bevelBox(0.07, 0.34, 0.64, 0.018, 0.006, darkSlate, 0.78, 0.22, 0);
       // Bilateral grab rails + blue thoracic & knee stabilization Velcro belts
       for (const gz of [-0.34, 0.34]) {
-        const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.78, 8), silverMetal);
+        const rail = smoothCyl(0.018, 0.018, 0.78, silverMetal, 0, 0.16, gz, 18);
         rail.rotation.z = Math.PI / 2;
-        rail.position.set(0, 0.16, gz);
         tiltGroup.add(rail);
       }
-      const strapChest = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.68), cyanAccent);
-      strapChest.position.set(-0.26, 0.09, 0);
-      const strapKnee = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.12, 0.68), cyanAccent);
-      strapKnee.position.set(0.28, 0.09, 0);
+      const strapChest = bevelBox(0.14, 0.12, 0.68, 0.016, 0.006, cyanAccent, -0.26, 0.09, 0);
+      const strapKnee = bevelBox(0.13, 0.12, 0.68, 0.016, 0.006, cyanAccent, 0.28, 0.09, 0);
       tiltGroup.add(tDeck, tPad, tPill, footBoard, strapChest, strapKnee);
       inner.add(tiltGroup);
       inner.scale.setScalar(0.92);

@@ -721,7 +721,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     scene.add(camera);
     scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer, lightsLayer);
 
-    const fppBackdrop = createFppRoomBackdrop3D(textures, maxAniso);
+    const fppBackdrop = createFppRoomBackdrop3D(textures, maxAniso, {
+      enableShadows: !isSoftwareGl,
+    });
     scene.add(fppBackdrop.group);
     const fppHands = createFppClinicianHands3D(textures, latestRef.current.playerProfile);
     camera.add(fppHands.group);
@@ -4542,6 +4544,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           const fog = scene.fog as THREE.Fog;
           fog.near = 25;
           fog.far = 65;
+          sunLight.visible = false;
+          hemi.intensity = 0.44;
+          scene.environmentIntensity = 0.64;
           renderer.toneMappingExposure = 0.96;
           drawOverlayBadges();
         }
@@ -4573,6 +4578,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           fppHands.updateMotion(0, 0, tSec, false, camera.aspect);
           cs.curX = cs.targetX;
           cs.curZ = cs.targetZ;
+          sunLight.visible = true;
           atmoDirty = true;
         }
 

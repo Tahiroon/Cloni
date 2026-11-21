@@ -30,8 +30,8 @@ function createWallEngravingTextures(maxAniso: number): {
   colorTex: THREE.CanvasTexture;
   bumpTex: THREE.CanvasTexture;
 } {
-  const W = 1280;
-  const H = 360;
+  const W = 2048;
+  const H = 576;
 
   const colorCanvas = document.createElement('canvas');
   colorCanvas.width = W;
@@ -61,71 +61,71 @@ function createWallEngravingTextures(maxAniso: number): {
       ctx.direction = 'ltr';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = '800 72px "Plus Jakarta Sans", "Cairo", sans-serif';
+      ctx.font = '800 115px "Plus Jakarta Sans", "Cairo", sans-serif';
       ctx.fillStyle = mainColor;
-      ctx.fillText('Therason physiotherapy', W / 2 + offsetX, 118 + offsetY);
+      ctx.fillText('Therason physiotherapy', W / 2 + offsetX, 188 + offsetY);
 
       // Sleek architectural divider line
       ctx.fillStyle = lineColor;
-      ctx.fillRect(W / 2 - 230 + offsetX, 182 + offsetY, 460, 4);
+      ctx.fillRect(W / 2 - 368 + offsetX, 290 + offsetY, 736, 6);
 
       // Line 2: "Powered by طـــاهــر مــحـمـد"
       const prefix = 'Powered by ';
       const arName = 'طـــاهــر مــحـمـد';
-      ctx.font = '700 40px "Plus Jakarta Sans", sans-serif';
+      ctx.font = '700 64px "Plus Jakarta Sans", sans-serif';
       const wPrefix = ctx.measureText(prefix).width;
-      ctx.font = '800 54px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 86px "Cairo", "Plus Jakarta Sans", sans-serif';
       const wName = ctx.measureText(arName).width;
       const totalW = wPrefix + wName;
       const startX = (W - totalW) / 2 + offsetX;
 
       ctx.direction = 'ltr';
       ctx.textAlign = 'left';
-      ctx.font = '700 40px "Plus Jakarta Sans", sans-serif';
+      ctx.font = '700 64px "Plus Jakarta Sans", sans-serif';
       ctx.fillStyle = subLeftColor;
-      ctx.fillText(prefix, startX, 246 + offsetY);
+      ctx.fillText(prefix, startX, 394 + offsetY);
 
       ctx.direction = 'rtl';
       ctx.textAlign = 'right';
-      ctx.font = '800 54px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 86px "Cairo", "Plus Jakarta Sans", sans-serif';
       ctx.fillStyle = subRightColor;
-      ctx.fillText(arName, startX + totalW, 244 + offsetY);
+      ctx.fillText(arName, startX + totalW, 390 + offsetY);
     };
 
     // Subtle crisp lower wall-lip highlight (simulating light catching the bottom edge of engraved letters)
     drawTextPass(
       cCtx,
-      'rgba(255, 255, 255, 0.72)',
-      'rgba(255, 255, 255, 0.65)',
-      'rgba(255, 255, 255, 0.72)',
-      'rgba(255, 255, 255, 0.55)',
+      'rgba(255, 255, 255, 0.78)',
+      'rgba(255, 255, 255, 0.7)',
+      'rgba(255, 255, 255, 0.78)',
+      'rgba(255, 255, 255, 0.6)',
       0,
-      2.5
+      3.8
     );
 
     // Subtle deep carved upper recess shadow inside the plaster wall
     drawTextPass(
       cCtx,
+      'rgba(10, 32, 58, 0.48)',
       'rgba(10, 32, 58, 0.42)',
+      'rgba(10, 32, 58, 0.48)',
       'rgba(10, 32, 58, 0.36)',
-      'rgba(10, 32, 58, 0.42)',
-      'rgba(10, 32, 58, 0.32)',
       0,
-      -2.2
+      -3.4
     );
 
     // Rich azure-cobalt inlaid lettering directly on the wall
-    const titleGrad = cCtx.createLinearGradient(220, 70, 1060, 160);
+    const titleGrad = cCtx.createLinearGradient(352, 112, 1696, 256);
     titleGrad.addColorStop(0, '#075985');
     titleGrad.addColorStop(0.5, '#0284c7');
     titleGrad.addColorStop(1, '#0369a1');
 
-    const lineGrad = cCtx.createLinearGradient(W / 2 - 230, 0, W / 2 + 230, 0);
+    const lineGrad = cCtx.createLinearGradient(W / 2 - 368, 0, W / 2 + 368, 0);
     lineGrad.addColorStop(0, 'rgba(14, 165, 233, 0.15)');
     lineGrad.addColorStop(0.5, '#0ea5e9');
     lineGrad.addColorStop(1, 'rgba(14, 165, 233, 0.15)');
 
-    const nameGrad = cCtx.createLinearGradient(420, 210, 920, 280);
+    const nameGrad = cCtx.createLinearGradient(672, 336, 1472, 448);
     nameGrad.addColorStop(0, '#0369a1');
     nameGrad.addColorStop(0.55, '#0284c7');
     nameGrad.addColorStop(1, '#0ea5e9');
@@ -133,10 +133,10 @@ function createWallEngravingTextures(maxAniso: number): {
     drawTextPass(cCtx, titleGrad, '#1e3a5f', nameGrad, lineGrad, 0, 0);
 
     // Matching negative-engraving bump map (dark strokes = recessed into the wall)
-    drawTextPass(bCtx, '#303030', '#484848', '#303030', '#505050', 0, 0);
+    drawTextPass(bCtx, '#242424', '#3f3f3f', '#242424', '#484848', 0, 0);
   }
 
-  const aniso = Math.min(8, maxAniso || 4);
+  const aniso = Math.min(16, Math.max(4, maxAniso || 4));
   const colorTex = new THREE.CanvasTexture(colorCanvas);
   colorTex.colorSpace = THREE.SRGBColorSpace;
   colorTex.anisotropy = aniso;
@@ -149,11 +149,132 @@ function createWallEngravingTextures(maxAniso: number): {
   return { colorTex, bumpTex };
 }
 
+function applyWallPanelAoShader(
+  mat: THREE.Material,
+  opts: { height: number; topAo: number; botAo: number; cornerAo: number; tag: string }
+) {
+  mat.customProgramCacheKey = () => `fpp-wall-ao-${opts.tag}`;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uHalfH = { value: opts.height * 0.5 };
+    shader.uniforms.uTopAo = { value: opts.topAo };
+    shader.uniforms.uBotAo = { value: opts.botAo };
+    shader.uniforms.uCornerAo = { value: opts.cornerAo };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vFppLocalPos;
+        varying vec2 vFppSpanBound;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vFppLocalPos = position;`
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vFppLocalPos;
+        uniform float uHalfH;
+        uniform float uTopAo;
+        uniform float uBotAo;
+        uniform float uCornerAo;`
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float hNorm = clamp((vFppLocalPos.y + uHalfH) / max(0.01, uHalfH * 2.0), 0.0, 1.0);
+        float botShade = mix(1.0 - uBotAo, 1.0, smoothstep(0.0, 0.14, hNorm));
+        float topShade = mix(1.0 - uTopAo, 1.0, smoothstep(0.0, 0.16, 1.0 - hNorm));
+        float endDist = max(0.0, 2.7 - abs(vFppLocalPos.x));
+        float cornerShade = mix(1.0 - uCornerAo, 1.0, smoothstep(0.0, 0.34, endDist));
+        diffuseColor.rgb *= botShade * topShade * cornerShade;`
+      );
+  };
+}
+
+function applyFloorRoomAoShader(
+  mat: THREE.Material,
+  roomW: number,
+  backZ: number,
+  frontZ: number
+) {
+  const halfW = roomW * 0.5;
+  const centerZ = (backZ + frontZ) * 0.5;
+  const halfD = (frontZ - backZ) * 0.5;
+  mat.customProgramCacheKey = () => 'fpp-floor-ao';
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uHalfW = { value: halfW };
+    shader.uniforms.uHalfD = { value: halfD };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec2 vFppFloorLocal;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vFppFloorLocal = position.xy;`
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec2 vFppFloorLocal;
+        uniform float uHalfW;
+        uniform float uHalfD;`
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float dxWall = max(0.0, uHalfW - abs(vFppFloorLocal.x));
+        float dzWall = max(0.0, uHalfD - abs(vFppFloorLocal.y));
+        float wallDist = min(dxWall, dzWall);
+        float wallAo = mix(0.78, 1.0, smoothstep(0.0, 0.42, wallDist));
+        vec2 bedOffset = vec2(vFppFloorLocal.x, vFppFloorLocal.y + (${centerZ.toFixed(3)}));
+        float bedShadowDist = length(vec2(bedOffset.x * 0.86, bedOffset.y * 1.15));
+        float bedContactAo = mix(0.84, 1.0, smoothstep(0.32, 1.38, bedShadowDist));
+        diffuseColor.rgb *= wallAo * bedContactAo;`
+      );
+  };
+}
+
+function createExtrudedProfileAlongX(
+  length: number,
+  profilePts: Array<[number, number]>,
+  bevelSize = 0.004
+): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape();
+  shape.moveTo(profilePts[0][0], profilePts[0][1]);
+  for (let i = 1; i < profilePts.length; i++) {
+    shape.lineTo(profilePts[i][0], profilePts[i][1]);
+  }
+  shape.closePath();
+
+  const geom = new THREE.ExtrudeGeometry(shape, {
+    depth: Math.max(0.02, length - bevelSize * 2),
+    bevelEnabled: bevelSize > 0,
+    bevelThickness: bevelSize,
+    bevelSize,
+    bevelSegments: 2,
+    steps: 1,
+  });
+  // Rotate -PI/2 around Y so Shape X maps directly to +Z room depth, Shape Y maps to +Y height, and extrusion spans X centered at 0
+  geom.rotateY(-Math.PI / 2);
+  geom.translate(length * 0.5 - bevelSize, 0, 0);
+  geom.computeVertexNormals();
+  return geom;
+}
+
 export function createFppRoomBackdrop3D(
   textures: TextureBundle,
-  maxAniso: number
+  maxAniso: number,
+  opts?: { enableShadows?: boolean }
 ): FppBackdropHandle {
   const group = new THREE.Group();
+  const enableShadows = Boolean(opts?.enableShadows);
   const disposables: Array<{ dispose: () => void }> = [];
   const trackGeom = <T extends THREE.BufferGeometry>(g: T): T => {
     disposables.push(g);
@@ -163,65 +284,124 @@ export function createFppRoomBackdrop3D(
     disposables.push(m);
     return m;
   };
+  const cloneTex = (src: THREE.CanvasTexture, rx: number, ry: number): THREE.CanvasTexture => {
+    const t = src.clone();
+    t.repeat.set(rx, ry);
+    t.anisotropy = Math.min(16, Math.max(4, maxAniso || 4));
+    t.needsUpdate = true;
+    disposables.push(t);
+    return t;
+  };
+
+  // High-resolution textures specifically scaled for close-up examination bay walls & surfaces
+  const fppPlasterAlbedo = cloneTex(textures.plasterAlbedo, 4.6, 2.2);
+  const fppStuccoBump = cloneTex(textures.stuccoBump, 4.6, 2.2);
+  const fppPlasterRough = cloneTex(textures.plasterRough, 4.6, 2.2);
+
+  const fppWainscotAlbedo = cloneTex(textures.wainscotAlbedo, 6.0, 1.0);
+  const fppWainscotBump = cloneTex(textures.wainscotBump, 6.0, 1.0);
+
+  const fppWoodColor = cloneTex(textures.wood, 1.1, 2.4);
+  const fppWoodBump = cloneTex(textures.woodBump, 1.1, 2.4);
+
+  const fppMetalBump = cloneTex(textures.brushedMetalBump, 3.5, 1.5);
+
+  const roomW = 5.4;
+  const backZ = -0.84;
+  const frontZ = 2.96;
+  const roomD = frontZ - backZ;
+  const centerZ = (backZ + frontZ) / 2;
+  const wallH = 2.75;
+  const wainH = 0.88;
+  const upperH = wallH - wainH;
 
   const plasterMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      map: textures.plasterAlbedo,
-      bumpMap: textures.stuccoBump,
-      roughnessMap: textures.plasterRough,
-      bumpScale: 0.018,
-      roughness: 0.92,
+    new THREE.MeshPhysicalMaterial({
+      map: fppPlasterAlbedo,
+      bumpMap: fppStuccoBump,
+      roughnessMap: fppPlasterRough,
+      bumpScale: 0.022,
+      roughness: 0.88,
       metalness: 0.0,
-      envMapIntensity: 0.45,
+      sheen: 0.14,
+      sheenRoughness: 0.85,
+      sheenColor: new THREE.Color(0xf8fafc),
+      envMapIntensity: 0.42,
     })
   );
+  applyWallPanelAoShader(plasterMat, {
+    height: upperH,
+    topAo: 0.18,
+    botAo: 0.1,
+    cornerAo: 0.16,
+    tag: 'upper-plaster',
+  });
 
   const wainscotMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      map: textures.wainscotAlbedo,
-      bumpMap: textures.wainscotBump,
-      bumpScale: 0.016,
-      roughness: 0.56,
-      metalness: 0.05,
+    new THREE.MeshPhysicalMaterial({
+      map: fppWainscotAlbedo,
+      bumpMap: fppWainscotBump,
+      bumpScale: 0.018,
+      roughness: 0.48,
+      metalness: 0.06,
+      clearcoat: 0.18,
+      clearcoatRoughness: 0.46,
+      envMapIntensity: 0.56,
     })
   );
+  applyWallPanelAoShader(wainscotMat, {
+    height: wainH,
+    topAo: 0.14,
+    botAo: 0.18,
+    cornerAo: 0.16,
+    tag: 'lower-wain',
+  });
 
   const darkTrimMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      color: 0x26303e,
-      bumpMap: textures.brushedMetalBump,
-      bumpScale: 0.003,
-      roughness: 0.36,
-      metalness: 0.7,
+    new THREE.MeshPhysicalMaterial({
+      color: 0x242e3c,
+      bumpMap: fppMetalBump,
+      bumpScale: 0.004,
+      roughness: 0.34,
+      metalness: 0.64,
+      clearcoat: 0.24,
+      clearcoatRoughness: 0.38,
+      envMapIntensity: 0.85,
     })
   );
 
   const aluminumMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      color: 0xc2cbd6,
-      bumpMap: textures.brushedMetalBump,
-      bumpScale: 0.004,
-      roughness: 0.3,
-      metalness: 0.78,
+    new THREE.MeshPhysicalMaterial({
+      color: 0xc8d2de,
+      bumpMap: fppMetalBump,
+      bumpScale: 0.005,
+      roughness: 0.26,
+      metalness: 0.84,
+      clearcoat: 0.15,
+      clearcoatRoughness: 0.32,
+      envMapIntensity: 0.95,
     })
   );
 
   const woodSlatMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      map: textures.wood,
-      bumpMap: textures.woodBump,
-      bumpScale: 0.012,
-      roughness: 0.62,
+    new THREE.MeshPhysicalMaterial({
+      map: fppWoodColor,
+      bumpMap: fppWoodBump,
+      bumpScale: 0.016,
+      roughness: 0.56,
       metalness: 0.02,
+      clearcoat: 0.16,
+      clearcoatRoughness: 0.48,
+      envMapIntensity: 0.58,
     })
   );
 
   const warmCoveMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0xfef3c7,
+      color: 0xfff5db,
       emissive: 0xfbbf24,
-      emissiveIntensity: 0.55,
-      roughness: 0.3,
+      emissiveIntensity: 0.62,
+      roughness: 0.26,
     })
   );
 
@@ -232,103 +412,168 @@ export function createFppRoomBackdrop3D(
     new THREE.MeshStandardMaterial({
       map: wallSignColorTex,
       bumpMap: wallSignBumpTex,
-      bumpScale: 0.022,
+      bumpScale: 0.026,
       transparent: true,
       alphaTest: 0.01,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
-      roughness: 0.62,
-      metalness: 0.12,
+      roughness: 0.44,
+      metalness: 0.24,
       emissiveMap: wallSignColorTex,
       emissive: 0x0ea5e9,
-      emissiveIntensity: 0.14,
+      emissiveIntensity: 0.16,
     })
   );
 
-  const floorColorTex = textures.tileBlue.clone();
-  floorColorTex.repeat.set(3.6, 2.6);
-  floorColorTex.needsUpdate = true;
-  disposables.push(floorColorTex);
-
-  const floorNormTex = textures.tileNormal.clone();
-  floorNormTex.repeat.set(3.6, 2.6);
-  floorNormTex.needsUpdate = true;
-  disposables.push(floorNormTex);
+  const floorColorTex = cloneTex(textures.tileBlue, 3.2, 2.25);
+  const floorRoughTex = cloneTex(textures.tileBlueRough, 3.2, 2.25);
+  const floorNormTex = cloneTex(textures.tileNormal, 3.2, 2.25);
 
   const floorMat = trackMat(
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshPhysicalMaterial({
       map: floorColorTex,
+      roughnessMap: floorRoughTex,
       normalMap: floorNormTex,
-      normalScale: new THREE.Vector2(0.32, 0.32),
-      roughness: 0.46,
+      normalScale: new THREE.Vector2(0.46, 0.46),
+      roughness: 0.56,
       metalness: 0.04,
-      envMapIntensity: 0.45,
+      clearcoat: 0.24,
+      clearcoatRoughness: 0.34,
+      envMapIntensity: 0.58,
     })
   );
+  applyFloorRoomAoShader(floorMat, roomW, backZ, frontZ);
 
   const ceilingMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0xf1f5f9,
+      map: fppPlasterAlbedo,
+      roughnessMap: fppPlasterRough,
+      color: 0xf8fafc,
       roughness: 0.92,
       metalness: 0.0,
-      envMapIntensity: 0.35,
+      envMapIntensity: 0.32,
     })
   );
 
   const ceilingPanelMat = trackMat(
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       emissive: 0xfff8eb,
-      emissiveIntensity: 0.72,
-      roughness: 0.24,
+      emissiveIntensity: 0.78,
+      roughness: 0.2,
+      clearcoat: 0.45,
+      clearcoatRoughness: 0.18,
     })
   );
 
-  // Enclosed universal examination bay template (completely isolates session from outer clinic landmarks)
-  const backZ = -0.84;
-  const frontZ = 2.96;
-  const roomW = 5.4;
-  const roomD = frontZ - backZ;
-  const centerZ = (backZ + frontZ) / 2;
-  const wallH = 2.75;
-  const wainH = 0.88;
-  const upperH = wallH - wainH;
+  // Beveled architectural wainscoting stile molding geometry (reused across walls)
+  const stileGeom = trackGeom(
+    (() => {
+      const s = new THREE.Shape();
+      s.moveTo(-0.021, 0);
+      s.lineTo(0.021, 0);
+      s.lineTo(0.017, 0.014);
+      s.lineTo(-0.017, 0.014);
+      s.closePath();
+      const g = new THREE.ExtrudeGeometry(s, {
+        depth: wainH - 0.125,
+        bevelEnabled: true,
+        bevelSize: 0.0025,
+        bevelThickness: 0.0025,
+        bevelSegments: 2,
+      });
+      g.rotateX(-Math.PI / 2);
+      g.translate(0, 0, 0.015);
+      g.computeVertexNormals();
+      return g;
+    })()
+  );
 
+  // Enclosed universal examination bay template (completely isolates session from outer clinic landmarks)
   const buildWallSpan = (spanLen: number, x: number, z: number, rotY: number) => {
     const wg = new THREE.Group();
     wg.position.set(x, 0, z);
     wg.rotation.y = rotY;
 
-    const skirt = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(spanLen, 0.1, 0.08)),
-      darkTrimMat
+    // Stepped beveled anodized baseboard skirt (0 .. 0.11m)
+    const skirtGeom = trackGeom(
+      createExtrudedProfileAlongX(
+        spanLen,
+        [
+          [-0.032, 0.0],
+          [0.052, 0.0],
+          [0.052, 0.088],
+          [0.041, 0.106],
+          [-0.032, 0.106],
+        ],
+        0.003
+      )
     );
-    skirt.position.set(0, 0.05, 0);
+    const skirt = new THREE.Mesh(skirtGeom, darkTrimMat);
+    skirt.receiveShadow = enableShadows;
 
+    // Wainscot lower wall body
     const wain = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(spanLen, wainH, 0.065)),
       wainscotMat
     );
     wain.position.set(0, wainH / 2, 0);
+    wain.receiveShadow = enableShadows;
 
-    const dado = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(spanLen + 0.02, 0.05, 0.09)),
-      aluminumMat
+    // Subtle physical vertical wainscot panel stiles for genuine architectural relief
+    const panelCount = Math.max(4, Math.round(spanLen / 0.68));
+    const stepX = (spanLen - 0.44) / panelCount;
+    for (let i = 0; i <= panelCount; i++) {
+      const sx = -spanLen * 0.5 + 0.22 + i * stepX;
+      const stile = new THREE.Mesh(stileGeom, wainscotMat);
+      stile.position.set(sx, 0.106, 0.031);
+      stile.receiveShadow = enableShadows;
+      wg.add(stile);
+    }
+
+    // Stepped beveled brushed-aluminum dado chair rail
+    const dadoGeom = trackGeom(
+      createExtrudedProfileAlongX(
+        spanLen + 0.02,
+        [
+          [-0.034, wainH - 0.014],
+          [0.054, wainH - 0.008],
+          [0.058, wainH + 0.012],
+          [0.052, wainH + 0.024],
+          [0.044, wainH + 0.038],
+          [-0.034, wainH + 0.038],
+        ],
+        0.003
+      )
     );
-    dado.position.set(0, wainH + 0.015, 0.008);
+    const dado = new THREE.Mesh(dadoGeom, aluminumMat);
+    dado.receiveShadow = enableShadows;
 
+    // Upper acoustic lime-plaster wall
     const upper = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(spanLen, upperH, 0.06)),
       plasterMat
     );
     upper.position.set(0, wainH + upperH / 2, 0);
+    upper.receiveShadow = enableShadows;
 
-    const crown = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(spanLen + 0.02, 0.065, 0.09)),
-      darkTrimMat
+    // Stepped recessed ceiling crown cornice
+    const crownGeom = trackGeom(
+      createExtrudedProfileAlongX(
+        spanLen + 0.02,
+        [
+          [-0.034, wallH - 0.072],
+          [0.036, wallH - 0.072],
+          [0.044, wallH - 0.056],
+          [0.056, wallH - 0.046],
+          [0.056, wallH],
+          [-0.034, wallH],
+        ],
+        0.003
+      )
     );
-    crown.position.set(0, wallH - 0.032, 0.008);
+    const crown = new THREE.Mesh(crownGeom, darkTrimMat);
 
     wg.add(skirt, wain, dado, upper, crown);
     group.add(wg);
@@ -340,13 +585,28 @@ export function createFppRoomBackdrop3D(
   buildWallSpan(roomD + 0.12, -roomW / 2, centerZ, Math.PI / 2);
   buildWallSpan(roomD + 0.12, roomW / 2, centerZ, -Math.PI / 2);
 
-  // Seamless universal floor & ceiling
+  // Subtle corner architectural reveal pilasters so wall corners look crisp & clean
+  const cornerGeom = trackGeom(new THREE.BoxGeometry(0.064, wallH, 0.064));
+  for (const [cx, cz] of [
+    [-roomW / 2 + 0.024, backZ + 0.024],
+    [roomW / 2 - 0.024, backZ + 0.024],
+    [-roomW / 2 + 0.024, frontZ - 0.024],
+    [roomW / 2 - 0.024, frontZ - 0.024],
+  ]) {
+    const pilaster = new THREE.Mesh(cornerGeom, darkTrimMat);
+    pilaster.position.set(cx, wallH / 2, cz);
+    pilaster.receiveShadow = enableShadows;
+    group.add(pilaster);
+  }
+
+  // Seamless universal porcelain floor & ceiling
   const floorMesh = new THREE.Mesh(
     trackGeom(new THREE.PlaneGeometry(roomW + 0.14, roomD + 0.14)),
     floorMat
   );
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.position.set(0, -0.002, centerZ);
+  floorMesh.receiveShadow = enableShadows;
   group.add(floorMesh);
 
   const ceilingMesh = new THREE.Mesh(
@@ -357,27 +617,61 @@ export function createFppRoomBackdrop3D(
   ceilingMesh.position.set(0, wallH, centerZ);
   group.add(ceilingMesh);
 
+  // Multi-part recessed ceiling light troffer (aluminum bezel + shadow reveal + frosted acrylic diffuser)
+  const trofferBezel = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(1.26, 0.028, 0.54)),
+    aluminumMat
+  );
+  trofferBezel.position.set(0, wallH - 0.008, 0.52);
+  const trofferRecess = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(1.2, 0.024, 0.48)),
+    darkTrimMat
+  );
+  trofferRecess.position.set(0, wallH - 0.011, 0.52);
   const ceilingLightPanel = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.18, 0.02, 0.46)),
+    trackGeom(new THREE.BoxGeometry(1.16, 0.018, 0.44)),
     ceilingPanelMat
   );
-  ceilingLightPanel.position.set(0, wallH - 0.01, 0.52);
-  group.add(ceilingLightPanel);
+  ceilingLightPanel.position.set(0, wallH - 0.014, 0.52);
+  group.add(trofferBezel, trofferRecess, ceilingLightPanel);
 
-  // Back wall oak acoustic wood-slat flanks
+  // Back wall oak acoustic wood-slat flanks (with outer architectural bezel + beveled oiled oak battens)
+  const slatShape = new THREE.Shape();
+  slatShape.moveTo(-0.027, -0.755);
+  slatShape.lineTo(0.027, -0.755);
+  slatShape.lineTo(0.027, 0.755);
+  slatShape.lineTo(-0.027, 0.755);
+  slatShape.closePath();
+  const beveledSlatGeom = trackGeom(
+    new THREE.ExtrudeGeometry(slatShape, {
+      depth: 0.022,
+      bevelEnabled: true,
+      bevelSize: 0.0045,
+      bevelThickness: 0.0045,
+      bevelSegments: 2,
+    })
+  );
+  beveledSlatGeom.center();
+  beveledSlatGeom.computeVertexNormals();
+
   for (const flankX of [-1.32, 1.32]) {
+    const outerFrame = new THREE.Mesh(
+      trackGeom(new THREE.BoxGeometry(0.59, 1.59, 0.018)),
+      aluminumMat
+    );
+    outerFrame.position.set(flankX, 1.74, backZ + 0.032);
     const backing = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(0.56, 1.56, 0.02)),
+      trackGeom(new THREE.BoxGeometry(0.56, 1.56, 0.022)),
       darkTrimMat
     );
     backing.position.set(flankX, 1.74, backZ + 0.038);
-    group.add(backing);
+    backing.receiveShadow = enableShadows;
+    group.add(outerFrame, backing);
     for (let si = -2; si <= 2; si++) {
-      const slat = new THREE.Mesh(
-        trackGeom(new THREE.BoxGeometry(0.058, 1.52, 0.026)),
-        woodSlatMat
-      );
-      slat.position.set(flankX + si * 0.105, 1.74, backZ + 0.052);
+      const slat = new THREE.Mesh(beveledSlatGeom, woodSlatMat);
+      slat.position.set(flankX + si * 0.105, 1.74, backZ + 0.056);
+      slat.castShadow = enableShadows;
+      slat.receiveShadow = enableShadows;
       group.add(slat);
     }
   }
@@ -391,27 +685,50 @@ export function createFppRoomBackdrop3D(
   wallEngraving.renderOrder = 1;
   group.add(wallEngraving);
 
+  // Recessed warm LED architectural cove housing + emitter strip
+  const coveHousing = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(2.02, 0.038, 0.068)),
+    darkTrimMat
+  );
+  coveHousing.position.set(0, wallH - 0.052, backZ + 0.072);
   const coveBar = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.95, 0.026, 0.05)),
+    trackGeom(new THREE.BoxGeometry(1.95, 0.022, 0.044)),
     warmCoveMat
   );
-  coveBar.position.set(0, wallH - 0.06, backZ + 0.08);
-  group.add(coveBar);
+  coveBar.position.set(0, wallH - 0.064, backZ + 0.082);
+  group.add(coveHousing, coveBar);
 
-  const wallLight = new THREE.PointLight(0xfff7ea, 1.15, 6.5, 1.0);
+  // Calibrated Three-Point Clinical FPP Illumination
+  const wallLight = new THREE.PointLight(0xffe9c8, 1.12, 6.2, 1.2);
   wallLight.castShadow = false;
-  wallLight.position.set(0, 2.24, backZ + 0.85);
+  wallLight.position.set(0, 2.26, backZ + 0.72);
   group.add(wallLight);
 
-  const roomFillLight = new THREE.PointLight(0xf8fbff, 1.0, 8.5, 1.0);
+  const roomFillLight = new THREE.PointLight(0xeef5ff, 0.88, 8.8, 1.15);
   roomFillLight.castShadow = false;
-  roomFillLight.position.set(0, 2.48, 0.85);
+  roomFillLight.position.set(-0.35, 2.42, 1.1);
   group.add(roomFillLight);
+
+  // Dedicated ceiling exam-bay key SpotLight casting crisp soft shadows from bed & patient onto floor
+  const examKeySpot = new THREE.SpotLight(0xfffaf0, enableShadows ? 2.45 : 1.35, 8.5, Math.PI / 2.55, 0.82, 1.1);
+  examKeySpot.position.set(0.32, wallH - 0.06, 0.65);
+  examKeySpot.target.position.set(0, 0.42, -0.04);
+  if (enableShadows) {
+    examKeySpot.castShadow = true;
+    examKeySpot.shadow.mapSize.set(1024, 1024);
+    examKeySpot.shadow.camera.near = 0.4;
+    examKeySpot.shadow.camera.far = 6.5;
+    examKeySpot.shadow.bias = -0.00045;
+    examKeySpot.shadow.normalBias = 0.016;
+    examKeySpot.shadow.radius = 2.8;
+  }
+  group.add(examKeySpot, examKeySpot.target);
 
   const setLightFactor = (alpha: number, isNight = false) => {
     const a = THREE.MathUtils.clamp(alpha, 0, 1);
-    wallLight.intensity = a * (isNight ? 1.48 : 1.15);
-    roomFillLight.intensity = a * (isNight ? 1.38 : 0.95);
+    wallLight.intensity = a * (isNight ? 1.48 : 1.12);
+    roomFillLight.intensity = a * (isNight ? 1.18 : 0.86);
+    examKeySpot.intensity = a * (enableShadows ? (isNight ? 2.65 : 2.35) : (isNight ? 1.55 : 1.32));
   };
 
   group.visible = false;
