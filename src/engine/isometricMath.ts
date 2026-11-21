@@ -1,8 +1,5 @@
 import { ClinicRoom, PlacedItem } from '../types/clinic';
 
-export const TILE_W = 68;
-export const TILE_H = 34;
-
 export const CLINIC_FLOOR_ELEV = 0.26;
 export const COURTYARD_WALKWAY_TOP = 0.065;
 export const CLINIC_FLOOR_TOP = 0.085 + CLINIC_FLOOR_ELEV; // 0.345
@@ -67,26 +64,6 @@ export function getSurfaceElevation(wx: number, wz: number): SurfaceElevation {
     actorY: 0.02,
     onStairs: false,
   };
-}
-
-export interface Point2D {
-  x: number;
-  y: number;
-}
-
-export function gridToIso(gx: number, gy: number): Point2D {
-  return {
-    x: (gx - gy) * (TILE_W / 2),
-    y: (gx + gy) * (TILE_H / 2),
-  };
-}
-
-export function isoToGrid(ix: number, iy: number): Point2D {
-  const halfW = TILE_W / 2;
-  const halfH = TILE_H / 2;
-  const gx = (ix / halfW + iy / halfH) / 2;
-  const gy = (iy / halfH - ix / halfW) / 2;
-  return { x: gx, y: gy };
 }
 
 export interface ObstacleBox {
@@ -1265,7 +1242,7 @@ export function hasContinuousLineOfSight(
  * Checks whether movement between two adjacent tiles (fromX, fromY) -> (toX, toY)
  * is allowed across clinic walls, fence openings, and unlocked rooms.
  */
-export function canStepBetween(
+function canStepBetween(
   fromX: number,
   fromY: number,
   toX: number,

@@ -221,7 +221,7 @@ function refineGlbAssets(obj: THREE.Object3D) {
   });
 }
 
-async function openAssetCache(): Promise<Cache | null> {
+export async function openAssetCache(): Promise<Cache | null> {
   try {
     if (typeof window !== 'undefined' && 'caches' in window && window.caches) {
       return await window.caches.open(ASSET_CACHE_NAME);
@@ -230,6 +230,48 @@ async function openAssetCache(): Promise<Cache | null> {
     // Cache Storage unavailable (e.g. restricted context)
   }
   return null;
+}
+
+export async function getCachedAssetBlobUrl(url: string): Promise<string | null> {
+  const cache = await openAssetCache();
+  if (!cache) return null;
+  try {
+    const cached = await cache.match(url);
+    if (cached && cached.ok) {
+      const blob = await cached.blob();
+      if (blob.size > 0 && typeof URL !== 'undefined') {
+        return URL.createObjectURL(blob);
+      }
+    }
+  } catch {
+    // Ignore cache read failures
+  }
+  return null;
+}
+
+export async function cacheStaticAssetUrl(url: string, contentType?: string): Promise<void> {
+  const cache = await openAssetCache();
+  if (!cache) return;
+  try {
+    const existing = await cache.match(url);
+    if (existing && existing.ok) return;
+    const res = await fetch(url, { cache: 'default' });
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength === 0) return;
+    await cache.put(
+      url,
+      new Response(buf, {
+        status: 200,
+        headers: {
+          'Content-Type': contentType || res.headers.get('Content-Type') || 'application/octet-stream',
+          'Content-Length': String(buf.byteLength),
+        },
+      })
+    );
+  } catch {
+    // Ignore offline / quota errors silently
+  }
 }
 
 async function fetchAndCacheBinary(

@@ -8,40 +8,169 @@ import { animateHumanoid3D, createHumanoid3D, disposeHumanoid3D } from './humano
 import { createCatalogMesh3D, disposeObject3D } from './models3d';
 import { createTextureBundle } from './textures3d';
 
-const thumbCache = new Map<string, string>();
-const glbRenderedKeys = new Set<string>();
-const subscribers = new Set<() => void>();
-const pendingQueue = new Map<string, { sprite: SpriteKind; width: number; depth: number }>();
-let flushScheduled = false;
+export interface CatalogThumbSpec {
+  sprite: SpriteKind;
+  width: number;
+  depth: number;
+}
 
-interface PlayerThumbSpec {
+export interface PlayerThumbSpec {
   gender: PlayerGender;
   outfitId: PlayerOutfitId;
   hasTarha: boolean;
 }
+
+interface PersistedThumbRecord {
+  v: number;
+  url: string;
+  glb: boolean;
+}
+
+const THUMB_DB_NAME = 'therason_thumb_cache_v1';
+const THUMB_DB_VERSION = 1;
+const THUMB_STORE = 'thumbs';
+const THUMB_SCHEMA_VERSION = 1;
+
+const thumbCache = new Map<string, string>();
+const glbRenderedKeys = new Set<string>();
+const subscribers = new Set<() => void>();
+const pendingQueue = new Map<string, CatalogThumbSpec>();
+let flushScheduled = false;
+
 const pendingPlayerQueue = new Map<string, PlayerThumbSpec>();
 let flushPlayerScheduled = false;
+
+let thumbDbPromise: Promise<IDBDatabase | null> | null = null;
+let hydratePromise: Promise<number> | null = null;
+
+function openThumbDb(): Promise<IDBDatabase | null> {
+  if (thumbDbPromise) return thumbDbPromise;
+  thumbDbPromise = new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') {
+      resolve(null);
+      return;
+    }
+    try {
+      const req = indexedDB.open(THUMB_DB_NAME, THUMB_DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(THUMB_STORE)) {
+          db.createObjectStore(THUMB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+  return thumbDbPromise;
+}
+
+/**
+ * Hydrates previously generated 3D WebP thumbnails from browser IndexedDB into memory
+ * so repeat sessions open the Store & Character Customizer with zero WebGL re-rendering.
+ */
+export function hydrateThumbCacheFromIdb(): Promise<number> {
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = (async () => {
+    const db = await openThumbDb();
+    if (!db) return 0;
+
+    return new Promise<number>((resolve) => {
+      try {
+        const tx = db.transaction(THUMB_STORE, 'readonly');
+        const store = tx.objectStore(THUMB_STORE);
+        const req = store.openCursor();
+        let restored = 0;
+
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) {
+            if (restored > 0) notifySubscribers();
+            resolve(restored);
+            return;
+          }
+          const key = String(cursor.key);
+          const val = cursor.value as Partial<PersistedThumbRecord> | undefined;
+          if (val && val.v === THUMB_SCHEMA_VERSION && typeof val.url === 'string' && val.url.length > 0) {
+            if (!thumbCache.has(key)) {
+              thumbCache.set(key, val.url);
+              restored += 1;
+            }
+            if (val.glb) {
+              glbRenderedKeys.add(key);
+            }
+          }
+          cursor.continue();
+        };
+        req.onerror = () => resolve(restored);
+      } catch {
+        resolve(0);
+      }
+    });
+  })();
+  return hydratePromise;
+}
+
+async function persistThumbEntriesToIdb(
+  entries: Array<{ key: string; url: string; glb: boolean }>
+): Promise<void> {
+  if (entries.length === 0) return;
+  const db = await openThumbDb();
+  if (!db) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(THUMB_STORE, 'readwrite');
+      const store = tx.objectStore(THUMB_STORE);
+      for (const entry of entries) {
+        const record: PersistedThumbRecord = {
+          v: THUMB_SCHEMA_VERSION,
+          url: entry.url,
+          glb: entry.glb,
+        };
+        store.put(record, entry.key);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } catch {
+    // Non-fatal quota / private-browsing fallback
+  }
+}
+
+if (typeof window !== 'undefined') {
+  void hydrateThumbCacheFromIdb();
+}
 
 function notifySubscribers() {
   subscribers.forEach((cb) => cb());
 }
 
-/**
- * Generates crisp 160x160 3D product thumbnails on-demand using a transient
- * offscreen WebGLRenderer, then immediately releases the temporary GPU context.
- */
-export function renderThumbBatch(
-  specs: Array<{ sprite: SpriteKind; width: number; depth: number }>
-): void {
+export function getCatalogThumbKey(sprite: SpriteKind, width: number, depth: number): string {
+  return `${sprite}_${width}x${depth}`;
+}
+
+export function getMissingCatalogThumbSpecs(specs: CatalogThumbSpec[]): CatalogThumbSpec[] {
   const glbIsReady = glbRegistry.ready;
-  const deduped = new Map<string, { sprite: SpriteKind; width: number; depth: number }>();
+  const deduped = new Map<string, CatalogThumbSpec>();
   for (const s of specs) {
-    const key = `${s.sprite}_${s.width}x${s.depth}`;
+    const key = getCatalogThumbKey(s.sprite, s.width, s.depth);
     if (!thumbCache.has(key) || (glbIsReady && !glbRenderedKeys.has(key))) {
       deduped.set(key, s);
     }
   }
-  const missing = Array.from(deduped.values());
+  return Array.from(deduped.values());
+}
+
+/**
+ * Generates crisp 160x160 3D product thumbnails on-demand using a transient
+ * offscreen WebGLRenderer, persists them in IndexedDB, then immediately releases the GPU context.
+ */
+export function renderThumbBatch(specs: CatalogThumbSpec[]): void {
+  const glbIsReady = glbRegistry.ready;
+  const missing = getMissingCatalogThumbSpecs(specs);
   if (missing.length === 0) return;
 
   let renderer: THREE.WebGLRenderer | null = null;
@@ -84,9 +213,10 @@ export function renderThumbBatch(
   const box = new THREE.Box3();
   const center = new THREE.Vector3();
   const dims = new THREE.Vector3();
+  const persisted: Array<{ key: string; url: string; glb: boolean }> = [];
 
   for (const item of missing) {
-    const key = `${item.sprite}_${item.width}x${item.depth}`;
+    const key = getCatalogThumbKey(item.sprite, item.width, item.depth);
     const mesh = createCatalogMesh3D(
       item.sprite,
       textures,
@@ -120,6 +250,7 @@ export function renderThumbBatch(
         if (glbIsReady) {
           glbRenderedKeys.add(key);
         }
+        persisted.push({ key, url, glb: glbIsReady });
       } catch {
         // Ignore security/readback failures
       }
@@ -135,10 +266,53 @@ export function renderThumbBatch(
   renderer.dispose();
   gl.getExtension('WEBGL_lose_context')?.loseContext();
   notifySubscribers();
+  if (persisted.length > 0) {
+    void persistThumbEntriesToIdb(persisted);
+  }
 }
 
-function scheduleThumbRender(spec: { sprite: SpriteKind; width: number; depth: number }) {
-  const key = `${spec.sprite}_${spec.width}x${spec.depth}`;
+/**
+ * Renders missing catalog thumbnails in small, frame-friendly chunks so opening
+ * the Store Sheet never causes main-thread frame hitches.
+ */
+export function renderMissingCatalogThumbsChunked(
+  specs: CatalogThumbSpec[],
+  chunkSize = 6,
+  delayBetweenMs = 24
+): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let rafId = 0;
+
+  void (async () => {
+    await hydrateThumbCacheFromIdb();
+    if (cancelled) return;
+    const missing = getMissingCatalogThumbSpecs(specs);
+    if (missing.length === 0) return;
+
+    let idx = 0;
+    const step = () => {
+      if (cancelled || idx >= missing.length) return;
+      renderThumbBatch(missing.slice(idx, idx + chunkSize));
+      idx += chunkSize;
+      if (idx < missing.length && !cancelled) {
+        timer = setTimeout(() => {
+          rafId = requestAnimationFrame(step);
+        }, delayBetweenMs);
+      }
+    };
+    rafId = requestAnimationFrame(step);
+  })();
+
+  return () => {
+    cancelled = true;
+    if (timer) clearTimeout(timer);
+    if (rafId) cancelAnimationFrame(rafId);
+  };
+}
+
+function scheduleThumbRender(spec: CatalogThumbSpec) {
+  const key = getCatalogThumbKey(spec.sprite, spec.width, spec.depth);
   pendingQueue.set(key, spec);
   if (flushScheduled) return;
   flushScheduled = true;
@@ -156,23 +330,33 @@ export function useCatalogThumb(
   width: number,
   depth: number
 ): string | null {
-  const key = `${sprite}_${width}x${depth}`;
+  const key = getCatalogThumbKey(sprite, width, depth);
   const [url, setUrl] = useState<string | null>(() => thumbCache.get(key) || null);
 
   useEffect(() => {
+    let mounted = true;
     startPreloadGlbs();
     const update = () => {
+      if (!mounted) return;
       const next = thumbCache.get(key) || null;
       setUrl(next);
     };
     subscribers.add(update);
-    const unsubGlb = glbRegistry.onReady(() => {
-      if (!glbRenderedKeys.has(key)) {
-        scheduleThumbRender({ sprite, width, depth });
-      }
+
+    let unsubGlb = () => {};
+    void hydrateThumbCacheFromIdb().then(() => {
+      if (!mounted) return;
+      update();
+      unsubGlb = glbRegistry.onReady(() => {
+        if (!glbRenderedKeys.has(key)) {
+          scheduleThumbRender({ sprite, width, depth });
+        }
+      });
     });
+
     update();
     return () => {
+      mounted = false;
       subscribers.delete(update);
       unsubGlb();
     };
@@ -189,6 +373,14 @@ export function getPlayerOutfitThumbKey(
   const outfit = resolvePlayerOutfitMeta(outfitId);
   const effectiveTarha = gender === 'female' ? (outfit.forceTarha ? true : hasTarha) : false;
   return `pchar_${gender}_${outfit.id}_${effectiveTarha ? 1 : 0}`;
+}
+
+export function hasPlayerOutfitThumb(
+  gender: PlayerGender,
+  outfitId: PlayerOutfitId,
+  hasTarha: boolean
+): boolean {
+  return thumbCache.has(getPlayerOutfitThumbKey(gender, outfitId, hasTarha));
 }
 
 export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
@@ -255,6 +447,7 @@ export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
     leatherBump: textures.leatherBump,
     brushedMetalBump: textures.brushedMetalBump,
   };
+  const persisted: Array<{ key: string; url: string; glb: boolean }> = [];
 
   for (const spec of missing) {
     const key = getPlayerOutfitThumbKey(spec.gender, spec.outfitId, spec.hasTarha);
@@ -302,6 +495,7 @@ export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
     try {
       const url = renderer.domElement.toDataURL('image/webp', 0.92);
       thumbCache.set(key, url);
+      persisted.push({ key, url, glb: true });
     } catch {
       // Ignore readback failures
     }
@@ -316,6 +510,9 @@ export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
   renderer.dispose();
   gl.getExtension('WEBGL_lose_context')?.loseContext();
   notifySubscribers();
+  if (persisted.length > 0) {
+    void persistThumbEntriesToIdb(persisted);
+  }
 }
 
 function schedulePlayerThumbRender(spec: PlayerThumbSpec) {
@@ -342,18 +539,28 @@ export function usePlayerOutfitThumb(
   const [url, setUrl] = useState<string | null>(() => thumbCache.get(key) || null);
 
   useEffect(() => {
+    let mounted = true;
     startPreloadGlbs();
     const update = () => {
+      if (!mounted) return;
       setUrl(thumbCache.get(key) || null);
     };
     subscribers.add(update);
-    const unsubGlb = glbRegistry.onReady(() => {
-      if (!thumbCache.has(key)) {
-        schedulePlayerThumbRender({ gender, outfitId, hasTarha });
-      }
+
+    let unsubGlb = () => {};
+    void hydrateThumbCacheFromIdb().then(() => {
+      if (!mounted) return;
+      update();
+      unsubGlb = glbRegistry.onReady(() => {
+        if (!thumbCache.has(key)) {
+          schedulePlayerThumbRender({ gender, outfitId, hasTarha });
+        }
+      });
     });
+
     update();
     return () => {
+      mounted = false;
       subscribers.delete(update);
       unsubGlb();
     };

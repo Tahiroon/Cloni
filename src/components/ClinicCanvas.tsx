@@ -147,10 +147,8 @@ interface ClinicCanvasProps {
   playerProfile?: PlayerCharacterConfig;
   showPlayerCharacter?: boolean;
   floatingFeedbacks: FloatingFeedback[];
-  focusedPatientId: string | null;
   placementDraft: PlacementDraft | null;
   editMode: boolean;
-  isBlurred: boolean;
   language: Language;
   orbitStep?: number;
   lightingMode?: LightingMode;
@@ -275,10 +273,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   playerProfile,
   showPlayerCharacter = true,
   floatingFeedbacks,
-  focusedPatientId,
   placementDraft,
   editMode,
-  isBlurred,
   language,
   orbitStep = 0,
   lightingMode = 'day',
@@ -320,7 +316,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   const pointerSurfaceRef = useRef<HTMLDivElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [glbsReady, setGlbsReady] = useState<boolean>(() => glbRegistry.ready);
-  const preFocusZoomRef = useRef<number | null>(null);
   const hoveredEditItemIdRef = useRef<string | null>(null);
   const draggingDraftActiveRef = useRef(false);
   const liveDragDraftRef = useRef<PlacementDraft | null>(null);
@@ -492,7 +487,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     playerProfile,
     showPlayerCharacter,
     floatingFeedbacks,
-    focusedPatientId,
     placementDraft,
     editMode,
     language,
@@ -532,7 +526,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     playerProfile,
     showPlayerCharacter,
     floatingFeedbacks,
-    focusedPatientId,
     placementDraft,
     editMode,
     language,
@@ -626,25 +619,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     returnFppDevice: (deviceId: string) => void;
     updateFppBedDevice: (next: FppActiveDeviceState) => void;
   } | null>(null);
-
-  useEffect(() => {
-    if (focusedPatientId) {
-      if (preFocusZoomRef.current === null) {
-        preFocusZoomRef.current = camStateRef.current.targetZoom;
-      }
-      camStateRef.current.panVelX = 0;
-      camStateRef.current.panVelZ = 0;
-      camStateRef.current.targetZoom = 1.85;
-      const p = latestRef.current.patients.find((pt) => pt.id === focusedPatientId);
-      if (p) {
-        camStateRef.current.targetX = p.gridX + 0.5;
-        camStateRef.current.targetZ = p.gridY + 0.5;
-      }
-    } else if (preFocusZoomRef.current !== null) {
-      camStateRef.current.targetZoom = preFocusZoomRef.current;
-      preFocusZoomRef.current = null;
-    }
-  }, [focusedPatientId]);
 
   // Frame newly initiated placement drafts smoothly when placed in the rear solar zone or far perimeter
   const draftIdentityKey = placementDraft
@@ -1371,26 +1345,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           else if (along > -0.20) region = 'lumbar';
           else region = 'knee';
         }
-
-        const aimX =
-          effPosture === 'standing'
-            ? region === 'shoulder'
-              ? side === 'front'
-                ? -0.18
-                : 0.18
-              : 0
-            : effPosture === 'sitting'
-              ? region === 'shoulder'
-                ? -0.18
-                : 0
-              : region === 'cervical'
-                ? headSign * 0.42
-                : region === 'shoulder'
-                  ? headSign * 0.28
-                  : region === 'lumbar'
-                    ? -headSign * 0.02
-                    : -headSign * 0.34;
-        const aimZ = effPosture === 'standing' ? 0.18 : effPosture === 'sitting' ? 0.02 : -0.24;
 
         if (eq.sprite === 'cpm_device') {
           finalX = -headSign * 0.28;
@@ -3510,7 +3464,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         staff: curStaff,
         placedItems: curItems,
         catalogMap: cMap,
-        focusedPatientId: focId,
         firstPersonPatientId: curFppId,
         fppPosture: curFppPosture,
         speakingPatientId: curSpeakId,
@@ -4423,11 +4376,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           : 0;
         entry.turnLean = THREE.MathUtils.damp(entry.turnLean, rawTurnPt, 9.0, dt);
 
-        if (focId === p.id) {
-          camStateRef.current.targetX = entry.visX;
-          camStateRef.current.targetZ = entry.visZ;
-        }
-
         entry.rig.root.position.set(entry.visX, entry.groundY, entry.visZ);
 
         animateHumanoid3D(entry.rig, {
@@ -4449,7 +4397,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           facingRad: entry.facingRad,
           turnLean: entry.turnLean,
           timeSec,
-          isSelected: fppSmoothNow < 0.35 && (focId === p.id || curSelBedId === p.id),
+          isSelected: fppSmoothNow < 0.35 && curSelBedId === p.id,
           inTreatment: p.state === 'in_treatment',
           activeGait: p.state === 'in_treatment' && isActiveGaitStation,
           isDrinking: p.state === 'drinking_water',
@@ -5756,7 +5704,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         placementDraft: curDraft,
         editMode: isEdit,
         floatingFeedbacks: fbs,
-        focusedPatientId: focId,
         language: lang,
         selectedTreeId: selTreeId,
         isPlacementValid: checkValid,
@@ -5934,7 +5881,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       };
 
       // 0. Clean Architectural Placement Outline (zero full-clinic wireframe clutter!)
-      if (curDraft && !focId) {
+      if (curDraft) {
         ctx.save();
         const effW = curDraft.rotation % 2 === 0 ? curDraft.catalogItem.width : curDraft.catalogItem.depth;
         const effD = curDraft.rotation % 2 === 0 ? curDraft.catalogItem.depth : curDraft.catalogItem.width;
@@ -6001,7 +5948,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
 
       // 3. Minimal Edit-Mode Highlights (hovered item stands out crisply; wall items highlight on wall face)
-      if (isEdit && !curDraft && !focId) {
+      if (isEdit && !curDraft) {
         ctx.save();
         const hoveredId = hoveredEditItemIdRef.current;
         for (const item of curItems) {
@@ -6968,7 +6915,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           atmoDirty = true;
         }
 
-        if (!latestRef.current.focusedPatientId && (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005)) {
+        if (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005) {
           cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + cs.panVelX * dt));
           cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + cs.panVelZ * dt));
           cs.panVelX = THREE.MathUtils.damp(cs.panVelX, 0, 6.5, dt);
@@ -7357,7 +7304,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   }, [placementDraft, editMode]);
 
   useEffect(() => {
-    if (!placementDraft || focusedPatientId) return;
+    if (!placementDraft) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -7385,7 +7332,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     placementDraft,
-    focusedPatientId,
     onRotatePlacement,
     onCancelPlacement,
     onConfirmPlacement,
@@ -7646,7 +7592,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
       return;
     }
-    if (focusedPatientId) return;
     clearLongPress();
     if (hoverRafRef.current !== null) {
       cancelAnimationFrame(hoverRafRef.current);
@@ -8001,7 +7946,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (focusedPatientId || firstPersonPatientId) return;
+    if (firstPersonPatientId) return;
     const cs = camStateRef.current;
     const curZoom = cs.targetZoom;
     const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZoom - e.deltaY * 0.0008));
@@ -8042,18 +7987,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           liveDragDraftRef.current = null;
         }}
         onWheel={handleWheel}
-        className={`relative w-full h-full touch-none transition-transform duration-300 ${
-          isBlurred ? 'scale-[1.03]' : ''
-        }`}
+        className="relative w-full h-full touch-none"
       >
         <div ref={mountRef} className="w-full h-full" />
         <canvas
           ref={overlayCanvasRef}
           className="pointer-events-none absolute inset-0 w-full h-full"
         />
-        {isBlurred && (
-          <div className="pointer-events-none absolute inset-0 bg-slate-950/50 transition-opacity duration-300" />
-        )}
         {!glbsReady && !hideInternalLoader && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#0e2239]/85">
             <div className="flex items-center gap-3 rounded-2xl bg-slate-900/95 px-5 py-3 text-white border border-white/15 shadow-2xl">
@@ -8067,7 +8007,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       </div>
 
       {/* Minimal Corner Center-Camera Control (safely above Store button) */}
-      {!focusedPatientId && !firstPersonPatientId && (
+      {!firstPersonPatientId && (
         <div className="absolute left-3.5 bottom-20 z-20 flex flex-col gap-2">
           <button
             type="button"
@@ -8088,7 +8028,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       )}
 
       {/* Subtle Edit-Mode Guide when no item is grabbed */}
-      {editMode && !placementDraft && !focusedPatientId && (
+      {editMode && !placementDraft && (
         <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-slate-900/94 text-slate-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg whitespace-nowrap">
           {language === 'ar'
             ? 'اسحب أي عنصر لنقله مباشرة أو اضغط عليه للتعديل'

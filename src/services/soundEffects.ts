@@ -61,6 +61,20 @@ class SoundEngine {
     this.playTone(340, 0.12, 'sawtooth', 0.05, 0);
     this.playTone(280, 0.16, 'sawtooth', 0.05, 0.11);
   }
+
+  warmup() {
+    this.getCtx();
+  }
 }
 
 export const soundFx = new SoundEngine();
+
+if (typeof window !== 'undefined') {
+  const unlock = () => {
+    soundFx.warmup();
+    window.removeEventListener('pointerdown', unlock, true);
+    window.removeEventListener('keydown', unlock, true);
+  };
+  window.addEventListener('pointerdown', unlock, { capture: true, passive: true, once: true });
+  window.addEventListener('keydown', unlock, { capture: true, passive: true, once: true });
+}

@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { CATALOG_ITEMS, SPECIALTY_META } from '../data/catalog';
 import { glbRegistry } from '../engine3d/glbRegistry';
-import { renderThumbBatch, useCatalogThumb } from '../engine3d/thumbRenderer';
+import { renderMissingCatalogThumbsChunked, useCatalogThumb } from '../engine3d/thumbRenderer';
 import {
   CatalogItem,
   ClinicRoom,
@@ -113,11 +113,14 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
       width: c.width,
       depth: c.depth,
     }));
+    let cancelChunked = () => {};
     const unsub = glbRegistry.onReady(() => {
-      renderThumbBatch(specs);
+      cancelChunked();
+      cancelChunked = renderMissingCatalogThumbsChunked(specs, 6, 20);
     });
     return () => {
       unsub();
+      cancelChunked();
     };
   }, [open, initialFilter]);
 

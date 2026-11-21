@@ -4,6 +4,7 @@ import {
   decodeImageAsset,
   GAME_LOADING_TIPS,
   prewarmCoreCatalogThumbs,
+  resolveAndCacheSplashArt,
   waitForWebFonts,
 } from '../services/gameBootLoader';
 import { Language } from '../types/clinic';
@@ -26,6 +27,7 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
   onFinished,
 }) => {
   const isAr = language === 'ar';
+  const [splashSrc, setSplashSrc] = useState(SPLASH_KEYART_SRC);
   const [fontsReady, setFontsReady] = useState(false);
   const [artReady, setArtReady] = useState(false);
   const [artFailed, setArtFailed] = useState(false);
@@ -48,14 +50,26 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
   // Silent real browser preloading & caching (fonts, key-art, GLBs + textures, indexedDB, WebGL shaders)
   useEffect(() => {
     let active = true;
+    let blobUrlToRevoke: string | null = null;
     startPreloadGlbs();
 
     waitForWebFonts().then(() => {
       if (active) setFontsReady(true);
     });
 
-    decodeImageAsset(SPLASH_KEYART_SRC).then(() => {
-      if (active) setArtReady(true);
+    resolveAndCacheSplashArt(SPLASH_KEYART_SRC).then((cachedUrl) => {
+      if (!active) {
+        if (cachedUrl) URL.revokeObjectURL(cachedUrl);
+        return;
+      }
+      const targetSrc = cachedUrl || SPLASH_KEYART_SRC;
+      if (cachedUrl) {
+        blobUrlToRevoke = cachedUrl;
+        setSplashSrc(cachedUrl);
+      }
+      decodeImageAsset(targetSrc).then(() => {
+        if (active) setArtReady(true);
+      });
     });
 
     const unsubProgress = glbRegistry.onProgress((info) => {
@@ -70,6 +84,7 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
       active = false;
       unsubProgress();
       clearTimeout(dwellTimer);
+      if (blobUrlToRevoke) URL.revokeObjectURL(blobUrlToRevoke);
     };
   }, []);
 
@@ -200,7 +215,7 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
       {/* Soft Ambient Lateral Extension for Wide Desktop Screens (eliminates letterbox bars seamlessly) */}
       {!artFailed && (
         <img
-          src={SPLASH_KEYART_SRC}
+          src={splashSrc}
           alt=""
           aria-hidden="true"
           referrerPolicy="no-referrer"
@@ -213,7 +228,7 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
         <div className="relative h-[98vh] min-w-[104vw] sm:min-w-0 sm:h-[96vh] aspect-[941/1672] shrink-0 sm:[mask-image:linear-gradient(to_right,transparent_0%,black_11%,black_89%,transparent_100%)] sm:[-webkit-mask-image:linear-gradient(to_right,transparent_0%,black_11%,black_89%,transparent_100%)]">
           {!artFailed && (
             <img
-              src={SPLASH_KEYART_SRC}
+              src={splashSrc}
               alt="Therason Physiotherapy Clinic"
               referrerPolicy="no-referrer"
               onLoad={() => setArtReady(true)}

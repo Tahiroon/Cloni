@@ -1,6 +1,19 @@
 import { CATALOG_ITEMS } from '../data/catalog';
-import { glbRegistry } from '../engine3d/glbRegistry';
-import { renderThumbBatch } from '../engine3d/thumbRenderer';
+import {
+  cacheStaticAssetUrl,
+  getCachedAssetBlobUrl,
+  glbRegistry,
+  openAssetCache,
+} from '../engine3d/glbRegistry';
+import {
+  CatalogThumbSpec,
+  getMissingCatalogThumbSpecs,
+  hasPlayerOutfitThumb,
+  hydrateThumbCacheFromIdb,
+  PlayerThumbSpec,
+  renderPlayerOutfitBatch,
+  renderThumbBatch,
+} from '../engine3d/thumbRenderer';
 import { Language } from '../types/clinic';
 
 export interface SmartLoadingTip {
@@ -85,6 +98,8 @@ export const GAME_LOADING_TIPS: SmartLoadingTip[] = [
 ];
 
 const LANG_STORAGE_KEY = 'therason_clinic_language_v1';
+const FONT_STYLESHEET_URL =
+  'https://fonts.googleapis.com/css2?family=Cairo:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap';
 
 export function getInitialBootLanguage(): Language {
   try {
@@ -117,6 +132,17 @@ export async function waitForWebFonts(timeoutMs = 2400): Promise<void> {
     document.fonts.ready.then(() => undefined).catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
+}
+
+/**
+ * Resolves a browser-cached Blob URL for the splash artwork when available in CacheStorage,
+ * or fetches & persists it silently in CacheStorage for instant future visits.
+ */
+export async function resolveAndCacheSplashArt(src: string): Promise<string | null> {
+  const cachedBlobUrl = await getCachedAssetBlobUrl(src);
+  if (cachedBlobUrl) return cachedBlobUrl;
+  void cacheStaticAssetUrl(src, 'image/png');
+  return null;
 }
 
 export async function decodeImageAsset(src: string, timeoutMs = 2200): Promise<void> {
@@ -155,11 +181,11 @@ function isSoftwareRenderer(): boolean {
 let thumbsPrewarmed = false;
 
 /**
- * Pre-renders core furniture & electrotherapy catalog thumbnails cleanly into
- * in-memory WebP cache once GLB models are loaded so opening the Store Sheet
- * is instant with zero UI stutter.
+ * Hydrates persisted WebP thumbnails from IndexedDB first, then pre-renders any missing
+ * core clinic items cleanly so opening the Store Sheet is instant.
  */
 export async function prewarmCoreCatalogThumbs(): Promise<void> {
+  await hydrateThumbCacheFromIdb();
   if (thumbsPrewarmed || !glbRegistry.ready) return;
   thumbsPrewarmed = true;
   if (isSoftwareRenderer()) return;
@@ -175,7 +201,7 @@ export async function prewarmCoreCatalogThumbs(): Promise<void> {
     'parallel_bars',
   ];
 
-  const specs = priorityIds
+  const specs: CatalogThumbSpec[] = priorityIds
     .map((id) => CATALOG_ITEMS.find((c) => c.id === id))
     .filter((c): c is NonNullable<typeof c> => Boolean(c))
     .map((c) => ({
@@ -184,19 +210,132 @@ export async function prewarmCoreCatalogThumbs(): Promise<void> {
       depth: c.depth,
     }));
 
-  if (specs.length === 0) return;
+  const missing = getMissingCatalogThumbSpecs(specs);
+  if (missing.length === 0) return;
 
-  // Yield a frame first so main scene compilation breathes cleanly
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  renderThumbBatch(specs.slice(0, 4));
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  renderThumbBatch(specs.slice(4));
+  renderThumbBatch(missing.slice(0, 4));
+  if (missing.length > 4) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    renderThumbBatch(missing.slice(4));
+  }
 }
 
-export function formatBytesCompact(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
-  if (bytes < 1024 * 1024) {
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+function waitForIdleSlice(delayMs = 140): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const w = window as unknown as {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      };
+      if (typeof w.requestIdleCallback === 'function') {
+        w.requestIdleCallback(() => resolve(), { timeout: 600 });
+      } else {
+        requestAnimationFrame(() => resolve());
+      }
+    }, delayMs);
+  });
+}
+
+async function cacheWebFontsBestEffort(): Promise<void> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  const cache = await openAssetCache();
+  if (!cache) return;
+  try {
+    let cssText = '';
+    const existingCss = await cache.match(FONT_STYLESHEET_URL);
+    if (existingCss && existingCss.ok) {
+      cssText = await existingCss.text();
+    } else {
+      const res = await fetch(FONT_STYLESHEET_URL, { cache: 'default' });
+      if (!res.ok) return;
+      cssText = await res.text();
+      await cache.put(
+        FONT_STYLESHEET_URL,
+        new Response(cssText, {
+          status: 200,
+          headers: { 'Content-Type': 'text/css; charset=utf-8' },
+        })
+      );
+    }
+
+    const matches = cssText.match(/https:\/\/fonts\.gstatic\.com\/[^)"']+\.woff2/g);
+    if (!matches) return;
+    const uniqueUrls = Array.from(new Set(matches)).slice(0, 24);
+    for (const fontUrl of uniqueUrls) {
+      const hit = await cache.match(fontUrl);
+      if (!hit) {
+        await cacheStaticAssetUrl(fontUrl, 'font/woff2');
+      }
+    }
+  } catch {
+    // Non-fatal font caching guard
   }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+let idlePrewarmStarted = false;
+
+/**
+ * Quietly warms remaining catalog thumbnails, character outfit previews, and font files
+ * in browser storage during idle slices after entering the clinic so gameplay stays at 60 FPS
+ * and subsequent visits load cleanly from local storage.
+ */
+export function scheduleIdleBrowserPrewarm(): () => void {
+  if (idlePrewarmStarted || typeof window === 'undefined') return () => {};
+  idlePrewarmStarted = true;
+  let cancelled = false;
+
+  void (async () => {
+    await waitForIdleSlice(1100);
+    if (cancelled) return;
+
+    await hydrateThumbCacheFromIdb();
+    if (cancelled) return;
+
+    // 1. Best-effort offline cache for Google Fonts CSS & woff2 faces
+    void cacheWebFontsBestEffort();
+
+    if (isSoftwareRenderer() || !glbRegistry.ready) return;
+
+    // 2. Incrementally cache remaining store thumbnails in IndexedDB (3 per idle slice)
+    const allSpecs: CatalogThumbSpec[] = CATALOG_ITEMS.map((c) => ({
+      sprite: c.sprite,
+      width: c.width,
+      depth: c.depth,
+    }));
+    const missingCatalog = getMissingCatalogThumbSpecs(allSpecs);
+
+    for (let i = 0; i < missingCatalog.length; i += 3) {
+      if (cancelled) return;
+      await waitForIdleSlice(150);
+      if (cancelled) return;
+      renderThumbBatch(missingCatalog.slice(i, i + 3));
+    }
+
+    // 3. Incrementally cache male & female clinician outfit thumbnails in IndexedDB
+    const outfitSpecs: PlayerThumbSpec[] = [
+      { gender: 'male', outfitId: 'lab_coat', hasTarha: false },
+      { gender: 'male', outfitId: 'scrubs', hasTarha: false },
+      { gender: 'male', outfitId: 'shirt_pants', hasTarha: false },
+      { gender: 'female', outfitId: 'scrubs', hasTarha: true },
+      { gender: 'female', outfitId: 'lab_coat', hasTarha: true },
+      { gender: 'female', outfitId: 'shirt_pants', hasTarha: true },
+      { gender: 'female', outfitId: 'female_abaya_closed', hasTarha: true },
+      { gender: 'female', outfitId: 'female_abaya_light', hasTarha: true },
+      { gender: 'female', outfitId: 'female_abaya_niqab', hasTarha: true },
+    ];
+    const missingOutfits = outfitSpecs.filter(
+      (s) => !hasPlayerOutfitThumb(s.gender, s.outfitId, s.hasTarha)
+    );
+
+    for (let i = 0; i < missingOutfits.length; i += 2) {
+      if (cancelled) return;
+      await waitForIdleSlice(180);
+      if (cancelled) return;
+      renderPlayerOutfitBatch(missingOutfits.slice(i, i + 2));
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
 }

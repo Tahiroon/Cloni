@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 dotenv.config();
 
@@ -209,146 +209,7 @@ function respondWithGeminiError(endpoint: string, err: unknown, res: express.Res
   });
 }
 
-// 2. Gemini AI: Generate Dynamic Physiotherapy Case (On-Demand)
-app.post('/api/clinical/generate-case', async (req, res) => {
-  if (!ai) {
-    res.status(503).json({
-      error: 'Gemini AI is unavailable because no API key is configured.',
-      code: 'AI_UNAVAILABLE',
-    });
-    return;
-  }
-
-  const { specialty = 'orthopedics' } = req.body || {};
-
-  try {
-    const response = await callGeminiWithBackoff(() =>
-      ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: `Generate 1 realistic undergraduate physiotherapy clinical reasoning patient case for specialty "${specialty}".
-Include both Arabic (natural clinical Arabic) and English fields, realistic VAS pain 2-9, 2-3 objective clinical tests (ROM/MMT/Special Test), 3 diagnosis options (exactly 1 isCorrect: true), and 3 treatment plan options (exactly 1 isRecommended: true).
-Roughly 25% of cases should contain an authentic physiotherapy Red Flag (e.g., Cauda Equina, DVT, Fracture, Cervical Myelopathy) requiring urgent medical referral.`,
-        config: {
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              patientNameAr: { type: Type.STRING },
-              patientNameEn: { type: Type.STRING },
-              age: { type: Type.INTEGER },
-              gender: { type: Type.STRING },
-              occupationAr: { type: Type.STRING },
-              occupationEn: { type: Type.STRING },
-              chiefComplaintAr: { type: Type.STRING },
-              chiefComplaintEn: { type: Type.STRING },
-              vasPain: { type: Type.INTEGER },
-              onsetAr: { type: Type.STRING },
-              onsetEn: { type: Type.STRING },
-              aggravatingAr: { type: Type.STRING },
-              aggravatingEn: { type: Type.STRING },
-              easingAr: { type: Type.STRING },
-              easingEn: { type: Type.STRING },
-              redFlagsPresent: { type: Type.BOOLEAN },
-              redFlagClueAr: { type: Type.STRING },
-              redFlagClueEn: { type: Type.STRING },
-              objectiveTests: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING },
-                    nameAr: { type: Type.STRING },
-                    nameEn: { type: Type.STRING },
-                    category: { type: Type.STRING },
-                    findingAr: { type: Type.STRING },
-                    findingEn: { type: Type.STRING },
-                    isPositive: { type: Type.BOOLEAN },
-                  },
-                },
-              },
-              diagnosisOptions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING },
-                    labelAr: { type: Type.STRING },
-                    labelEn: { type: Type.STRING },
-                    isCorrect: { type: Type.BOOLEAN },
-                  },
-                },
-              },
-              treatmentOptions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING },
-                    labelAr: { type: Type.STRING },
-                    labelEn: { type: Type.STRING },
-                    isRecommended: { type: Type.BOOLEAN },
-                  },
-                },
-              },
-              clinicalPearlAr: { type: Type.STRING },
-              clinicalPearlEn: { type: Type.STRING },
-            },
-          },
-        },
-      })
-    );
-
-    const parsed = JSON.parse((response.text ?? '{}').trim());
-    res.json({
-      id: 'ai_case_' + Date.now(),
-      specialty,
-      ...parsed,
-    });
-  } catch (err) {
-    respondWithGeminiError('/api/clinical/generate-case', err, res);
-  }
-});
-
-// 3. Gemini AI: Interactive Patient Subjective History Dialogue
-app.post('/api/clinical/ask-patient', async (req, res) => {
-  if (!ai) {
-    res.status(503).json({
-      error: 'Gemini AI is unavailable because no API key is configured.',
-      code: 'AI_UNAVAILABLE',
-    });
-    return;
-  }
-
-  const { clinicalCase, question, language = 'ar' } = req.body || {};
-  if (!clinicalCase || !question) {
-    res.status(400).json({ error: 'Missing clinicalCase or question' });
-    return;
-  }
-
-  try {
-    const response = await callGeminiWithBackoff(() =>
-      ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: `You are roleplaying as a physiotherapy patient in a clinic assessment.
-Patient profile: ${clinicalCase.patientNameEn}, age ${clinicalCase.age}, complaint: ${clinicalCase.chiefComplaintEn}.
-Onset: ${clinicalCase.onsetEn}. Aggravating: ${clinicalCase.aggravatingEn}. Easing: ${clinicalCase.easingEn}.
-Red flags present: ${clinicalCase.redFlagsPresent} (${clinicalCase.redFlagClueEn}).
-Student question: "${question}"
-Reply concisely in 1-2 natural sentences in ${language === 'ar' ? 'Arabic' : 'English'} from the patient's first-person perspective without revealing the medical diagnosis name.`,
-        config: {
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      })
-    );
-
-    res.json({ answer: (response.text ?? '').trim() });
-  } catch (err) {
-    respondWithGeminiError('/api/clinical/ask-patient', err, res);
-  }
-});
-
-// 4. Gemini AI: Senior PT Clinical Mentor Evaluation
+// 2. Gemini AI: Senior PT Clinical Mentor Evaluation
 app.post('/api/clinical/evaluate-plan', async (req, res) => {
   if (!ai) {
     res.status(503).json({

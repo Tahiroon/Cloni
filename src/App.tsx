@@ -3,7 +3,6 @@ import { BellRing, Clock, Coins, Play, Stethoscope, Trash2, Trees, X } from 'luc
 import { BottomNavBar } from './components/BottomNavBar';
 import { BonusQuizModal } from './components/BonusQuizModal';
 import { ClinicCanvas, PlacementDraft } from './components/ClinicCanvas';
-import { ClinicalAssessmentModal } from './components/ClinicalAssessmentModal';
 import { FirstPersonSessionHud } from './components/FirstPersonSessionHud';
 import { FriendsModal } from './components/FriendsModal';
 import { GameLoadingScreen } from './components/GameLoadingScreen';
@@ -49,6 +48,7 @@ import {
 import {
   getInitialBootLanguage,
   persistBootLanguage,
+  scheduleIdleBrowserPrewarm,
 } from './services/gameBootLoader';
 import {
   loadClinicLocal,
@@ -60,7 +60,6 @@ import {
   CatalogItem,
   ClinicRoom,
   ClinicSaveState,
-  ClinicalCase,
   FloatingFeedback,
   FppActiveDeviceState,
   FppDeviceCommandApi,
@@ -185,6 +184,11 @@ export default function App() {
   const [sceneReady, setSceneReady] = useState(false);
   const [bootDismissed, setBootDismissed] = useState(false);
 
+  useEffect(() => {
+    if (!bootDismissed) return;
+    return scheduleIdleBrowserPrewarm();
+  }, [bootDismissed]);
+
   const [patients, setPatients] = useState<PatientEntity[]>([]);
   const [floatingFeedbacks, setFloatingFeedbacks] = useState<FloatingFeedback[]>([]);
   const [friends, setFriends] = useState<FriendClinic[]>(FRIEND_CLINICS);
@@ -202,7 +206,6 @@ export default function App() {
 
   const [unlockTargetRoom, setUnlockTargetRoom] = useState<ClinicRoom | null>(null);
   const [selectedWorldTree, setSelectedWorldTree] = useState<WorldTreeDef | null>(null);
-  const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [selectedBedPatientId, setSelectedBedPatientId] = useState<string | null>(null);
   const [firstPersonPatientId, setFirstPersonPatientId] = useState<string | null>(null);
   const [fppPosture, setFppPosture] = useState<FppPatientPosture>('sitting');
@@ -309,13 +312,6 @@ export default function App() {
       }
     };
   }, [clearFppBlinkTimers]);
-
-  // On-demand patient case updater (used when the student explicitly requests a fresh Gemini AI case)
-  const handleUpdatePatientCase = useCallback((patientId: string, nextCase: ClinicalCase) => {
-    setPatients((prev) =>
-      prev.map((p) => (p.id === patientId ? { ...p, clinicalCase: nextCase, isAiGenerated: true } : p))
-    );
-  }, []);
 
   const itemFootprints = useMemo(() => {
     const map = new Map<string, { w: number; d: number }>();
@@ -2143,7 +2139,6 @@ export default function App() {
 
       setSelectedBedPatientId(null);
       setSelectedWaitingPatientId(null);
-      setFocusedPatientId(null);
       setWaitingQueueOpen(false);
       setStoreOpen(false);
       setMissionsOpen(false);
@@ -2304,7 +2299,6 @@ export default function App() {
     if (wasInFpp) {
       triggerFppBlinkTransition(
         () => {
-          setFocusedPatientId(null);
           setFirstPersonPatientId(null);
           setFppNearbyDevice(null);
           setFppHeldDevice(null);
@@ -2363,7 +2357,6 @@ export default function App() {
       return;
     }
 
-    setFocusedPatientId(null);
     setFirstPersonPatientId(null);
     setFppNearbyDevice(null);
     setFppHeldDevice(null);
@@ -2971,7 +2964,6 @@ export default function App() {
     setClinic(fresh);
     setLastSyncedAt(null);
     setPatients([]);
-    setFocusedPatientId(null);
     setSelectedBedPatientId(null);
     setFirstPersonPatientId(null);
     setSpeakingPatientId(null);
@@ -2981,11 +2973,6 @@ export default function App() {
     setSelectedWorldTree(null);
     setSettingsOpen(false);
   };
-
-  const focusedPatient = useMemo(
-    () => patients.find((p) => p.id === focusedPatientId) || null,
-    [patients, focusedPatientId]
-  );
 
   const firstPersonPatient = useMemo(
     () => patients.find((p) => p.id === firstPersonPatientId) || null,
@@ -3135,7 +3122,6 @@ export default function App() {
         playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
         showPlayerCharacter={!visitingFriend}
         floatingFeedbacks={floatingFeedbacks}
-        focusedPatientId={focusedPatientId}
         firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
         fppPosture={fppPosture}
         fppActiveDevice={visitingFriend ? null : fppActiveDevice}
@@ -3158,7 +3144,6 @@ export default function App() {
         selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
         placementDraft={placementDraft}
         editMode={editMode && !visitingFriend}
-        isBlurred={Boolean(focusedPatient)}
         language={clinic.language}
         orbitStep={orbitStep}
         lightingMode={lightingMode}
@@ -3367,7 +3352,7 @@ export default function App() {
             language={clinic.language}
             lightingMode={lightingMode}
             storeAlert={canUnlockAnyRoom}
-            disabled={Boolean(visitingFriend) || Boolean(focusedPatient)}
+            disabled={Boolean(visitingFriend)}
             onSelectTab={handleSelectNavTab}
             onToggleEditMode={handleToggleEditMode}
           />
@@ -3473,17 +3458,6 @@ export default function App() {
         lightingMode={lightingMode}
         onClose={() => setUnlockTargetRoom(null)}
         onConfirmUnlock={handleConfirmUnlockRoom}
-      />
-
-      {/* Core Educational Feature: Clinical Reasoning Zoom-In */}
-      <ClinicalAssessmentModal
-        key={focusedPatient?.id || 'none'}
-        patient={focusedPatient}
-        language={clinic.language}
-        lightingMode={lightingMode}
-        onClose={() => setFocusedPatientId(null)}
-        onCompleteCase={handleCompleteCase}
-        onUpdatePatientCase={handleUpdatePatientCase}
       />
 
       {/* Daily Missions */}
@@ -3622,7 +3596,7 @@ export default function App() {
       )}
 
       {/* Tapped Waiting Patient Quick Call-In Action Card */}
-      {selectedWaitingPatient && !focusedPatient && !visitingFriend && (
+      {selectedWaitingPatient && !visitingFriend && (
         <div
           dir={isAr ? 'rtl' : 'ltr'}
           onPointerDown={(e) => e.stopPropagation()}
@@ -3732,7 +3706,7 @@ export default function App() {
       )}
 
       {/* Tapped Bed-Seated Patient Quick Start-Session Action Card */}
-      {selectedBedPatient && !firstPersonPatient && !focusedPatient && !visitingFriend && (
+      {selectedBedPatient && !firstPersonPatient && !visitingFriend && (
         <div
           dir={isAr ? 'rtl' : 'ltr'}
           onPointerDown={(e) => e.stopPropagation()}
