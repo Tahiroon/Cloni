@@ -92,14 +92,22 @@ export interface FountainRigMeta {
 export interface MagnetoRigMeta {
   solenoidRing: THREE.Group;
   coilMat: THREE.MeshStandardMaterial;
+  fluxMat: THREE.MeshBasicMaterial;
+  ledMat: THREE.MeshStandardMaterial;
+  consoleAnchor: THREE.Object3D;
   currentX: number;
+  currentVelX: number;
+  scanPhase: number;
 }
 
 export interface TiltTableRigMeta {
   tiltGroup: THREE.Group;
   strapsGroup: THREE.Group;
   ramMesh: THREE.Mesh;
+  ledMat: THREE.MeshStandardMaterial;
+  consoleAnchor: THREE.Object3D;
   currentTiltAlpha: number;
+  currentDeg: number;
 }
 
 export interface ClinicWorldHandle {
@@ -4860,16 +4868,29 @@ export function createCatalogMesh3D(
       const pemfCoilMat = makeMat({
         color: 0x38bdf8,
         emissive: 0x0ea5e9,
-        emissiveIntensity: 0.65,
+        emissiveIntensity: 0.45,
         roughness: 0.2,
       });
+      const pemfLedMat = makeMat({
+        color: 0x38bdf8,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 0.55,
+        roughness: 0.22,
+      });
+      const fluxMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
 
-      // 1. Twin cantilevered aerodynamic pedestals + dark skid feet
+      // 1. Twin outer end pedestals (positioned at [-0.66, 0.56] so center span [-0.46..+0.39] is 100% open for solenoid travel)
       bevelBox(1.48, 0.044, 0.68, 0.028, 0.005, magSlate, -0.05, 0.024, 0);
       bevelBox(1.42, 0.024, 0.62, 0.024, 0.004, magChrome, -0.05, 0.054, 0);
-      for (const px of [-0.46, 0.36]) {
-        bevelBox(0.28, 0.31, 0.44, 0.04, 0.008, magShell, px, 0.22, 0);
-        bevelBox(0.22, 0.24, 0.46, 0.02, 0.004, magSlate, px, 0.22, 0).userData.noCastShadow = true;
+      for (const px of [-0.66, 0.56]) {
+        bevelBox(0.20, 0.31, 0.44, 0.036, 0.008, magShell, px, 0.22, 0);
+        bevelBox(0.15, 0.24, 0.46, 0.02, 0.004, magSlate, px, 0.22, 0).userData.noCastShadow = true;
       }
 
       // 2. Ergonomic couch chassis deck & twin heavy polished chrome solenoid slide rails
@@ -4898,7 +4919,7 @@ export function createCatalogMesh3D(
 
       // 4. Sliding Cylindrical PEMF Solenoid Aperture Drum (animated along chrome slide rails via MagnetoRigMeta)
       const solenoidGroup = new THREE.Group();
-      solenoidGroup.position.set(0.22, 0, 0);
+      solenoidGroup.position.set(0.38, 0, 0);
       inner.add(solenoidGroup);
 
       // Twin machined rail carriage shoes clamping the chrome tracks
@@ -4957,34 +4978,85 @@ export function createCatalogMesh3D(
         solenoidGroup.add(innerCoil);
       }
 
+      const fluxHalo = new THREE.Mesh(
+        new THREE.TorusGeometry(0.305, 0.022, 8, 22),
+        fluxMat
+      );
+      fluxHalo.rotation.y = Math.PI / 2;
+      fluxHalo.position.set(0, ringCenterY, 0);
+      fluxHalo.userData.noCastShadow = true;
+      solenoidGroup.add(fluxHalo);
+
       // Top grip arch & field telemetry LED bar on crown of drum
       const crownBadge = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.032, 0.24), magSlate);
       crownBadge.position.set(0, ringCenterY + 0.455, 0);
-      const crownLed = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.012, 0.16), pemfCoilMat);
+      const crownLed = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.012, 0.16), pemfLedMat);
       crownLed.position.set(0, ringCenterY + 0.472, 0);
       crownLed.userData.noCastShadow = true;
       solenoidGroup.add(crownBadge, crownLed);
 
-      // 5. Foot-Rear PEMF Gauss Generator Pedestal (+X, -Z corner -> NEVER blocks either bedside camera view!)
+      // 5. Foot-Rear PEMF Gauss Generator Pedestal & Interactive Sloped Console (+X, -Z corner -> NEVER blocks bedside view!)
       const pedX = 0.84;
       const pedZ = -0.22;
-      bevelBox(0.22, 0.84, 0.24, 0.026, 0.007, magShell, pedX, 0.43, pedZ);
-      bevelBox(0.24, 0.04, 0.26, 0.024, 0.005, magSlate, pedX, 0.025, pedZ);
-      bevelBox(0.18, 0.036, 0.20, 0.02, 0.005, cyanAccent, pedX, 0.86, pedZ);
-      const pScrHead = bevelBox(0.14, 0.18, 0.20, 0.016, 0.005, magSlate, pedX - 0.03, 0.90, pedZ);
-      pScrHead.rotation.z = 0.25;
-      const pScr = box(
-        0.018,
-        0.13,
-        0.155,
-        makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.48 }),
-        pedX - 0.095,
-        0.915,
-        pedZ
+      const markConsole = (o: THREE.Object3D, isScreen = false) => {
+        o.userData.isMagnetoConsole = true;
+        if (isScreen) o.userData.isDeviceScreen = true;
+        return o;
+      };
+      markConsole(bevelBox(0.22, 0.84, 0.24, 0.026, 0.007, magShell, pedX, 0.43, pedZ));
+      markConsole(bevelBox(0.24, 0.04, 0.26, 0.024, 0.005, magSlate, pedX, 0.025, pedZ));
+      markConsole(bevelBox(0.18, 0.034, 0.20, 0.02, 0.005, cyanAccent, pedX, 0.858, pedZ));
+
+      const consoleGroup = new THREE.Group();
+      consoleGroup.position.set(pedX, 0.89, pedZ);
+      consoleGroup.userData.isMagnetoConsole = true;
+      consoleGroup.userData.isDeviceScreen = true;
+      inner.add(consoleGroup);
+
+      const consoleDeck = new THREE.Group();
+      consoleDeck.rotation.set(0, 0.24, 0.62);
+      consoleDeck.userData.isMagnetoConsole = true;
+      consoleDeck.userData.isDeviceScreen = true;
+      consoleGroup.add(consoleDeck);
+
+      const deckHousing = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.052, 0.22), magSlate);
+      deckHousing.userData.isMagnetoConsole = true;
+      deckHousing.userData.isDeviceScreen = true;
+      const deckBezel = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.012, 0.168), magShell);
+      deckBezel.position.set(-0.018, 0.030, 0);
+      deckBezel.userData.isMagnetoConsole = true;
+      deckBezel.userData.isDeviceScreen = true;
+      const pScr = new THREE.Mesh(
+        new THREE.BoxGeometry(0.106, 0.008, 0.148),
+        makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.52 })
       );
-      pScr.rotation.z = 0.25;
+      pScr.position.set(-0.018, 0.039, 0);
       pScr.userData.noCastShadow = true;
-      smoothCyl(0.018, 0.02, 0.02, magChrome, pedX - 0.105, 0.72, pedZ + 0.04, 16).rotation.z = Math.PI / 2;
+      pScr.userData.isMagnetoConsole = true;
+      pScr.userData.isDeviceScreen = true;
+
+      const startBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.014, 14), pemfLedMat);
+      startBtn.position.set(0.062, 0.033, -0.042);
+      startBtn.userData.noCastShadow = true;
+      startBtn.userData.isMagnetoConsole = true;
+      startBtn.userData.isDeviceScreen = true;
+
+      const dialKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.017, 0.018, 14), magChrome);
+      dialKnob.position.set(0.062, 0.035, 0.042);
+      dialKnob.userData.isMagnetoConsole = true;
+      dialKnob.userData.isDeviceScreen = true;
+
+      consoleDeck.add(deckHousing, deckBezel, pScr, startBtn, dialKnob);
+
+      // Generous zero-cost raycast hit proxy for effortless tapping at the control pedestal
+      const consoleHitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+      const consoleHitProxy = new THREE.Mesh(new THREE.BoxGeometry(0.38, 1.08, 0.38), consoleHitMat);
+      consoleHitProxy.position.set(pedX, 0.54, pedZ);
+      consoleHitProxy.userData.noCastShadow = true;
+      consoleHitProxy.userData.isMagnetoConsole = true;
+      consoleHitProxy.userData.isDeviceScreen = true;
+      inner.add(consoleHitProxy);
+
       tube(
         [[pedX - 0.08, 0.48, pedZ], [0.72, 0.34, pedZ], [0.58, 0.36, -0.14]],
         0.014,
@@ -4995,7 +5067,12 @@ export function createCatalogMesh3D(
       outer.userData.magnetoRig = {
         solenoidRing: solenoidGroup,
         coilMat: pemfCoilMat,
-        currentX: 0.22,
+        fluxMat,
+        ledMat: pemfLedMat,
+        consoleAnchor: consoleGroup,
+        currentX: 0.38,
+        currentVelX: 0,
+        scanPhase: 0,
       } as MagnetoRigMeta;
       break;
     }
@@ -5130,7 +5207,7 @@ export function createCatalogMesh3D(
         tiltGroup.add(dial, dialBezel);
       }
 
-      // Thoracic, pelvic & knee Velcro restraint straps (visible when standing-tilted during therapy, hidden when flat/seated)
+      // Thoracic, pelvic & knee Velcro restraint straps (visible when strapped/tilted during therapy, hidden when flat/seated)
       const strapsGroup = new THREE.Group();
       for (const [sx, w] of [
         [-0.25, 0.13],
@@ -5143,11 +5220,88 @@ export function createCatalogMesh3D(
       }
       tiltGroup.add(strapsGroup);
 
+      // 4. Electric Tilt Actuator Control Pedestal & Digital Inclinometer Handset (+X, -Z outer flank -> clear of footboard & mounting)
+      const ttPedX = 0.88;
+      const ttPedZ = -0.36;
+      const ttLedMat = makeMat({
+        color: 0x38bdf8,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 0.52,
+        roughness: 0.22,
+      });
+      const markTiltConsole = (o: THREE.Object3D, isScreen = false) => {
+        o.userData.isTiltConsole = true;
+        if (isScreen) o.userData.isDeviceScreen = true;
+        return o;
+      };
+      markTiltConsole(bevelBox(0.16, 0.80, 0.18, 0.02, 0.006, ttSteel, ttPedX, 0.42, ttPedZ));
+      markTiltConsole(bevelBox(0.20, 0.036, 0.22, 0.02, 0.004, ttSlate, ttPedX, 0.022, ttPedZ));
+      markTiltConsole(bevelBox(0.14, 0.026, 0.16, 0.015, 0.004, cyanAccent, ttPedX, 0.83, ttPedZ));
+
+      const ttConsoleGroup = new THREE.Group();
+      ttConsoleGroup.position.set(ttPedX, 0.86, ttPedZ);
+      ttConsoleGroup.userData.isTiltConsole = true;
+      ttConsoleGroup.userData.isDeviceScreen = true;
+      inner.add(ttConsoleGroup);
+
+      const ttConsoleDeck = new THREE.Group();
+      ttConsoleDeck.rotation.set(0, 0.26, 0.56);
+      ttConsoleDeck.userData.isTiltConsole = true;
+      ttConsoleDeck.userData.isDeviceScreen = true;
+      ttConsoleGroup.add(ttConsoleDeck);
+
+      const ttHousing = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.046, 0.19), ttSlate);
+      ttHousing.userData.isTiltConsole = true;
+      ttHousing.userData.isDeviceScreen = true;
+      const ttBezel = new THREE.Mesh(new THREE.BoxGeometry(0.102, 0.01, 0.142), ttSteel);
+      ttBezel.position.set(-0.015, 0.026, 0);
+      ttBezel.userData.isTiltConsole = true;
+      ttBezel.userData.isDeviceScreen = true;
+      const ttScr = new THREE.Mesh(
+        new THREE.BoxGeometry(0.086, 0.008, 0.124),
+        makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.48 })
+      );
+      ttScr.position.set(-0.015, 0.034, 0);
+      ttScr.userData.noCastShadow = true;
+      ttScr.userData.isTiltConsole = true;
+      ttScr.userData.isDeviceScreen = true;
+
+      const ttUpBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.014, 14), ttLedMat);
+      ttUpBtn.position.set(0.052, 0.029, -0.036);
+      ttUpBtn.userData.noCastShadow = true;
+      ttUpBtn.userData.isTiltConsole = true;
+      ttUpBtn.userData.isDeviceScreen = true;
+
+      const ttDownBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.015, 0.012, 14), ttChrome);
+      ttDownBtn.position.set(0.052, 0.028, 0.036);
+      ttDownBtn.userData.isTiltConsole = true;
+      ttDownBtn.userData.isDeviceScreen = true;
+
+      ttConsoleDeck.add(ttHousing, ttBezel, ttScr, ttUpBtn, ttDownBtn);
+
+      const ttHitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+      const ttHitProxy = new THREE.Mesh(new THREE.BoxGeometry(0.36, 1.06, 0.36), ttHitMat);
+      ttHitProxy.position.set(ttPedX, 0.53, ttPedZ);
+      ttHitProxy.userData.noCastShadow = true;
+      ttHitProxy.userData.isTiltConsole = true;
+      ttHitProxy.userData.isDeviceScreen = true;
+      inner.add(ttHitProxy);
+
+      tube(
+        [[ttPedX - 0.06, 0.32, ttPedZ], [0.42, 0.14, -0.28], [-0.04, 0.20, -0.16]],
+        0.012,
+        blackRubber,
+        8
+      );
+
       outer.userData.tiltTableRig = {
         tiltGroup,
         strapsGroup,
         ramMesh: ram,
+        ledMat: ttLedMat,
+        consoleAnchor: ttConsoleGroup,
         currentTiltAlpha: 1,
+        currentDeg: 28,
       } as TiltTableRigMeta;
       break;
     }

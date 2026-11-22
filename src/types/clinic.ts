@@ -274,6 +274,10 @@ export interface DeviceConsoleParams {
   pressureMmHg?: number;
   flow?: string;
   tool?: string;
+  magnetZone?: string;
+  ringPosCm?: number;
+  tiltDeg?: number;
+  currentTiltDeg?: number;
 }
 
 export interface PatientAttachedDevice {
@@ -329,6 +333,7 @@ export interface FppNearbyDeviceInfo {
   nameEn: string;
   nameAr: string;
   canDeploy: boolean;
+  isStationConsole?: boolean;
   isActive: boolean;
   isAdjustable: boolean;
   supportsDistance: boolean;
@@ -352,6 +357,7 @@ export interface FppDeviceCommandApi {
   placeHeldDevice: () => void;
   returnDevice: (deviceId: string) => void;
   updateActiveBedDevice: (next: FppActiveDeviceState) => void;
+  openStationConsole?: (deviceId: string) => void;
   triggerHandshake?: () => void;
 }
 

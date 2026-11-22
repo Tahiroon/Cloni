@@ -62,6 +62,8 @@ const DEVICE_SCREEN_SPRITES = new Set<SpriteKind>([
   'paraffin_bath',
   'hydro_sink',
   'balance_trainer',
+  'magnetotherapy',
+  'tilt_table',
 ]);
 
 const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
@@ -173,6 +175,25 @@ export function getDefaultDeviceParams(sprite: SpriteKind): DeviceConsoleParams 
       return { tool: 'GONIOMETER', timerMin: 10, timerRemainingSec: 10 * 60 };
     case 'ball_rack':
       return { tool: 'CORE STABILITY', timerMin: 12, timerRemainingSec: 12 * 60 };
+    case 'magnetotherapy':
+      return {
+        intensity: 45,
+        freqHz: 25,
+        timerMin: 20,
+        timerRemainingSec: 20 * 60,
+        mode: 'PULSED',
+        magnetZone: 'SCAN',
+        speed: 2,
+      };
+    case 'tilt_table':
+      return {
+        tiltDeg: 45,
+        currentTiltDeg: 0,
+        speed: 2,
+        timerMin: 15,
+        timerRemainingSec: 15 * 60,
+        mode: 'GRADUAL',
+      };
     default:
       return { timerMin: 15, timerRemainingSec: 15 * 60 };
   }

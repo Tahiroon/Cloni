@@ -688,6 +688,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     placeFppHeldDevice: () => void;
     returnFppDevice: (deviceId: string) => void;
     updateFppBedDevice: (next: FppActiveDeviceState) => void;
+    openStationConsole: (deviceId: string) => void;
     triggerFppHandshake: () => void;
   } | null>(null);
 
@@ -1016,6 +1017,36 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       lastVoiceLevel: 0,
       lastSustainedVoiceAt: 0,
     };
+    const stationMagMap = new Map<
+      string,
+      { isRunning: boolean; deviceParams: DeviceConsoleParams }
+    >();
+    const fppStationMagState = {
+      stationId: null as string | null,
+      catalogId: 'magnetotherapy',
+      nameEn: 'Magnetotherapy (PEMF)',
+      nameAr: 'جهاز العلاج بالمغناطيس',
+      isRunning: false,
+      wasLyingWhileRunning: false,
+      deviceParams: getDefaultDeviceParams('magnetotherapy'),
+    };
+    const _magConsoleWorld = new THREE.Vector3();
+    const stationTiltMap = new Map<
+      string,
+      { isRunning: boolean; deviceParams: DeviceConsoleParams }
+    >();
+    const fppStationTiltState = {
+      stationId: null as string | null,
+      catalogId: 'tilt_table',
+      nameEn: 'Electric Tilt Table',
+      nameAr: 'طاولة الإمالة الكهربائية',
+      isRunning: false,
+      wasLyingWhileRunning: false,
+      isMotorMoving: false,
+      lastUiDeg: -1,
+      deviceParams: getDefaultDeviceParams('tilt_table'),
+    };
+    const _tiltConsoleWorld = new THREE.Vector3();
 
     const ensureFppBoneCache = (rig: HumanoidRig, pid: string) => {
       if (fppBoneCachePid === pid && fppBoneCacheMap.size > 0) return;
@@ -1759,6 +1790,104 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       };
     };
 
+    const buildMagnetoStationPayload = (screenTapped = false): FppActiveDeviceState | null => {
+      if (!fppStationMagState.stationId) return null;
+      const fpp = fppCamRef.current;
+      const effYaw =
+        fpp.focusBlend > 0.3
+          ? Math.atan2(-(fpp.focusTargetX - fpp.focusPosX), -(fpp.focusTargetZ - fpp.focusPosZ))
+          : fpp.yaw;
+      const visualRightSign: 1 | -1 = Math.cos(effYaw - fpp.patientFacing) >= 0 ? 1 : -1;
+      return {
+        instanceId: fppStationMagState.stationId,
+        catalogId: fppStationMagState.catalogId,
+        sprite: 'magnetotherapy',
+        nameEn: fppStationMagState.nameEn,
+        nameAr: fppStationMagState.nameAr,
+        region: 'lumbar',
+        side: 'front',
+        closeRange: true,
+        isRunning: fppStationMagState.isRunning,
+        placementMode: 'bed',
+        hasScreen: true,
+        screenTapped,
+        supportsProbes: false,
+        probeAnchors: [],
+        selectedProbeId: null,
+        visualRightSign,
+        irIntensity: 0.85,
+        irHeightOffset: 0,
+        irLateralOffset: 0,
+        irDistance: 0.55,
+        deviceParams: { ...fppStationMagState.deviceParams },
+      };
+    };
+
+    const buildTiltStationPayload = (screenTapped = false): FppActiveDeviceState | null => {
+      if (!fppStationTiltState.stationId) return null;
+      const fpp = fppCamRef.current;
+      const effYaw =
+        fpp.focusBlend > 0.3
+          ? Math.atan2(-(fpp.focusTargetX - fpp.focusPosX), -(fpp.focusTargetZ - fpp.focusPosZ))
+          : fpp.yaw;
+      const visualRightSign: 1 | -1 = Math.cos(effYaw - fpp.patientFacing) >= 0 ? 1 : -1;
+      const stEntry = itemMeshes.get(fppStationTiltState.stationId);
+      const ttRig = stEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+      const liveDeg = Math.round(
+        ttRig ? ttRig.currentDeg : fppStationTiltState.deviceParams.currentTiltDeg ?? 0
+      );
+      fppStationTiltState.deviceParams.currentTiltDeg = liveDeg;
+      return {
+        instanceId: fppStationTiltState.stationId,
+        catalogId: fppStationTiltState.catalogId,
+        sprite: 'tilt_table',
+        nameEn: fppStationTiltState.nameEn,
+        nameAr: fppStationTiltState.nameAr,
+        region: 'lumbar',
+        side: 'front',
+        closeRange: true,
+        isRunning: fppStationTiltState.isRunning,
+        placementMode: 'bed',
+        hasScreen: true,
+        screenTapped,
+        supportsProbes: false,
+        probeAnchors: [],
+        selectedProbeId: null,
+        visualRightSign,
+        irIntensity: 0.85,
+        irHeightOffset: 0,
+        irLateralOffset: 0,
+        irDistance: 0.55,
+        deviceParams: { ...fppStationTiltState.deviceParams },
+      };
+    };
+
+    const openStationConsole = (deviceId: string) => {
+      if (
+        fppStationMagState.stationId &&
+        (deviceId === fppStationMagState.stationId || deviceId === 'magnetotherapy')
+      ) {
+        for (const eq of fppEquipBayMap.values()) {
+          eq.selectedProbeId = null;
+        }
+        setProbeReticlePose(null);
+        fppCamRef.current.consoleTapPulse = 1.0;
+        latestRef.current.onFppActiveBedDeviceChange?.(buildMagnetoStationPayload(true));
+        return;
+      }
+      if (
+        fppStationTiltState.stationId &&
+        (deviceId === fppStationTiltState.stationId || deviceId === 'tilt_table')
+      ) {
+        for (const eq of fppEquipBayMap.values()) {
+          eq.selectedProbeId = null;
+        }
+        setProbeReticlePose(null);
+        fppCamRef.current.consoleTapPulse = 1.0;
+        latestRef.current.onFppActiveBedDeviceChange?.(buildTiltStationPayload(true));
+      }
+    };
+
     const grabFppDevice = (deviceId: string) => {
       const entry = resolveBayEntry(deviceId);
       if (!entry) return;
@@ -1913,6 +2042,114 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     };
 
     const updateFppBedDevice = (next: FppActiveDeviceState) => {
+      if (
+        (next.sprite === 'magnetotherapy' || next.catalogId === 'magnetotherapy') &&
+        fppStationMagState.stationId
+      ) {
+        if (next.deviceParams) {
+          const prevTimerMin = fppStationMagState.deviceParams.timerMin ?? 20;
+          const merged = { ...fppStationMagState.deviceParams, ...next.deviceParams };
+          if (
+            typeof next.deviceParams.timerMin === 'number' &&
+            next.deviceParams.timerMin !== prevTimerMin &&
+            next.deviceParams.timerRemainingSec === undefined &&
+            !next.isRunning
+          ) {
+            merged.timerRemainingSec = Math.max(60, next.deviceParams.timerMin * 60);
+          }
+          fppStationMagState.deviceParams = merged;
+        }
+        const prevRunning = fppStationMagState.isRunning;
+        if (next.isRunning && (fppStationMagState.deviceParams.timerRemainingSec ?? 0) <= 0) {
+          fppStationMagState.deviceParams.timerRemainingSec = Math.max(
+            60,
+            (fppStationMagState.deviceParams.timerMin ?? 20) * 60
+          );
+        }
+        fppStationMagState.isRunning = next.isRunning;
+        if (next.isRunning && !prevRunning) {
+          fppStationMagState.wasLyingWhileRunning = false;
+          const curPostureNow: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+          if (curPostureNow === 'sitting' || curPostureNow === 'standing') {
+            latestRef.current.onFppRequirePosture?.('supine');
+          }
+        }
+        if (!next.isRunning) {
+          fppStationMagState.wasLyingWhileRunning = false;
+        }
+        stationMagMap.set(fppStationMagState.stationId, {
+          isRunning: fppStationMagState.isRunning,
+          deviceParams: { ...fppStationMagState.deviceParams },
+        });
+        if (next.screenTapped || prevRunning !== fppStationMagState.isRunning) {
+          fppCamRef.current.consoleTapPulse = 1.0;
+        }
+        if (prevRunning !== fppStationMagState.isRunning) {
+          soundFx.deviceToggle(fppStationMagState.isRunning);
+        }
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildMagnetoStationPayload(next.screenTapped)
+        );
+        return;
+      }
+
+      if (
+        (next.sprite === 'tilt_table' || next.catalogId === 'tilt_table') &&
+        fppStationTiltState.stationId
+      ) {
+        if (next.deviceParams) {
+          const prevTimerMin = fppStationTiltState.deviceParams.timerMin ?? 15;
+          const merged = { ...fppStationTiltState.deviceParams, ...next.deviceParams };
+          if (
+            typeof next.deviceParams.timerMin === 'number' &&
+            next.deviceParams.timerMin !== prevTimerMin &&
+            next.deviceParams.timerRemainingSec === undefined &&
+            !next.isRunning
+          ) {
+            merged.timerRemainingSec = Math.max(60, next.deviceParams.timerMin * 60);
+          }
+          if (typeof merged.tiltDeg === 'number') {
+            merged.tiltDeg = THREE.MathUtils.clamp(Math.round(merged.tiltDeg), 0, 85);
+          }
+          fppStationTiltState.deviceParams = merged;
+        }
+        const prevRunning = fppStationTiltState.isRunning;
+        if (next.isRunning && (fppStationTiltState.deviceParams.timerRemainingSec ?? 0) <= 0) {
+          fppStationTiltState.deviceParams.timerRemainingSec = Math.max(
+            60,
+            (fppStationTiltState.deviceParams.timerMin ?? 15) * 60
+          );
+        }
+        fppStationTiltState.isRunning = next.isRunning;
+        const curPostureNow: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+        if (next.isRunning && !prevRunning) {
+          fppStationTiltState.wasLyingWhileRunning = false;
+          if (curPostureNow === 'sitting') {
+            latestRef.current.onFppRequirePosture?.('supine');
+          }
+        }
+        if (!next.isRunning) {
+          fppStationTiltState.wasLyingWhileRunning = false;
+          if (prevRunning && curPostureNow === 'standing') {
+            latestRef.current.onFppRequirePosture?.('supine');
+          }
+        }
+        stationTiltMap.set(fppStationTiltState.stationId, {
+          isRunning: fppStationTiltState.isRunning,
+          deviceParams: { ...fppStationTiltState.deviceParams },
+        });
+        if (next.screenTapped || prevRunning !== fppStationTiltState.isRunning) {
+          fppCamRef.current.consoleTapPulse = 1.0;
+        }
+        if (prevRunning !== fppStationTiltState.isRunning) {
+          soundFx.deviceToggle(fppStationTiltState.isRunning);
+        }
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildTiltStationPayload(next.screenTapped)
+        );
+        return;
+      }
+
       const entry = next.instanceId
         ? fppEquipBayMap.get(next.instanceId) ?? resolveBayEntry(next.catalogId)
         : resolveBayEntry(next.catalogId);
@@ -3819,12 +4056,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       for (const eq of fppEquipBayMap.values()) {
         if (eq.mode === 'held') return;
       }
-      if (fppEquipLayer.children.length === 0) {
-        if (latestRef.current.fppActiveDevice) {
-          latestRef.current.onFppActiveBedDeviceChange?.(null);
-        }
-        return;
-      }
       const fpp = fppCamRef.current;
       const pfX = Math.sin(fpp.patientFacing);
       const pfZ = Math.cos(fpp.patientFacing);
@@ -3839,55 +4070,139 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
       _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       _raycaster.setFromCamera(_ndc, camera);
-      const hits = _raycaster.intersectObjects(fppEquipLayer.children, true);
-      for (const hit of hits) {
-        let obj: THREE.Object3D | null = hit.object;
-        let tappedScreen = Boolean(hit.object.userData?.isDeviceScreen);
-        while (obj && obj !== fppEquipLayer) {
-          if (obj.userData?.isDeviceScreen) tappedScreen = true;
-          const iid = obj.userData?.fppInstanceId as string | undefined;
-          const cid = obj.userData?.fppCatalogId as string | undefined;
-          const entry = iid ? fppEquipBayMap.get(iid) : cid ? resolveBayEntry(cid) : undefined;
-          if (entry) {
-            const surfGap = getBayDeviceSurfaceGap(entry, camBayX, camBayZ);
-            if (entry.mode === 'placed_bed') {
-              const withinBedReach =
-                fpp.focusBlend > 0.25 ||
-                surfGap <= 1.65 ||
-                Math.hypot(camBayX, camBayZ) <= 2.15;
-              if (!withinBedReach) {
-                break;
+
+      if (fppEquipLayer.children.length > 0) {
+        const hits = _raycaster.intersectObjects(fppEquipLayer.children, true);
+        for (const hit of hits) {
+          let obj: THREE.Object3D | null = hit.object;
+          let tappedScreen = Boolean(hit.object.userData?.isDeviceScreen);
+          while (obj && obj !== fppEquipLayer) {
+            if (obj.userData?.isDeviceScreen) tappedScreen = true;
+            const iid = obj.userData?.fppInstanceId as string | undefined;
+            const cid = obj.userData?.fppCatalogId as string | undefined;
+            const entry = iid ? fppEquipBayMap.get(iid) : cid ? resolveBayEntry(cid) : undefined;
+            if (entry) {
+              const surfGap = getBayDeviceSurfaceGap(entry, camBayX, camBayZ);
+              if (entry.mode === 'placed_bed') {
+                const withinBedReach =
+                  fpp.focusBlend > 0.25 ||
+                  surfGap <= 1.65 ||
+                  Math.hypot(camBayX, camBayZ) <= 2.15;
+                if (!withinBedReach) {
+                  break;
+                }
+                for (const eq of fppEquipBayMap.values()) {
+                  eq.selectedProbeId = null;
+                }
+                setProbeReticlePose(null);
+                if (tappedScreen || entry.sprite !== 'infrared_lamp') {
+                  fpp.consoleTapPulse = 1.0;
+                }
+                latestRef.current.onFppActiveBedDeviceChange?.(
+                  buildActiveDevicePayload(entry, tappedScreen || entry.sprite !== 'infrared_lamp')
+                );
+                return;
               }
-              for (const eq of fppEquipBayMap.values()) {
-                eq.selectedProbeId = null;
+              if (entry.mode === 'placed_room') {
+                if (surfGap > 0.30) {
+                  break;
+                }
+                for (const eq of fppEquipBayMap.values()) {
+                  eq.selectedProbeId = null;
+                }
+                setProbeReticlePose(null);
+                latestRef.current.onFppActiveBedDeviceChange?.(
+                  buildActiveDevicePayload(entry, false)
+                );
+                return;
               }
-              setProbeReticlePose(null);
-              if (tappedScreen || entry.sprite !== 'infrared_lamp') {
-                fpp.consoleTapPulse = 1.0;
-              }
-              latestRef.current.onFppActiveBedDeviceChange?.(
-                buildActiveDevicePayload(entry, tappedScreen || entry.sprite !== 'infrared_lamp')
-              );
-              return;
+              break;
             }
-            if (entry.mode === 'placed_room') {
-              if (surfGap > 0.30) {
-                break;
-              }
-              for (const eq of fppEquipBayMap.values()) {
-                eq.selectedProbeId = null;
-              }
-              setProbeReticlePose(null);
-              latestRef.current.onFppActiveBedDeviceChange?.(
-                buildActiveDevicePayload(entry, false)
-              );
-              return;
-            }
-            break;
+            obj = obj.parent;
           }
-          obj = obj.parent;
         }
       }
+
+      // Check stationary PEMF Magnetotherapy control pedestal when in magnet bed session
+      if (fppStationMagState.stationId) {
+        const stEntry = itemMeshes.get(fppStationMagState.stationId);
+        const magRig = stEntry?.mesh.userData.magnetoRig as MagnetoRigMeta | undefined;
+        if (stEntry && stEntry.mesh.visible && magRig?.consoleAnchor) {
+          const magHits = _raycaster.intersectObject(stEntry.mesh, true);
+          for (const hit of magHits) {
+            let obj: THREE.Object3D | null = hit.object;
+            let hitConsole = false;
+            while (obj && obj !== stEntry.mesh) {
+              if (obj.userData?.isMagnetoConsole) {
+                hitConsole = true;
+                break;
+              }
+              obj = obj.parent;
+            }
+            if (hitConsole) {
+              magRig.consoleAnchor.getWorldPosition(_magConsoleWorld);
+              const distToConsole = Math.hypot(
+                _magConsoleWorld.x - fpp.posX,
+                _magConsoleWorld.z - fpp.posZ
+              );
+              if (distToConsole <= 1.60 || fpp.focusBlend > 0.25) {
+                for (const eq of fppEquipBayMap.values()) {
+                  eq.selectedProbeId = null;
+                }
+                setProbeReticlePose(null);
+                fpp.consoleTapPulse = 1.0;
+                soundFx.tap();
+                latestRef.current.onFppActiveBedDeviceChange?.(
+                  buildMagnetoStationPayload(true)
+                );
+                return;
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      // Check stationary Electric Tilt Table control pedestal when in tilt table session
+      if (fppStationTiltState.stationId) {
+        const stEntry = itemMeshes.get(fppStationTiltState.stationId);
+        const ttRig = stEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+        if (stEntry && stEntry.mesh.visible && ttRig?.consoleAnchor) {
+          const ttHits = _raycaster.intersectObject(stEntry.mesh, true);
+          for (const hit of ttHits) {
+            let obj: THREE.Object3D | null = hit.object;
+            let hitConsole = false;
+            while (obj && obj !== stEntry.mesh) {
+              if (obj.userData?.isTiltConsole) {
+                hitConsole = true;
+                break;
+              }
+              obj = obj.parent;
+            }
+            if (hitConsole) {
+              ttRig.consoleAnchor.getWorldPosition(_tiltConsoleWorld);
+              const distToConsole = Math.hypot(
+                _tiltConsoleWorld.x - fpp.posX,
+                _tiltConsoleWorld.z - fpp.posZ
+              );
+              if (distToConsole <= 1.60 || fpp.focusBlend > 0.25) {
+                for (const eq of fppEquipBayMap.values()) {
+                  eq.selectedProbeId = null;
+                }
+                setProbeReticlePose(null);
+                fpp.consoleTapPulse = 1.0;
+                soundFx.tap();
+                latestRef.current.onFppActiveBedDeviceChange?.(
+                  buildTiltStationPayload(true)
+                );
+                return;
+              }
+              break;
+            }
+          }
+        }
+      }
+
       for (const eq of fppEquipBayMap.values()) {
         eq.selectedProbeId = null;
       }
@@ -3924,6 +4239,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       placeFppHeldDevice,
       returnFppDevice,
       updateFppBedDevice,
+      openStationConsole,
       triggerFppHandshake,
     };
     if (fppCommandRef) {
@@ -3932,6 +4248,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         placeHeldDevice: placeFppHeldDevice,
         returnDevice: returnFppDevice,
         updateActiveBedDevice: updateFppBedDevice,
+        openStationConsole,
         triggerHandshake: triggerFppHandshake,
       };
     }
@@ -3986,7 +4303,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const doorActorsScratch: DoorActorInput[] = [];
     const activePatientIds = new Set<string>();
     const activeStaffIds = new Set<string>();
-    const stationOccupantMap = new Map<string, { patient: PatientEntity; bedPhase?: string }>();
+    const stationOccupantMap = new Map<
+      string,
+      { patient: PatientEntity; bedPhase?: string; lieBlend: number }
+    >();
     const playerStaffSpec: StaffMember = {
       id: 'player_main',
       role: 'therapist',
@@ -4122,6 +4442,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           stationOccupantMap.set(pt.assignedStationId, {
             patient: pt,
             bedPhase: rigEntry?.bedPhase,
+            lieBlend: rigEntry?.lieBlend ?? (pt.state === 'in_treatment' ? 1 : 0),
           });
         }
       }
@@ -4130,51 +4451,211 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const mag = entryItem.mesh.userData.magnetoRig as MagnetoRigMeta | undefined;
         if (mag) {
           const occ = stationOccupantMap.get(itemId);
-          const isTreatingLying = Boolean(
-            occ && occ.patient.state === 'in_treatment' && occ.bedPhase === 'lying'
-          );
-          const targetX = !occ
-            ? 0.22
-            : isTreatingLying
-              ? 0.02 + Math.sin(timeSec * 0.95) * 0.14
-              : 0.5;
-          const targetGlow = !occ
-            ? 0.42
-            : isTreatingLying
-              ? 0.95 + Math.sin(timeSec * 4.5) * 0.32
-              : 0.62;
-          mag.currentX = THREE.MathUtils.damp(mag.currentX, targetX, 6.5, dt);
+          if (!occ && !pureFppId) {
+            stationMagMap.delete(itemId);
+          }
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stationState = stationMagMap.get(itemId);
+          const fppRunning = isFppStation
+            ? fppStationMagState.isRunning
+            : Boolean(stationState?.isRunning);
+          const isPatientLying = Boolean(occ && occ.bedPhase === 'lying' && occ.lieBlend >= 0.88);
+          const isTreatingLying = isFppStation
+            ? Boolean(fppRunning && isPatientLying)
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || fppRunning) && isPatientLying);
+          const isWaitingForLie = Boolean(isFppStation && fppRunning && !isPatientLying);
+
+          const activeParams = isFppStation
+            ? fppStationMagState.deviceParams
+            : stationState?.deviceParams;
+          const zone = activeParams?.magnetZone ?? 'SCAN';
+          const mode = activeParams?.mode ?? 'PULSED';
+          const mT = Number(activeParams?.intensity ?? 45);
+          const freqHz = Number(activeParams?.freqHz ?? 25);
+          const scanSpeedLevel = Math.max(1, Math.min(3, Number(activeParams?.speed ?? 2)));
+
+          let targetX = 0.38;
+          let maxSpeedX = 0.24;
+
+          if (isTreatingLying) {
+            if (zone === 'CERVICAL') {
+              targetX = -0.42;
+            } else if (zone === 'THORACIC') {
+              targetX = -0.24;
+            } else if (zone === 'LUMBAR') {
+              targetX = -0.04;
+            } else if (zone === 'KNEE') {
+              targetX = 0.25;
+            } else {
+              const sweepRate = 0.14 + scanSpeedLevel * 0.06;
+              mag.scanPhase = (mag.scanPhase + dt * sweepRate) % 2;
+              const half = mag.scanPhase % 1;
+              const dwell = 0.12;
+              let u: number;
+              if (half < dwell) u = 0;
+              else if (half > 1 - dwell) u = 1;
+              else {
+                const s = (half - dwell) / (1 - 2 * dwell);
+                u = s * s * (3 - 2 * s);
+              }
+              const posFrac = mag.scanPhase < 1 ? u : 1 - u;
+              targetX = THREE.MathUtils.lerp(-0.42, 0.26, posFrac);
+              maxSpeedX = 0.16 + scanSpeedLevel * 0.07;
+            }
+          } else {
+            mag.scanPhase = 0;
+          }
+
+          const errX = targetX - mag.currentX;
+          const desiredVel = THREE.MathUtils.clamp(errX * 4.5, -maxSpeedX, maxSpeedX);
+          mag.currentVelX = THREE.MathUtils.damp(mag.currentVelX, desiredVel, 7.5, dt);
+          mag.currentX = THREE.MathUtils.clamp(mag.currentX + mag.currentVelX * dt, -0.45, 0.40);
+          if (Math.abs(errX) < 0.001 && Math.abs(mag.currentVelX) < 0.002) {
+            mag.currentX = targetX;
+            mag.currentVelX = 0;
+          }
           mag.solenoidRing.position.x = mag.currentX;
+          if (Math.abs(mag.currentVelX) > 0.005 || isTreatingLying) {
+            actorsOrEquipMoving = true;
+          }
+
+          const mT01 = THREE.MathUtils.clamp((mT - 10) / 90, 0, 1);
+          let fieldWave = 1;
+          if (mode === 'PULSED') {
+            const visRate = Math.min(8.5, Math.max(2.0, freqHz * 0.14));
+            fieldWave =
+              0.42 + 0.58 * Math.pow(0.5 + 0.5 * Math.sin(timeSec * Math.PI * 2 * visRate), 1.6);
+          } else if (mode === 'BURST') {
+            const burstCycle = (timeSec * 1.4) % 1;
+            const gate = burstCycle < 0.45 ? 1 : 0.18;
+            fieldWave = gate * (0.55 + 0.45 * Math.sin(timeSec * 28));
+          } else {
+            fieldWave = 0.85 + 0.15 * Math.sin(timeSec * 6.0);
+          }
+
+          const targetGlow = isTreatingLying
+            ? 0.65 + (0.75 + mT01 * 0.85) * fieldWave
+            : isWaitingForLie
+              ? 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(timeSec * 5.0))
+              : occ
+                ? 0.36
+                : 0.22;
           mag.coilMat.emissiveIntensity = THREE.MathUtils.damp(
             mag.coilMat.emissiveIntensity,
             targetGlow,
-            7.0,
+            8.5,
             dt
           );
+
+          const targetFluxOpacity = isTreatingLying ? (0.14 + mT01 * 0.28) * fieldWave : 0;
+          mag.fluxMat.opacity = THREE.MathUtils.damp(mag.fluxMat.opacity, targetFluxOpacity, 9.0, dt);
+
+          const ledHex = isTreatingLying ? 0x10b981 : isWaitingForLie ? 0xf59e0b : 0x38bdf8;
+          mag.ledMat.color.setHex(ledHex);
+          mag.ledMat.emissive.setHex(ledHex);
+          mag.ledMat.emissiveIntensity = isTreatingLying
+            ? 0.95 + 0.35 * fieldWave
+            : isWaitingForLie
+              ? 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(timeSec * 6.0))
+              : 0.48;
         }
         const tt = entryItem.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
         if (tt) {
           const occ = stationOccupantMap.get(itemId);
-          const isTiltedActive = Boolean(
+          if (!occ && !pureFppId) {
+            stationTiltMap.delete(itemId);
+          }
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stationState = stationTiltMap.get(itemId);
+          const fppRunning = isFppStation
+            ? fppStationTiltState.isRunning
+            : Boolean(stationState?.isRunning);
+          const isPatientLying = Boolean(occ && occ.bedPhase === 'lying' && occ.lieBlend >= 0.88);
+          const isStandingFallback = Boolean(
             occ &&
-              ((occ.patient.state === 'in_treatment' && occ.bedPhase === 'lying') ||
-                ((occ.patient.sessionPosture === 'standing' ||
-                  (curFppId === occ.patient.id && curFppPosture === 'standing')) &&
-                  occ.bedPhase === 'lying'))
+              !fppRunning &&
+              (occ.patient.sessionPosture === 'standing' ||
+                (isFppStation && curFppPosture === 'standing')) &&
+              isPatientLying
           );
-          const targetAlpha = !occ || isTiltedActive ? 1 : 0;
-          tt.currentTiltAlpha = THREE.MathUtils.damp(tt.currentTiltAlpha, targetAlpha, 5.2, dt);
-          const a = tt.currentTiltAlpha;
-          tt.tiltGroup.position.y = THREE.MathUtils.lerp(0.45, 0.67, a);
-          tt.tiltGroup.rotation.z = -0.5 * a;
-          tt.strapsGroup.visible = a > 0.42;
-          tt.ramMesh.position.set(
-            THREE.MathUtils.lerp(0.18, 0.16, a),
-            THREE.MathUtils.lerp(0.3, 0.42, a),
-            0
-          );
-          tt.ramMesh.rotation.z = THREE.MathUtils.lerp(-0.62, -0.28, a);
-          tt.ramMesh.scale.y = THREE.MathUtils.lerp(0.68, 1.0, a);
+          const activeParams = isFppStation
+            ? fppStationTiltState.deviceParams
+            : stationState?.deviceParams;
+          const speedLvl = Math.max(1, Math.min(3, Number(activeParams?.speed ?? 2)));
+          const reqTiltDeg = THREE.MathUtils.clamp(Number(activeParams?.tiltDeg ?? 45), 0, 85);
+          const isWaitingForLie = Boolean(isFppStation && fppRunning && !isPatientLying);
+
+          let targetDeg = 0;
+          if (!occ) {
+            targetDeg = 28;
+          } else if (isFppStation) {
+            if (fppRunning && isPatientLying) {
+              targetDeg = reqTiltDeg;
+            } else if (isStandingFallback) {
+              targetDeg = 75;
+            } else {
+              targetDeg = 0;
+            }
+          } else if (
+            (occ.patient.state === 'in_treatment' || fppRunning || occ.patient.sessionPosture === 'standing') &&
+            isPatientLying
+          ) {
+            targetDeg = Number(activeParams?.tiltDeg ?? 65);
+          }
+
+          const degPerSec = !occ ? 24 : speedLvl === 1 ? 4.5 : speedLvl === 2 ? 7.5 : 11.0;
+          const diffDeg = targetDeg - tt.currentDeg;
+          const maxStep = degPerSec * dt;
+          if (Math.abs(diffDeg) <= maxStep) {
+            tt.currentDeg = targetDeg;
+          } else {
+            tt.currentDeg += Math.sign(diffDeg) * maxStep;
+          }
+          const isMovingNow = Math.abs(targetDeg - tt.currentDeg) > 0.25;
+          if (isMovingNow) {
+            actorsOrEquipMoving = true;
+          }
+          if (isFppStation) {
+            fppStationTiltState.isMotorMoving = isMovingNow;
+          }
+
+          tt.currentTiltAlpha = THREE.MathUtils.clamp(tt.currentDeg / 55, 0, 1);
+          const degRad = THREE.MathUtils.degToRad(tt.currentDeg);
+          const cosPhi = Math.cos(degRad);
+          const sinPhi = Math.sin(degRad);
+          const tableCenterY = 0.45 + 0.62 * sinPhi;
+
+          tt.tiltGroup.position.y = tableCenterY;
+          tt.tiltGroup.rotation.z = -degRad;
+          tt.strapsGroup.visible =
+            tt.currentDeg > 4 || Boolean(occ && isFppStation && fppRunning && isPatientLying);
+
+          // Exact telescopic hydraulic ram span from base mount (-0.04, 0.24) to deck underside (0.16, -0.02)
+          const bx = -0.04;
+          const by = 0.24;
+          const tx = 0.16 * cosPhi - 0.02 * sinPhi;
+          const ty = tableCenterY - 0.16 * sinPhi - 0.02 * cosPhi;
+          const rdx = tx - bx;
+          const rdy = ty - by;
+          const ramLen = Math.max(0.18, Math.hypot(rdx, rdy));
+          tt.ramMesh.position.set((bx + tx) * 0.5, (by + ty) * 0.5, 0);
+          tt.ramMesh.rotation.z = Math.atan2(-rdx, rdy);
+          tt.ramMesh.scale.y = ramLen / 0.44;
+
+          const ledHex = isWaitingForLie
+            ? 0xf59e0b
+            : (isFppStation && fppRunning && isPatientLying) || tt.currentDeg > 5
+              ? 0x10b981
+              : 0x38bdf8;
+          tt.ledMat.color.setHex(ledHex);
+          tt.ledMat.emissive.setHex(ledHex);
+          tt.ledMat.emissiveIntensity = isWaitingForLie
+            ? 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(timeSec * 6.0))
+            : isMovingNow
+              ? 0.95 + 0.3 * Math.sin(timeSec * 8.0)
+              : (isFppStation && fppRunning) || tt.currentDeg > 5
+                ? 0.92
+                : 0.48;
         }
       }
 
@@ -4307,14 +4788,29 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           p.modelKey === 'char_patient_realistic_1' || p.modelKey === 'char_sudanese_man_1'
             ? 1.54 / 1.34
             : 1;
+        const tiltDegRad =
+          spr === 'tilt_table'
+            ? tiltRig
+              ? THREE.MathUtils.degToRad(tiltRig.currentDeg)
+              : p.state === 'in_treatment' && entry?.bedPhase === 'lying'
+                ? THREE.MathUtils.degToRad(65)
+                : 0
+            : 0;
+        const tiltCosPhi = Math.cos(tiltDegRad);
+        const tiltSinPhi = Math.sin(tiltDegRad);
+        const tiltTableCenterY = 0.45 + 0.62 * tiltSinPhi;
+        const tiltFootLocalX = 0.67 * hScale * scanOffsetScale;
+        const tiltNormLocalY = THREE.MathUtils.lerp(0.212, 0.180, tiltSinPhi);
         const lyingHeight =
           spr === 'tilt_table'
-            ? THREE.MathUtils.lerp(bedMattressTop + 0.142, 0.545, tiltAlpha)
+            ? tiltTableCenterY - tiltFootLocalX * tiltSinPhi + tiltNormLocalY * tiltCosPhi
             : bedMattressTop + 0.142 + postureHeightLift;
         const bedBodyZOffset =
-          spr === 'tilt_table' ? (0.67 - 0.12 * tiltAlpha) * hScale * scanOffsetScale : undefined;
+          spr === 'tilt_table'
+            ? tiltFootLocalX * tiltCosPhi + tiltNormLocalY * tiltSinPhi
+            : undefined;
         const tiltPitch =
-          spr === 'tilt_table' ? -Math.PI / 2 + 0.5 * tiltAlpha : -Math.PI / 2;
+          spr === 'tilt_table' ? -Math.PI / 2 + tiltDegRad : -Math.PI / 2;
         const isBikeStation = Boolean(isAtStation && station && spr === 'exercise_bike');
         const isActiveGaitStation = Boolean(
           isAtStation && station && (spr === 'treadmill' || spr === 'parallel_bars')
@@ -6880,20 +7376,46 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             const stEntry = itemMeshes.get(stItem.instanceId);
             const magRig = stEntry?.mesh.userData.magnetoRig as MagnetoRigMeta | undefined;
             if (magRig) {
-              magRig.currentX = 0.5;
-              magRig.solenoidRing.position.x = 0.5;
-              magRig.coilMat.emissiveIntensity = 0.62;
+              magRig.currentX = 0.38;
+              magRig.currentVelX = 0;
+              magRig.scanPhase = 0;
+              magRig.solenoidRing.position.x = 0.38;
+              magRig.coilMat.emissiveIntensity = 0.36;
+              magRig.fluxMat.opacity = 0;
+              magRig.ledMat.color.setHex(0x38bdf8);
+              magRig.ledMat.emissive.setHex(0x38bdf8);
+              magRig.ledMat.emissiveIntensity = 0.48;
             }
             const ttRig = stEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
             if (ttRig) {
+              const prevSavedTilt = stationTiltMap.get(stItem.instanceId);
               const tiltStand = pObj.sessionPosture === 'standing';
-              ttRig.currentTiltAlpha = tiltStand ? 1 : 0;
-              ttRig.tiltGroup.position.y = tiltStand ? 0.67 : 0.45;
-              ttRig.tiltGroup.rotation.z = tiltStand ? -0.5 : 0;
-              ttRig.strapsGroup.visible = tiltStand;
-              ttRig.ramMesh.position.set(tiltStand ? 0.16 : 0.18, tiltStand ? 0.42 : 0.3, 0);
-              ttRig.ramMesh.rotation.z = tiltStand ? -0.28 : -0.62;
-              ttRig.ramMesh.scale.y = tiltStand ? 1.0 : 0.68;
+              const initDeg = tiltStand
+                ? prevSavedTilt?.deviceParams.tiltDeg ?? 75
+                : prevSavedTilt?.isRunning && pObj.sessionPosture === 'supine'
+                  ? prevSavedTilt.deviceParams.tiltDeg ?? 45
+                  : 0;
+              const initRad = THREE.MathUtils.degToRad(initDeg);
+              const cPhi = Math.cos(initRad);
+              const sPhi = Math.sin(initRad);
+              const tcY = 0.45 + 0.62 * sPhi;
+              ttRig.currentDeg = initDeg;
+              ttRig.currentTiltAlpha = THREE.MathUtils.clamp(initDeg / 55, 0, 1);
+              ttRig.tiltGroup.position.y = tcY;
+              ttRig.tiltGroup.rotation.z = -initRad;
+              ttRig.strapsGroup.visible = initDeg > 4;
+              const rtx = 0.16 * cPhi - 0.02 * sPhi;
+              const rty = tcY - 0.16 * sPhi - 0.02 * cPhi;
+              const rdx = rtx + 0.04;
+              const rdy = rty - 0.24;
+              const rLen = Math.max(0.18, Math.hypot(rdx, rdy));
+              ttRig.ramMesh.position.set((-0.04 + rtx) * 0.5, (0.24 + rty) * 0.5, 0);
+              ttRig.ramMesh.rotation.z = Math.atan2(-rdx, rdy);
+              ttRig.ramMesh.scale.y = rLen / 0.44;
+              const initLedHex = initDeg > 5 ? 0x10b981 : 0x38bdf8;
+              ttRig.ledMat.color.setHex(initLedHex);
+              ttRig.ledMat.emissive.setHex(initLedHex);
+              ttRig.ledMat.emissiveIntensity = initDeg > 5 ? 0.92 : 0.48;
             }
           }
         }
@@ -6913,6 +7435,64 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const curStationCat = curStationItem
           ? latestRef.current.catalogMap.get(curStationItem.catalogId)
           : undefined;
+
+        if (curStationItem && curStationCat?.sprite === 'magnetotherapy') {
+          const prevSaved = stationMagMap.get(curStationItem.instanceId);
+          const startRunning = prevSaved ? prevSaved.isRunning : pObj?.state === 'in_treatment';
+          const startParams = prevSaved
+            ? { ...prevSaved.deviceParams }
+            : getDefaultDeviceParams('magnetotherapy');
+          fppStationMagState.stationId = curStationItem.instanceId;
+          fppStationMagState.catalogId = curStationCat.id;
+          fppStationMagState.nameEn = curStationCat.nameEn;
+          fppStationMagState.nameAr = curStationCat.nameAr;
+          fppStationMagState.isRunning = startRunning;
+          fppStationMagState.wasLyingWhileRunning = false;
+          fppStationMagState.deviceParams = startParams;
+          stationMagMap.set(curStationItem.instanceId, {
+            isRunning: startRunning,
+            deviceParams: { ...startParams },
+          });
+        } else {
+          fppStationMagState.stationId = null;
+          fppStationMagState.isRunning = false;
+          fppStationMagState.wasLyingWhileRunning = false;
+        }
+
+        if (curStationItem && curStationCat?.sprite === 'tilt_table') {
+          const prevSaved = stationTiltMap.get(curStationItem.instanceId);
+          const startRunning = prevSaved
+            ? prevSaved.isRunning
+            : pObj?.state === 'in_treatment' || pObj?.sessionPosture === 'standing';
+          const startParams = prevSaved
+            ? { ...prevSaved.deviceParams }
+            : getDefaultDeviceParams('tilt_table');
+          if (!prevSaved && pObj?.sessionPosture === 'standing') {
+            startParams.tiltDeg = 75;
+          }
+          const stRig = itemMeshes.get(curStationItem.instanceId)?.mesh.userData
+            .tiltTableRig as TiltTableRigMeta | undefined;
+          startParams.currentTiltDeg = Math.round(stRig?.currentDeg ?? 0);
+          fppStationTiltState.stationId = curStationItem.instanceId;
+          fppStationTiltState.catalogId = curStationCat.id;
+          fppStationTiltState.nameEn = curStationCat.nameEn;
+          fppStationTiltState.nameAr = curStationCat.nameAr;
+          fppStationTiltState.isRunning = startRunning;
+          fppStationTiltState.wasLyingWhileRunning = false;
+          fppStationTiltState.isMotorMoving = false;
+          fppStationTiltState.lastUiDeg = startParams.currentTiltDeg;
+          fppStationTiltState.deviceParams = startParams;
+          stationTiltMap.set(curStationItem.instanceId, {
+            isRunning: startRunning,
+            deviceParams: { ...startParams },
+          });
+        } else {
+          fppStationTiltState.stationId = null;
+          fppStationTiltState.isRunning = false;
+          fppStationTiltState.wasLyingWhileRunning = false;
+          fppStationTiltState.isMotorMoving = false;
+          fppStationTiltState.lastUiDeg = -1;
+        }
 
         fpp.patientX = px;
         fpp.patientZ = pz;
@@ -7008,6 +7588,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         cs.panVelX = 0;
         cs.panVelZ = 0;
       } else if (!curFppId && fpp.activeId) {
+        if (fppStationMagState.stationId) {
+          stationMagMap.set(fppStationMagState.stationId, {
+            isRunning: fppStationMagState.isRunning,
+            deviceParams: { ...fppStationMagState.deviceParams },
+          });
+        }
+        fppStationMagState.stationId = null;
+        fppStationMagState.isRunning = false;
+        fppStationMagState.wasLyingWhileRunning = false;
+        if (fppStationTiltState.stationId) {
+          stationTiltMap.set(fppStationTiltState.stationId, {
+            isRunning: fppStationTiltState.isRunning,
+            deviceParams: { ...fppStationTiltState.deviceParams },
+          });
+        }
+        fppStationTiltState.stationId = null;
+        fppStationTiltState.isRunning = false;
+        fppStationTiltState.wasLyingWhileRunning = false;
+        fppStationTiltState.isMotorMoving = false;
+        fppStationTiltState.lastUiDeg = -1;
         fpp.activeId = null;
         fpp.blend = 0;
         fppDropRingGroup.visible = false;
@@ -7239,19 +7839,43 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             ? fppEquipBayMap.get(curActiveForCam.instanceId) ?? resolveBayEntry(curActiveForCam.catalogId)
             : resolveBayEntry(curActiveForCam.catalogId);
           const isPortrait = camera.aspect < 0.85;
-          const pBayX = 0;
+          const isMagStationCam = curActiveForCam.sprite === 'magnetotherapy';
+          const isTiltStationCam = curActiveForCam.sprite === 'tilt_table';
+          const isFixedBedCam = isMagStationCam || isTiltStationCam;
+          const magFootSign = fpp.patientEdgeSign ?? 1;
+          const pBayX = isFixedBedCam ? magFootSign * 0.16 : 0;
           const pBayY =
-            focusPosture === 'standing'
-              ? 1.12
-              : focusPosture === 'sitting'
-                ? focusBedH + 0.46
-                : focusBedH + 0.14;
+            isTiltStationCam
+              ? focusBedH + 0.36
+              : focusPosture === 'standing'
+                ? 1.12
+                : focusPosture === 'sitting'
+                  ? focusBedH + 0.46
+                  : focusBedH + 0.14;
           const pBayZ =
             focusPosture === 'standing' ? 0.18 : focusPosture === 'sitting' ? -0.02 : -0.24;
 
-          const sideSign = focusEntry && focusEntry.curX > 0.12 ? -1 : 1;
-          const frontSign = focusEntry && focusEntry.curZ < -0.52 ? -1 : 1;
-          const defaultAngle = (isPortrait ? 0.24 : 0.18) * sideSign;
+          const sideSign = isFixedBedCam
+            ? magFootSign
+            : focusEntry && focusEntry.curX > 0.12
+              ? -1
+              : 1;
+          const frontSign = isFixedBedCam
+            ? 1
+            : focusEntry && focusEntry.curZ < -0.52
+              ? -1
+              : 1;
+          const defaultAngle = (isTiltStationCam
+            ? isPortrait
+              ? 0.36
+              : 0.30
+            : isMagStationCam
+              ? isPortrait
+                ? 0.38
+                : 0.32
+              : isPortrait
+                ? 0.24
+                : 0.18) * sideSign;
 
           fpp.focusOrbitYaw = THREE.MathUtils.damp(fpp.focusOrbitYaw, fpp.focusTargetOrbitYaw, 10, dt);
           fpp.focusOrbitPitch = THREE.MathUtils.damp(fpp.focusOrbitPitch, fpp.focusTargetOrbitPitch, 10, dt);
@@ -7295,22 +7919,37 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             fpp.probeLeanZ = THREE.MathUtils.damp(fpp.probeLeanZ, pBayZ, 6, dt);
           }
 
-          const baseHorizDist = isPortrait
-            ? 1.44
-            : focusPosture === 'standing'
-              ? 1.32
-              : 1.22;
+          const baseHorizDist = isTiltStationCam
+            ? isPortrait
+              ? 1.72
+              : 1.56
+            : isMagStationCam
+              ? isPortrait
+                ? 1.66
+                : 1.50
+              : isPortrait
+                ? 1.44
+                : focusPosture === 'standing'
+                  ? 1.32
+                  : 1.22;
           const horizDist = THREE.MathUtils.lerp(
             baseHorizDist,
             isPortrait ? 0.88 : 0.72,
             fpp.probeLeanBlend
           );
-          const baseCamY =
-            focusPosture === 'standing'
-              ? 1.36
-              : focusPosture === 'sitting'
-                ? focusBedH + 0.86
-                : focusBedH + 0.72;
+          const baseCamY = isTiltStationCam
+            ? focusBedH + 0.96
+            : isMagStationCam
+              ? focusPosture === 'standing'
+                ? 1.38
+                : focusPosture === 'sitting'
+                  ? focusBedH + 0.94
+                  : focusBedH + 0.82
+              : focusPosture === 'standing'
+                ? 1.36
+                : focusPosture === 'sitting'
+                  ? focusBedH + 0.86
+                  : focusBedH + 0.72;
 
           const aimCenterX = THREE.MathUtils.lerp(pBayX, fpp.probeLeanX, fpp.probeLeanBlend * 0.65);
           const aimCenterZ = THREE.MathUtils.lerp(pBayZ, fpp.probeLeanZ, fpp.probeLeanBlend * 0.65);
@@ -7721,6 +8360,146 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           }
         }
 
+        // PEMF Magnetotherapy station countdown, audio, lying interlock, & mild sensory sensation
+        let shouldPushMagTimerUi = false;
+        if (fppStationMagState.stationId && fppStationMagState.isRunning) {
+          const occRigMag = curFppId ? patientRigs.get(curFppId) : undefined;
+          const isMagLying = Boolean(occRigMag && occRigMag.bedPhase === 'lying' && occRigMag.lieBlend >= 0.88);
+          if (isMagLying) {
+            fppStationMagState.wasLyingWhileRunning = true;
+            const prevRem =
+              fppStationMagState.deviceParams.timerRemainingSec ??
+              (fppStationMagState.deviceParams.timerMin ?? 20) * 60;
+            const nextRem = Math.max(0, prevRem - dt);
+            fppStationMagState.deviceParams.timerRemainingSec = nextRem;
+            if (nextRem <= 0) {
+              fppStationMagState.isRunning = false;
+              fppStationMagState.wasLyingWhileRunning = false;
+              soundFx.deviceToggle(false);
+              if (curActiveDevice?.sprite === 'magnetotherapy') {
+                shouldPushMagTimerUi = true;
+              }
+            } else {
+              if (sync1HzTick && curActiveDevice?.sprite === 'magnetotherapy') {
+                shouldPushMagTimerUi = true;
+              }
+              fppAudioDevicesScratch.push({
+                instanceId: fppStationMagState.stationId,
+                sprite: 'magnetotherapy',
+                isRunning: true,
+                placedCount: 1,
+                deviceParams: fppStationMagState.deviceParams,
+              });
+              const mT = Number(fppStationMagState.deviceParams.intensity ?? 45);
+              const magContrib = THREE.MathUtils.clamp(0.03 + (mT / 100) * 0.13, 0.03, 0.16);
+              totalStim += magContrib;
+              if (magContrib > domStimScore) {
+                domStimScore = magContrib;
+                domPulseVal = 0.12 + 0.12 * Math.sin(tSec * 4.5);
+                domKind = 'thermal';
+                const z = fppStationMagState.deviceParams.magnetZone ?? 'SCAN';
+                domRegion = z === 'CERVICAL' ? 'neck' : z === 'KNEE' ? 'shin_l' : 'torso';
+              }
+            }
+            stationMagMap.set(fppStationMagState.stationId, {
+              isRunning: fppStationMagState.isRunning,
+              deviceParams: { ...fppStationMagState.deviceParams },
+            });
+          } else if (fppStationMagState.wasLyingWhileRunning) {
+            fppStationMagState.isRunning = false;
+            fppStationMagState.wasLyingWhileRunning = false;
+            stationMagMap.set(fppStationMagState.stationId, {
+              isRunning: false,
+              deviceParams: { ...fppStationMagState.deviceParams },
+            });
+            soundFx.deviceToggle(false);
+            if (curActiveDevice?.sprite === 'magnetotherapy') {
+              shouldPushMagTimerUi = true;
+            }
+          }
+        }
+
+        // Electric Standing Tilt Table countdown, linear actuator motor audio, interlock, & orthostatic stim
+        let shouldPushTiltUi = false;
+        if (fppStationTiltState.stationId) {
+          const ttStEntry = itemMeshes.get(fppStationTiltState.stationId);
+          const ttRig = ttStEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+          const liveDeg = Math.round(ttRig?.currentDeg ?? 0);
+          fppStationTiltState.deviceParams.currentTiltDeg = liveDeg;
+          const occRigTilt = curFppId ? patientRigs.get(curFppId) : undefined;
+          const isTiltLying = Boolean(
+            occRigTilt && occRigTilt.bedPhase === 'lying' && occRigTilt.lieBlend >= 0.88
+          );
+          const postureNowTilt: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+          const wantsSitAway = postureNowTilt === 'sitting';
+
+          if (fppStationTiltState.isRunning) {
+            if (isTiltLying && !wantsSitAway) {
+              fppStationTiltState.wasLyingWhileRunning = true;
+              const prevRem =
+                fppStationTiltState.deviceParams.timerRemainingSec ??
+                (fppStationTiltState.deviceParams.timerMin ?? 15) * 60;
+              const nextRem = Math.max(0, prevRem - dt);
+              fppStationTiltState.deviceParams.timerRemainingSec = nextRem;
+              if (nextRem <= 0) {
+                fppStationTiltState.isRunning = false;
+                fppStationTiltState.wasLyingWhileRunning = false;
+                soundFx.deviceToggle(false);
+                if (curActiveDevice?.sprite === 'tilt_table') {
+                  shouldPushTiltUi = true;
+                }
+              } else {
+                if (sync1HzTick && curActiveDevice?.sprite === 'tilt_table') {
+                  shouldPushTiltUi = true;
+                }
+                const tiltContrib = THREE.MathUtils.clamp(0.03 + (liveDeg / 85) * 0.14, 0.03, 0.17);
+                totalStim += tiltContrib;
+                if (tiltContrib > domStimScore) {
+                  domStimScore = tiltContrib;
+                  domPulseVal = fppStationTiltState.isMotorMoving ? 0.16 : 0.04;
+                  domKind = 'stretch';
+                  domRegion = 'torso';
+                }
+              }
+              stationTiltMap.set(fppStationTiltState.stationId, {
+                isRunning: fppStationTiltState.isRunning,
+                deviceParams: { ...fppStationTiltState.deviceParams },
+              });
+            } else if (!isTiltLying || wantsSitAway) {
+              if (fppStationTiltState.wasLyingWhileRunning) {
+                fppStationTiltState.isRunning = false;
+                fppStationTiltState.wasLyingWhileRunning = false;
+                stationTiltMap.set(fppStationTiltState.stationId, {
+                  isRunning: false,
+                  deviceParams: { ...fppStationTiltState.deviceParams },
+                });
+                soundFx.deviceToggle(false);
+                if (curActiveDevice?.sprite === 'tilt_table') {
+                  shouldPushTiltUi = true;
+                }
+              }
+            }
+          }
+
+          if (fppStationTiltState.isMotorMoving) {
+            fppAudioDevicesScratch.push({
+              instanceId: fppStationTiltState.stationId,
+              sprite: 'tilt_table',
+              isRunning: true,
+              placedCount: 1,
+              deviceParams: fppStationTiltState.deviceParams,
+              isMoving: true,
+            });
+          }
+          if (
+            curActiveDevice?.sprite === 'tilt_table' &&
+            liveDeg !== fppStationTiltState.lastUiDeg
+          ) {
+            fppStationTiltState.lastUiDeg = liveDeg;
+            shouldPushTiltUi = true;
+          }
+        }
+
         totalStim = THREE.MathUtils.clamp(totalStim, 0, 1.25);
         const fppPatient = latestRef.current.patients.find((pt) => pt.id === curFppId);
         const isFemalePatient = fppPatient?.clinicalCase.gender === 'female';
@@ -7943,20 +8722,34 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
 
         if (curActiveDevice) {
-          const activeEntry = curActiveDevice.instanceId
-            ? fppEquipBayMap.get(curActiveDevice.instanceId) ?? resolveBayEntry(curActiveDevice.catalogId)
-            : resolveBayEntry(curActiveDevice.catalogId);
-          if (
-            curActiveDevice.placementMode === 'room' &&
-            (!activeEntry ||
-              activeEntry.mode !== 'placed_room' ||
-              getBayDeviceSurfaceGap(activeEntry, camBayX, camBayZ) > 0.65)
-          ) {
-            latestRef.current.onFppActiveBedDeviceChange?.(null);
-          } else if (shouldPushActiveTimerUi && activeEntry) {
-            latestRef.current.onFppActiveBedDeviceChange?.(
-              buildActiveDevicePayload(activeEntry, curActiveDevice.screenTapped)
-            );
+          if (curActiveDevice.sprite === 'magnetotherapy') {
+            if (shouldPushMagTimerUi && fppStationMagState.stationId) {
+              latestRef.current.onFppActiveBedDeviceChange?.(
+                buildMagnetoStationPayload(curActiveDevice.screenTapped)
+              );
+            }
+          } else if (curActiveDevice.sprite === 'tilt_table') {
+            if (shouldPushTiltUi && fppStationTiltState.stationId) {
+              latestRef.current.onFppActiveBedDeviceChange?.(
+                buildTiltStationPayload(curActiveDevice.screenTapped)
+              );
+            }
+          } else {
+            const activeEntry = curActiveDevice.instanceId
+              ? fppEquipBayMap.get(curActiveDevice.instanceId) ?? resolveBayEntry(curActiveDevice.catalogId)
+              : resolveBayEntry(curActiveDevice.catalogId);
+            if (
+              curActiveDevice.placementMode === 'room' &&
+              (!activeEntry ||
+                activeEntry.mode !== 'placed_room' ||
+                getBayDeviceSurfaceGap(activeEntry, camBayX, camBayZ) > 0.65)
+            ) {
+              latestRef.current.onFppActiveBedDeviceChange?.(null);
+            } else if (shouldPushActiveTimerUi && activeEntry) {
+              latestRef.current.onFppActiveBedDeviceChange?.(
+                buildActiveDevicePayload(activeEntry, curActiveDevice.screenTapped)
+              );
+            }
           }
         }
 
@@ -8044,26 +8837,96 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               nearestEntry = eq;
             }
           }
-          const nearIsBedActive = Boolean(nearestEntry && nearestEntry.mode === 'placed_bed');
-          const nearKey = nearestEntry ? `${nearestEntry.instanceId}|${nearIsBedActive ? 1 : 0}` : '';
-          if (nearKey !== lastFppNearKey) {
-            lastFppNearKey = nearKey;
-            if (nearestEntry) {
-              const cap = getFppDeviceCapability(nearestEntry.sprite);
-              latestRef.current.onFppNearbyDeviceChange?.({
-                instanceId: nearestEntry.instanceId,
-                catalogId: nearestEntry.catalogId,
-                sprite: nearestEntry.sprite,
-                nameEn: nearestEntry.nameEn,
-                nameAr: nearestEntry.nameAr,
-                canDeploy: cap.canDeploy,
-                isActive: nearIsBedActive,
-                isAdjustable: cap.isAdjustable,
-                supportsDistance: cap.supportsDistance,
-                requiredPosture: cap.requiredPosture,
-              });
-            } else {
-              latestRef.current.onFppNearbyDeviceChange?.(null);
+
+          let handledMagNear = false;
+          if (!nearestEntry && !curActiveDevice && fppStationMagState.stationId) {
+            const stEntry = itemMeshes.get(fppStationMagState.stationId);
+            const magRig = stEntry?.mesh.userData.magnetoRig as MagnetoRigMeta | undefined;
+            if (stEntry && stEntry.mesh.visible && magRig?.consoleAnchor) {
+              magRig.consoleAnchor.getWorldPosition(_magConsoleWorld);
+              const cdx = _magConsoleWorld.x - fpp.posX;
+              const cdz = _magConsoleWorld.z - fpp.posZ;
+              const cDist = Math.hypot(cdx, cdz);
+              const cFwdX = -Math.sin(fpp.yaw);
+              const cFwdZ = -Math.cos(fpp.yaw);
+              const cDot = cDist < 0.25 ? 1 : (cdx * cFwdX + cdz * cFwdZ) / cDist;
+              if (cDist <= 1.35 && cDot >= 0.12) {
+                const magNearKey = `mag_${fppStationMagState.stationId}|${fppStationMagState.isRunning ? 1 : 0}`;
+                if (magNearKey !== lastFppNearKey) {
+                  lastFppNearKey = magNearKey;
+                  latestRef.current.onFppNearbyDeviceChange?.({
+                    instanceId: fppStationMagState.stationId,
+                    catalogId: fppStationMagState.catalogId,
+                    sprite: 'magnetotherapy',
+                    nameEn: fppStationMagState.nameEn,
+                    nameAr: fppStationMagState.nameAr,
+                    canDeploy: false,
+                    isActive: fppStationMagState.isRunning,
+                    isAdjustable: false,
+                    supportsDistance: false,
+                    isStationConsole: true,
+                  });
+                }
+                handledMagNear = true;
+              }
+            }
+          }
+
+          if (!handledMagNear && !nearestEntry && !curActiveDevice && fppStationTiltState.stationId) {
+            const stEntry = itemMeshes.get(fppStationTiltState.stationId);
+            const ttRig = stEntry?.mesh.userData.tiltTableRig as TiltTableRigMeta | undefined;
+            if (stEntry && stEntry.mesh.visible && ttRig?.consoleAnchor) {
+              ttRig.consoleAnchor.getWorldPosition(_tiltConsoleWorld);
+              const cdx = _tiltConsoleWorld.x - fpp.posX;
+              const cdz = _tiltConsoleWorld.z - fpp.posZ;
+              const cDist = Math.hypot(cdx, cdz);
+              const cFwdX = -Math.sin(fpp.yaw);
+              const cFwdZ = -Math.cos(fpp.yaw);
+              const cDot = cDist < 0.25 ? 1 : (cdx * cFwdX + cdz * cFwdZ) / cDist;
+              if (cDist <= 1.35 && cDot >= 0.12) {
+                const tiltNearKey = `tilt_${fppStationTiltState.stationId}|${fppStationTiltState.isRunning ? 1 : 0}`;
+                if (tiltNearKey !== lastFppNearKey) {
+                  lastFppNearKey = tiltNearKey;
+                  latestRef.current.onFppNearbyDeviceChange?.({
+                    instanceId: fppStationTiltState.stationId,
+                    catalogId: fppStationTiltState.catalogId,
+                    sprite: 'tilt_table',
+                    nameEn: fppStationTiltState.nameEn,
+                    nameAr: fppStationTiltState.nameAr,
+                    canDeploy: false,
+                    isActive: fppStationTiltState.isRunning,
+                    isAdjustable: false,
+                    supportsDistance: false,
+                    isStationConsole: true,
+                  });
+                }
+                handledMagNear = true;
+              }
+            }
+          }
+
+          if (!handledMagNear) {
+            const nearIsBedActive = Boolean(nearestEntry && nearestEntry.mode === 'placed_bed');
+            const nearKey = nearestEntry ? `${nearestEntry.instanceId}|${nearIsBedActive ? 1 : 0}` : '';
+            if (nearKey !== lastFppNearKey) {
+              lastFppNearKey = nearKey;
+              if (nearestEntry) {
+                const cap = getFppDeviceCapability(nearestEntry.sprite);
+                latestRef.current.onFppNearbyDeviceChange?.({
+                  instanceId: nearestEntry.instanceId,
+                  catalogId: nearestEntry.catalogId,
+                  sprite: nearestEntry.sprite,
+                  nameEn: nearestEntry.nameEn,
+                  nameAr: nearestEntry.nameAr,
+                  canDeploy: cap.canDeploy,
+                  isActive: nearIsBedActive,
+                  isAdjustable: cap.isAdjustable,
+                  supportsDistance: cap.supportsDistance,
+                  requiredPosture: cap.requiredPosture,
+                });
+              } else {
+                latestRef.current.onFppNearbyDeviceChange?.(null);
+              }
             }
           }
         }

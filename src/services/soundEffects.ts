@@ -7,6 +7,7 @@ export interface ActiveDeviceAudioInput {
   placedCount: number;
   irIntensity?: number;
   irDistance?: number;
+  isMoving?: boolean;
   deviceParams?: DeviceConsoleParams;
 }
 
@@ -1089,6 +1090,51 @@ class SoundEngine {
       return handle;
     }
 
+    if (sprite === 'magnetotherapy') {
+      const humSrc = ctx.createBufferSource();
+      humSrc.buffer = this.getDeviceBuffer(ctx, 'fan_loop');
+      humSrc.loop = true;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(240, now);
+
+      const coilOsc = ctx.createOscillator();
+      coilOsc.type = 'sine';
+      coilOsc.frequency.setValueAtTime(100, now);
+      const coilGain = ctx.createGain();
+      coilGain.gain.setValueAtTime(0.0001, now);
+
+      humSrc.connect(lp);
+      lp.connect(masterGain);
+      coilOsc.connect(coilGain);
+      coilGain.connect(out);
+
+      humSrc.start(now);
+      coilOsc.start(now);
+      nodes.push(humSrc, lp, coilOsc, coilGain);
+      handle.src1 = humSrc;
+      handle.filter1 = lp;
+      handle.pulseOsc = coilOsc;
+      handle.pulseGain = coilGain;
+      return handle;
+    }
+
+    if (sprite === 'tilt_table') {
+      const motorSrc = ctx.createBufferSource();
+      motorSrc.buffer = this.getDeviceBuffer(ctx, 'cpm_motor_loop');
+      motorSrc.loop = true;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(320, now);
+      motorSrc.connect(lp);
+      lp.connect(masterGain);
+      motorSrc.start(now);
+      nodes.push(motorSrc, lp);
+      handle.src1 = motorSrc;
+      handle.filter1 = lp;
+      return handle;
+    }
+
     masterGain.disconnect();
     return null;
   }
@@ -1193,6 +1239,37 @@ class SoundEngine {
         h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.14);
         h.nextPulseAt += period;
       }
+    } else if (h.sprite === 'magnetotherapy' && h.pulseOsc && h.pulseGain) {
+      const mT = Math.max(10, Math.min(100, Number(p?.intensity ?? 45)));
+      const rawHz = Math.max(2, Math.min(100, Number(p?.freqHz ?? 25)));
+      const mode = p?.mode ?? 'PULSED';
+      const mT01 = (mT - 10) / 90;
+      const effRate =
+        mode === 'CONT'
+          ? 4.0
+          : mode === 'BURST'
+            ? 9.0
+            : Math.max(2.0, Math.min(13.0, rawHz * 0.22));
+      const period = 1 / effRate;
+      if (h.nextPulseAt < now - 0.14) h.nextPulseAt = now + 0.02;
+
+      while (h.nextPulseAt <= lookahead) {
+        const pt = h.nextPulseAt;
+        h.burstPhase += period;
+        let gate = 1;
+        if (mode === 'BURST') {
+          const cycle = h.burstPhase % 0.85;
+          gate = cycle < 0.36 ? 1 : 0.15;
+        } else if (mode === 'CONT') {
+          gate = 0.65;
+        }
+        const peakVol = (0.01 + mT01 * 0.026) * gate;
+        h.pulseOsc.frequency.setValueAtTime(92 + mT01 * 28, pt);
+        h.pulseGain.gain.setValueAtTime(0.0002, pt);
+        h.pulseGain.gain.linearRampToValueAtTime(peakVol, pt + 0.014);
+        h.pulseGain.gain.exponentialRampToValueAtTime(0.0003, pt + Math.min(0.085, period * 0.72));
+        h.nextPulseAt += period;
+      }
     }
   }
 
@@ -1256,6 +1333,19 @@ class SoundEngine {
       );
     } else if (h.sprite === 'emg_biofeedback' || h.sprite === 'balance_trainer') {
       h.masterGain.gain.setTargetAtTime(0.008, now, 0.05);
+    } else if (h.sprite === 'magnetotherapy') {
+      const mT = Math.max(10, Math.min(100, Number(p?.intensity ?? 45)));
+      const mT01 = (mT - 10) / 90;
+      const zone = p?.magnetZone ?? 'SCAN';
+      const speed = Math.max(1, Math.min(3, Number(p?.speed ?? 2)));
+      const scanGlide = zone === 'SCAN' ? 0.005 + speed * 0.002 : 0;
+      h.masterGain.gain.setTargetAtTime(0.012 + mT01 * 0.014 + scanGlide, now, 0.06);
+      h.filter1?.frequency.setTargetAtTime(210 + mT01 * 110 + (zone === 'SCAN' ? 40 : 0), now, 0.08);
+    } else if (h.sprite === 'tilt_table') {
+      const spd = Math.max(1, Math.min(3, Number(p?.speed ?? 2)));
+      const motorActive = Boolean(item.isMoving);
+      h.masterGain.gain.setTargetAtTime(motorActive ? 0.028 + spd * 0.011 : 0.0002, now, 0.05);
+      h.src1?.playbackRate.setTargetAtTime(0.76 + spd * 0.11, now, 0.05);
     }
 
     this.schedulePulse(ctx, h, item, timeSec);

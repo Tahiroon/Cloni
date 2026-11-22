@@ -3541,6 +3541,10 @@ export default function App() {
           onUpdateActiveDevice={(next) => {
             fppDeviceCmdRef.current?.updateActiveBedDevice(next);
           }}
+          onOpenStationConsole={(deviceId) => {
+            soundFx.tap();
+            fppDeviceCmdRef.current?.openStationConsole?.(deviceId);
+          }}
           onCloseActiveDevice={() => {
             soundFx.tap();
             setFppActiveDevice(null);

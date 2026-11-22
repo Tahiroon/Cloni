@@ -302,28 +302,32 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
           </span>
         </button>
 
-        <button
-          type="button"
-          onClick={onPickUp}
-          title={isAr ? 'نقل الجهاز' : 'Move device'}
-          aria-label={isAr ? 'نقل الجهاز' : 'Move device'}
-          className={`w-7 h-7 rounded flex items-center justify-center border cursor-pointer ${
-            lightBody
-              ? 'bg-white/75 hover:bg-white border-slate-400 text-slate-800'
-              : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
-          }`}
-        >
-          <Hand className="w-3 h-3" />
-        </button>
-        <button
-          type="button"
-          onClick={onReturn}
-          title={isAr ? 'إرجاع لمكانه' : 'Return'}
-          aria-label={isAr ? 'إرجاع لمكانه' : 'Return'}
-          className="w-7 h-7 rounded bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center cursor-pointer"
-        >
-          <Undo2 className="w-3 h-3" />
-        </button>
+        {device.sprite !== 'magnetotherapy' && device.sprite !== 'tilt_table' && (
+          <>
+            <button
+              type="button"
+              onClick={onPickUp}
+              title={isAr ? 'نقل الجهاز' : 'Move device'}
+              aria-label={isAr ? 'نقل الجهاز' : 'Move device'}
+              className={`w-7 h-7 rounded flex items-center justify-center border cursor-pointer ${
+                lightBody
+                  ? 'bg-white/75 hover:bg-white border-slate-400 text-slate-800'
+                  : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
+              }`}
+            >
+              <Hand className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={onReturn}
+              title={isAr ? 'إرجاع لمكانه' : 'Return'}
+              aria-label={isAr ? 'إرجاع لمكانه' : 'Return'}
+              className="w-7 h-7 rounded bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center cursor-pointer"
+            >
+              <Undo2 className="w-3 h-3" />
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={onClose}
@@ -1276,6 +1280,288 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     );
   };
 
+  // 11) PEMF MAGNETOTHERAPY COUCH — Motorized Solenoid Scan/Zone + Flux mT/Gauss + Hz
+  const renderMagnetotherapyConsole = () => {
+    const mT = Number(params.intensity ?? 45);
+    const hz = Number(params.freqHz ?? 25);
+    const mode = params.mode ?? 'PULSED';
+    const zone = params.magnetZone ?? 'SCAN';
+    const speed = Number(params.speed ?? 2);
+    const gauss = mT * 10;
+
+    // Solenoid X indicator (12..62 px on miniature 76x28 schematic)
+    const ringX = !running
+      ? 62
+      : zone === 'CERVICAL'
+        ? 16
+        : zone === 'LUMBAR'
+          ? 34
+          : zone === 'KNEE'
+            ? 50
+            : 16 + (0.5 - 0.5 * Math.cos(tickPhase * (0.45 + speed * 0.25))) * 34;
+
+    const zones = [
+      { id: 'SCAN', label: isAr ? 'مسح تلقائي' : 'AUTO SCAN' },
+      { id: 'CERVICAL', label: isAr ? 'عنقية' : 'CERVICAL' },
+      { id: 'LUMBAR', label: isAr ? 'قطنية' : 'LUMBAR' },
+      { id: 'KNEE', label: isAr ? 'ركبة' : 'KNEE' },
+    ];
+
+    return (
+      <div className="w-[min(95vw,27.5rem)] select-none rounded-2xl bg-gradient-to-b from-[#1f2937] via-[#131b26] to-[#0b1018] border-[3px] border-cyan-500/80 shadow-[0_14px_34px_rgba(0,0,0,0.72)] text-white overflow-hidden">
+        {renderHardwareTopTrim('PEMF MAGNETO COUCH', false, {
+          on: isAr ? 'إيقاف' : 'STOP',
+          off: isAr ? 'تشغيل' : 'START',
+        })}
+
+        <div className="p-2 space-y-1.5">
+          {/* Telemetry Display + Live Gantry Solenoid Schematic */}
+          <div className="rounded-lg bg-[#06131f] border-2 border-cyan-500/50 px-2.5 py-1.5 font-mono flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[9px] text-cyan-300 font-black flex items-center gap-1.5">
+                <span>{mode} · {hz} Hz</span>
+                <span className="text-slate-500">·</span>
+                <span className={running ? 'text-emerald-400' : 'text-amber-300'}>
+                  {running ? (zone === 'SCAN' ? 'SCANNING' : `LOCKED ${zone}`) : 'STANDBY'}
+                </span>
+              </div>
+              <div className="text-base font-black text-white leading-tight tabular-nums">
+                {mT} <span className="text-[10px] text-cyan-300">mT</span>{' '}
+                <span className="text-[10px] text-slate-400">({gauss} G)</span>
+              </div>
+            </div>
+
+            <svg viewBox="0 0 76 28" className="w-20 h-7 shrink-0 rounded bg-[#030b14] border border-cyan-900/70">
+              <line x1="8" y1="21" x2="68" y2="21" stroke="#334155" strokeWidth="2.5" strokeLinecap="round" />
+              <circle cx="14" cy="17" r="2.2" fill="#94a3b8" />
+              <line x1="17" y1="18" x2="58" y2="18" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" />
+              <rect
+                x={ringX - 4}
+                y="6"
+                width="8"
+                height="16"
+                rx="2.5"
+                fill={running ? '#22d3ee' : '#475569'}
+                fillOpacity={running ? 0.35 : 0.4}
+                stroke={running ? '#38bdf8' : '#94a3b8'}
+                strokeWidth="1.6"
+              />
+            </svg>
+          </div>
+
+          {/* Solenoid Target Zone / Auto-Scan Selector */}
+          <div className="grid grid-cols-4 gap-1">
+            {zones.map((z) => (
+              <button
+                key={z.id}
+                type="button"
+                onClick={() => patchParams({ magnetZone: z.id })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer transition-colors ${
+                  zone === z.id
+                    ? 'bg-cyan-500 border-cyan-300 text-slate-950 shadow-sm'
+                    : 'bg-slate-800 border-slate-600 text-slate-200 hover:border-cyan-400/60'
+                }`}
+              >
+                {z.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Waveform Mode + Scan Speed */}
+          <div className="flex items-center gap-1">
+            {['CONT', 'PULSED', 'BURST'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => patchParams({ mode: m })}
+                className={`flex-1 py-1 rounded text-[9px] font-black border cursor-pointer ${
+                  mode === m
+                    ? 'bg-sky-500 border-sky-300 text-slate-950'
+                    : 'bg-slate-800 border-slate-600 text-slate-300'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+            {zone === 'SCAN' && (
+              <div className="flex items-center gap-1 pl-1 border-l border-white/15">
+                {[1, 2, 3].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => patchParams({ speed: s })}
+                    className={`w-7 py-1 rounded text-[9px] font-black border cursor-pointer ${
+                      speed === s
+                        ? 'bg-emerald-500 border-emerald-300 text-slate-950'
+                        : 'bg-slate-800 border-slate-600 text-slate-300'
+                    }`}
+                  >
+                    S{s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Flux & Frequency Linear Faders */}
+          <div className="grid grid-cols-2 gap-2">
+            <HardwareFader
+              label={isAr ? 'شدة المجال' : 'FLUX (mT)'}
+              valueText={`${mT} mT`}
+              value={mT}
+              min={10}
+              max={100}
+              step={5}
+              accentClass="bg-cyan-500"
+              onChange={(v) => patchParams({ intensity: v })}
+            />
+            <HardwareFader
+              label={isAr ? 'التردد' : 'FREQ (Hz)'}
+              valueText={`${hz} Hz`}
+              value={hz}
+              min={2}
+              max={100}
+              step={2}
+              accentClass="bg-sky-500"
+              onChange={(v) => patchParams({ freqHz: v })}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 12) ELECTRIC STANDING TILT TABLE — Digital Inclinometer + Progressive Angle + % Body Weight Bearing
+  const renderTiltTableConsole = () => {
+    const targetDeg = Number(params.tiltDeg ?? 45);
+    const liveDeg = Math.round(Number(params.currentTiltDeg ?? 0));
+    const speed = Number(params.speed ?? 2);
+    const wbPct = Math.round(Math.sin((liveDeg * Math.PI) / 180) * 100);
+    const presets = [0, 30, 45, 60, 75, 85];
+
+    const stageLabel = !running
+      ? liveDeg > 3
+        ? isAr ? 'نزول تدريجي 0°' : 'LOWERING 0°'
+        : isAr ? 'وضع أفقي' : 'FLAT 0°'
+      : Math.abs(liveDeg - targetDeg) > 2
+        ? liveDeg < targetDeg
+          ? isAr ? 'جاري الرفع' : 'ELEVATING'
+          : isAr ? 'جاري الخفض' : 'LOWERING'
+        : liveDeg >= 70
+          ? isAr ? 'وقوف كامل' : 'FULL STAND'
+          : liveDeg >= 30
+            ? isAr ? 'تحميل جزئي' : 'PARTIAL WB'
+            : isAr ? 'تدرج انتصابي' : 'ORTHOSTATIC';
+
+    // Schematic tilt angle around hinge (x=38, y=22) on 76x30 SVG
+    const rad = (liveDeg * Math.PI) / 180;
+    const deckLen = 24;
+    const hx = 40 - Math.cos(rad) * deckLen;
+    const hy = 20 - Math.sin(rad) * deckLen;
+    const fx = 40 + Math.cos(rad) * 16;
+    const fy = 20 + Math.sin(rad) * 16;
+
+    return (
+      <div className="w-[min(95vw,27.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-slate-200 border-[3px] border-sky-500 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-slate-900 overflow-hidden">
+        {renderHardwareTopTrim('TILT TABLE · INCLINOMETER', true, {
+          on: isAr ? 'إيقاف (0°)' : 'STOP 0°',
+          off: isAr ? 'رفع الطاولة' : 'START TILT',
+        })}
+
+        <div className="p-2 space-y-1.5">
+          {/* Digital Inclinometer Readout + Live Tilting Deck Schematic */}
+          <div className="rounded-lg bg-[#071624] border-2 border-sky-500/50 px-2.5 py-1.5 font-mono text-white flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[9px] text-sky-300 font-black flex items-center gap-1.5">
+                <span>{isAr ? `الهدف ${targetDeg}°` : `TARGET ${targetDeg}°`}</span>
+                <span className="text-slate-500">·</span>
+                <span className={running ? 'text-emerald-400' : 'text-amber-300'}>{stageLabel}</span>
+              </div>
+              <div className="text-base font-black text-white leading-tight tabular-nums flex items-baseline gap-2">
+                <span>{liveDeg}°</span>
+                <span className="text-[10px] text-cyan-300 font-bold">
+                  {isAr ? `وزن ${wbPct}%` : `${wbPct}% BW`}
+                </span>
+              </div>
+            </div>
+
+            <svg viewBox="0 0 76 30" className="w-20 h-7 shrink-0 rounded bg-[#030b14] border border-sky-900/70">
+              <line x1="10" y1="26" x2="66" y2="26" stroke="#334155" strokeWidth="2" strokeLinecap="round" />
+              <line x1="38" y1="26" x2="38" y2="20" stroke="#64748b" strokeWidth="2.5" />
+              <line x1={hx} y1={hy} x2={fx} y2={fy} stroke={running ? '#38bdf8' : '#94a3b8'} strokeWidth="3" strokeLinecap="round" />
+              <line
+                x1={fx}
+                y1={fy}
+                x2={fx + Math.sin(rad) * 5}
+                y2={fy - Math.cos(rad) * 5}
+                stroke="#10b981"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          </div>
+
+          {/* Target Angle Quick Clinical Presets */}
+          <div className="grid grid-cols-6 gap-1">
+            {presets.map((deg) => (
+              <button
+                key={deg}
+                type="button"
+                onClick={() => patchParams({ tiltDeg: deg })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer transition-colors ${
+                  targetDeg === deg
+                    ? 'bg-sky-600 border-sky-800 text-white shadow-sm'
+                    : 'bg-white border-slate-300 text-slate-700 hover:border-sky-400'
+                }`}
+              >
+                {deg}°
+              </button>
+            ))}
+          </div>
+
+          {/* Actuator Speed + Fine Target Angle Fader */}
+          <div className="flex items-stretch gap-2">
+            <div className="flex-1">
+              <HardwareFader
+                label={isAr ? 'زاوية الإمالة المستهدفة' : 'TARGET TILT ANGLE'}
+                valueText={`${targetDeg}°`}
+                value={targetDeg}
+                min={0}
+                max={85}
+                step={5}
+                lightBody
+                accentClass="bg-sky-500"
+                onChange={(v) => patchParams({ tiltDeg: v })}
+              />
+            </div>
+
+            <div className="flex flex-col justify-between gap-1 shrink-0 w-20">
+              <div className="text-[8px] font-black text-slate-600 text-center">
+                {isAr ? 'السرعة' : 'SPEED'}
+              </div>
+              <div className="flex gap-1">
+                {[1, 2, 3].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => patchParams({ speed: s })}
+                    className={`flex-1 py-1.5 rounded text-[9px] font-black border cursor-pointer ${
+                      speed === s
+                        ? 'bg-emerald-600 border-emerald-800 text-white'
+                        : 'bg-white border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    S{s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderChassis = () => {
     switch (device.sprite) {
       case 'tens_unit':
@@ -1297,6 +1583,10 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
       case 'paraffin_bath':
       case 'hydro_sink':
         return renderThermalTank();
+      case 'magnetotherapy':
+        return renderMagnetotherapyConsole();
+      case 'tilt_table':
+        return renderTiltTableConsole();
       default:
         return renderBalanceTrainer();
     }

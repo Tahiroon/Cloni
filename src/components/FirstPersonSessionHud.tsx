@@ -25,6 +25,7 @@ import {
   Plus,
   RotateCcw,
   ShieldAlert,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Stethoscope,
@@ -74,6 +75,7 @@ interface FirstPersonSessionHudProps {
   onPlaceHeldDevice?: () => void;
   onReturnDevice?: (catalogId: string) => void;
   onUpdateActiveDevice?: (next: FppActiveDeviceState) => void;
+  onOpenStationConsole?: (deviceId: string) => void;
   onCloseActiveDevice?: () => void;
   handshakeReady?: boolean;
   onHandshake?: () => void;
@@ -627,6 +629,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   onPlaceHeldDevice,
   onReturnDevice,
   onUpdateActiveDevice,
+  onOpenStationConsole,
   onCloseActiveDevice,
   handshakeReady = false,
   onHandshake,
@@ -1186,8 +1189,8 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           );
         })()}
 
-      {/* Direct Single "Use" & Close-Proximity "Handshake" Buttons */}
-      {!heldDevice && !activeDevice && ((nearbyDevice && nearbyDevice.canDeploy) || (handshakeReady && onHandshake)) && (
+      {/* Direct Single "Use", Station Console, & Close-Proximity "Handshake" Buttons */}
+      {!heldDevice && !activeDevice && ((nearbyDevice && (nearbyDevice.canDeploy || nearbyDevice.isStationConsole)) || (handshakeReady && onHandshake)) && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
           className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 flex items-center gap-2"
@@ -1210,6 +1213,19 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             >
               <Play className="w-3.5 h-3.5 fill-current shrink-0" />
               <span>{isAr ? 'استخدام' : 'Use'}</span>
+              <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
+                {nearbyDevice.nameEn}
+              </span>
+            </button>
+          )}
+          {nearbyDevice && nearbyDevice.isStationConsole && (
+            <button
+              type="button"
+              onClick={() => onOpenStationConsole?.(nearbyDevice.instanceId || nearbyDevice.catalogId)}
+              className="h-10 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 border border-cyan-300 text-slate-950 shadow-2xl flex items-center gap-2 text-xs font-black transition-colors cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+              <span>{isAr ? 'لوحة التحكم' : 'Control Panel'}</span>
               <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
                 {nearbyDevice.nameEn}
               </span>
@@ -1710,23 +1726,27 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             ));
           })()}
 
-          <button
-            type="button"
-            onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
-            title={isAr ? 'نقل الجهاز' : 'Move'}
-            className="h-7 w-7 rounded-lg bg-slate-800 hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <Hand className="w-3 h-3" />
-          </button>
+          {activeDevice.sprite !== 'magnetotherapy' && activeDevice.sprite !== 'tilt_table' && (
+            <>
+              <button
+                type="button"
+                onClick={() => onGrabDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+                title={isAr ? 'نقل الجهاز' : 'Move'}
+                className="h-7 w-7 rounded-lg bg-slate-800 hover:bg-sky-500 hover:text-slate-950 border border-white/15 text-slate-100 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <Hand className="w-3 h-3" />
+              </button>
 
-          <button
-            type="button"
-            onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
-            title={isAr ? 'إرجاع لمكانه' : 'Return'}
-            className="h-7 w-7 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white flex items-center justify-center cursor-pointer"
-          >
-            <Undo2 className="w-3 h-3" />
-          </button>
+              <button
+                type="button"
+                onClick={() => onReturnDevice?.(activeDevice.instanceId || activeDevice.catalogId)}
+                title={isAr ? 'إرجاع لمكانه' : 'Return'}
+                className="h-7 w-7 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white flex items-center justify-center cursor-pointer"
+              >
+                <Undo2 className="w-3 h-3" />
+              </button>
+            </>
+          )}
 
           <button
             type="button"
