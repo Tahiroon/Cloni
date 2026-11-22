@@ -76,6 +76,7 @@ import {
   createFppClinicianHands3D,
   createFppRoomBackdrop3D,
   FppHandGripTarget,
+  FppHandInteractionContext,
 } from '../engine3d/fppViewRig';
 import { createTextureBundle, TextureBundle } from '../engine3d/textures3d';
 import {
@@ -347,6 +348,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     pitch: -0.09,
     targetPitch: -0.09,
     walkBob: 0,
+    velFwd: 0,
+    velRight: 0,
+    moveSpeedNorm: 0,
+    prevYaw: 0,
+    prevPitch: -0.09,
+    yawVel: 0,
+    pitchVel: 0,
+    consoleTapPulse: 0,
     focusBlend: 0,
     focusKey: '',
     focusOrbitYaw: 0,
@@ -920,6 +929,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       rightY: -0.25,
       rightZ: -0.45,
     };
+    const _fppInteractionScratch: FppHandInteractionContext = {
+      velRight: 0,
+      velForward: 0,
+      yawVel: 0,
+      pitchVel: 0,
+      focusBlend: 0,
+      isDraggingProbe: false,
+      hasSelectedProbe: false,
+      probeTargetCamX: 0.14,
+      probeTargetCamY: -0.1,
+      probeTargetCamZ: -0.52,
+      consoleTapPulse: 0,
+      activeDeviceSprite: null,
+    };
+    const _probeHandWorld = new THREE.Vector3();
+    const _probeHandCam = new THREE.Vector3();
 
     const cloneProbeAnchors = (anchors: FppProbeAnchor[]): FppProbeAnchor[] =>
       anchors.map((a) => ({ ...a }));
@@ -1685,6 +1710,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       if (!entry.selectedProbeId) {
         probeReticleHoverActive = false;
         fppProbeReticleGroup.visible = false;
+      }
+
+      if (next.screenTapped || next.isRunning !== entry.isRunning || next.deviceParams) {
+        if (next.screenTapped) {
+          fppCamRef.current.consoleTapPulse = 1.0;
+        }
       }
 
       emitAttachedDevicesForActiveFpp();
@@ -2546,16 +2577,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const entryBack = (1 - entryEase) * 0.24;
         const entryPitchLift = (1 - entryEase) * 0.045;
 
-        _fppCamPos.set(
-          fpp.posX + Math.sin(fpp.yaw) * entryBack,
-          fpp.posY + (1 - entryEase) * 0.02,
-          fpp.posZ + Math.cos(fpp.yaw) * entryBack
-        );
-        _fppEuler.set(fpp.pitch + entryPitchLift, fpp.yaw, 0, 'YXZ');
-        _fppCamQuat.setFromEuler(_fppEuler);
-
         const fbRaw = fpp.focusBlend;
         const fb = fbRaw * fbRaw * fbRaw * (fbRaw * (fbRaw * 6 - 15) + 10);
+
+        const walkWeight = THREE.MathUtils.clamp((1 - fb) * entryEase * fpp.moveSpeedNorm, 0, 1);
+        const strideSway = Math.cos(fpp.walkBob * 0.5) * 0.011 * walkWeight;
+        const strideRoll = Math.sin(fpp.walkBob * 0.5) * 0.0052 * walkWeight;
+
+        _fppCamPos.set(
+          fpp.posX + Math.sin(fpp.yaw) * entryBack + Math.cos(fpp.yaw) * strideSway,
+          fpp.posY + (1 - entryEase) * 0.02,
+          fpp.posZ + Math.cos(fpp.yaw) * entryBack - Math.sin(fpp.yaw) * strideSway
+        );
+        _fppEuler.set(fpp.pitch + entryPitchLift, fpp.yaw, strideRoll, 'YXZ');
+        _fppCamQuat.setFromEuler(_fppEuler);
+
         if (fb > 0.001) {
           _fppFocusPos.set(fpp.focusPosX, fpp.focusPosY, fpp.focusPosZ);
           _fppFocusTarget.set(fpp.focusTargetX, fpp.focusTargetY, fpp.focusTargetZ);
@@ -3293,6 +3329,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
                 eq.selectedProbeId = null;
               }
               setProbeReticlePose(null);
+              if (tappedScreen || entry.sprite !== 'infrared_lamp') {
+                fpp.consoleTapPulse = 1.0;
+              }
               latestRef.current.onFppActiveBedDeviceChange?.(
                 buildActiveDevicePayload(entry, tappedScreen || entry.sprite !== 'infrared_lamp')
               );
@@ -6266,6 +6305,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         fpp.pitch = -0.14;
         fpp.targetPitch = -0.14;
         fpp.walkBob = 0;
+        fpp.velFwd = 0;
+        fpp.velRight = 0;
+        fpp.moveSpeedNorm = 0;
+        fpp.prevYaw = fpp.baseYaw;
+        fpp.prevPitch = -0.14;
+        fpp.yawVel = 0;
+        fpp.pitchVel = 0;
+        fpp.consoleTapPulse = 0;
         fpp.blend = 1;
         fpp.entryBlend = 0;
         fpp.focusBlend = 0;
@@ -6335,6 +6382,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         fpp.pitch = THREE.MathUtils.damp(fpp.pitch, fpp.targetPitch, 18, dt);
         fpp.yaw = fpp.baseYaw + fpp.yawOffset;
 
+        const invDt = 1 / Math.max(0.005, dt);
+        const rawYawVel = THREE.MathUtils.clamp((fpp.yaw - fpp.prevYaw) * invDt, -5, 5);
+        const rawPitchVel = THREE.MathUtils.clamp((fpp.pitch - fpp.prevPitch) * invDt, -4, 4);
+        fpp.yawVel = THREE.MathUtils.damp(fpp.yawVel, rawYawVel, 14, dt);
+        fpp.pitchVel = THREE.MathUtils.damp(fpp.pitchVel, rawPitchVel, 14, dt);
+        fpp.prevYaw = fpp.yaw;
+        fpp.prevPitch = fpp.pitch;
+        fpp.consoleTapPulse = Math.max(0, fpp.consoleTapPulse - dt * 2.8);
+
         const joy = latestRef.current.fppMoveInputRef?.current ?? { x: 0, y: 0 };
         const keys = fppKeysRef.current;
         let inRight = THREE.MathUtils.clamp(joy.x + (keys.d ? 1 : 0) - (keys.a ? 1 : 0), -1, 1);
@@ -6350,14 +6406,22 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const prX = Math.cos(fpp.patientFacing);
         const prZ = -Math.sin(fpp.patientFacing);
 
-        if (mag > 0.04) {
+        const moveSpeed = 1.32;
+        const tgtFwdVel = mag > 0.04 ? inFwd * moveSpeed : 0;
+        const tgtRightVel = mag > 0.04 ? inRight * moveSpeed : 0;
+        fpp.velFwd = THREE.MathUtils.damp(fpp.velFwd, tgtFwdVel, mag > 0.04 ? 11.5 : 10.5, dt);
+        fpp.velRight = THREE.MathUtils.damp(fpp.velRight, tgtRightVel, mag > 0.04 ? 11.5 : 10.5, dt);
+
+        const curSpeed = Math.hypot(fpp.velFwd, fpp.velRight);
+        fpp.moveSpeedNorm = THREE.MathUtils.clamp(curSpeed / moveSpeed, 0, 1);
+
+        if (curSpeed > 0.015) {
           const fwdX = -Math.sin(fpp.yaw);
           const fwdZ = -Math.cos(fpp.yaw);
           const rightX = Math.cos(fpp.yaw);
           const rightZ = -Math.sin(fpp.yaw);
-          const moveSpeed = 1.32;
-          const rawX = fpp.posX + (fwdX * inFwd + rightX * inRight) * moveSpeed * dt;
-          const rawZ = fpp.posZ + (fwdZ * inFwd + rightZ * inRight) * moveSpeed * dt;
+          const rawX = fpp.posX + (fwdX * fpp.velFwd + rightX * fpp.velRight) * dt;
+          const rawZ = fpp.posZ + (fwdZ * fpp.velFwd + rightZ * fpp.velRight) * dt;
 
           // Keep clinician inside the expanded bay (roomW=6.8, backZ=-1.24, frontZ=3.60)
           const relX = rawX - fpp.patientX;
@@ -6408,13 +6472,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           const moved = Math.hypot(candX - fpp.posX, candZ - fpp.posZ);
           fpp.posX = candX;
           fpp.posZ = candZ;
-          if (moved > 0.0008) {
-            fpp.walkBob += moved * 7.5;
+          if (moved > 0.0004) {
+            fpp.walkBob += moved * 7.8;
+          } else {
+            fpp.velFwd *= 0.6;
+            fpp.velRight *= 0.6;
           }
-          const bobOffset = moved > 0.0005 ? Math.sin(fpp.walkBob) * 0.013 : 0;
+          const bobOffset = moved > 0.0004 ? Math.sin(fpp.walkBob) * 0.015 * fpp.moveSpeedNorm : 0;
           fpp.posY = THREE.MathUtils.damp(fpp.posY, fpp.baseY + bobOffset, 14, dt);
         } else {
-          fpp.posY = THREE.MathUtils.damp(fpp.posY, fpp.baseY, 12, dt);
+          fpp.posY = THREE.MathUtils.damp(fpp.posY, fpp.baseY, 11, dt);
         }
 
         // Dedicated Patient Focus Camera ONLY while adjusting a bedside-attached device
@@ -6803,12 +6870,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
           _fppGripScratch.active = true;
           _fppGripScratch.style = spec.gripStyle;
-          _fppGripScratch.leftX = THREE.MathUtils.clamp(_lGripCam.x, -0.28, -0.025);
-          _fppGripScratch.leftY = THREE.MathUtils.clamp(_lGripCam.y, -0.36, -0.05);
-          _fppGripScratch.leftZ = THREE.MathUtils.clamp(_lGripCam.z, -0.66, -0.30);
-          _fppGripScratch.rightX = THREE.MathUtils.clamp(_rGripCam.x, 0.025, 0.28);
-          _fppGripScratch.rightY = THREE.MathUtils.clamp(_rGripCam.y, -0.36, -0.05);
-          _fppGripScratch.rightZ = THREE.MathUtils.clamp(_rGripCam.z, -0.66, -0.30);
+          _fppGripScratch.leftX = THREE.MathUtils.clamp(_lGripCam.x, -0.32, 0.06);
+          _fppGripScratch.leftY = THREE.MathUtils.clamp(_lGripCam.y, -0.44, -0.02);
+          _fppGripScratch.leftZ = THREE.MathUtils.clamp(_lGripCam.z, -0.72, -0.24);
+          _fppGripScratch.rightX = THREE.MathUtils.clamp(_rGripCam.x, -0.06, 0.32);
+          _fppGripScratch.rightY = THREE.MathUtils.clamp(_rGripCam.y, -0.44, -0.02);
+          _fppGripScratch.rightZ = THREE.MathUtils.clamp(_rGripCam.z, -0.72, -0.24);
         } else {
           fppDropRingGroup.visible = false;
           _fppGripScratch.active = false;
@@ -6889,13 +6956,51 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         fppBackdrop.group.visible = true;
         fppBackdrop.setLightFactor(1, latestRef.current.lightingMode === 'night');
         const handEntryAlpha = THREE.MathUtils.lerp(0.50, 1.0, fpp.entryBlend);
+
+        const isDraggingProbeNow = Boolean(fppProbeDragRef.current.active);
+        const hasSelectedProbeNow = Boolean(
+          curActiveDevice &&
+            curActiveDevice.placementMode === 'bed' &&
+            curActiveDevice.selectedProbeId
+        );
+        const activeProbeInteract = isDraggingProbeNow || hasSelectedProbeNow || probeReticleHoverActive;
+
+        _fppInteractionScratch.velRight = fpp.velRight;
+        _fppInteractionScratch.velForward = fpp.velFwd;
+        _fppInteractionScratch.yawVel = fpp.yawVel;
+        _fppInteractionScratch.pitchVel = fpp.pitchVel;
+        _fppInteractionScratch.focusBlend = fpp.focusBlend;
+        _fppInteractionScratch.isDraggingProbe = isDraggingProbeNow;
+        _fppInteractionScratch.hasSelectedProbe = activeProbeInteract;
+        _fppInteractionScratch.consoleTapPulse = fpp.consoleTapPulse;
+        _fppInteractionScratch.activeDeviceSprite = curActiveDevice?.sprite ?? null;
+
+        if (activeProbeInteract) {
+          camera.updateMatrixWorld(true);
+          if (probeReticleHoverActive) {
+            _probeHandWorld.copy(fppProbeReticleGroup.position).applyMatrix4(fppBackdrop.group.matrixWorld);
+          } else {
+            _probeHandWorld.set(0.14, bedHeight + 0.34, 0.02).applyMatrix4(fppBackdrop.group.matrixWorld);
+          }
+          _probeHandCam.copy(_probeHandWorld).applyMatrix4(camera.matrixWorldInverse);
+          _fppInteractionScratch.probeTargetCamX = _probeHandCam.x;
+          _fppInteractionScratch.probeTargetCamY = _probeHandCam.y;
+          _fppInteractionScratch.probeTargetCamZ = _probeHandCam.z;
+        }
+
+        const effectiveHandAlpha =
+          activeProbeInteract || fpp.consoleTapPulse > 0.02
+            ? handEntryAlpha
+            : Math.max(0.28, handEntryAlpha - fpp.focusBlend * 0.55);
+
         fppHands.updateMotion(
-          Math.max(0, handEntryAlpha - fpp.focusBlend * 1.45),
+          effectiveHandAlpha,
           fpp.walkBob,
           tSec,
           Boolean(latestRef.current.speakingPatientId),
           camera.aspect,
-          _fppGripScratch
+          _fppGripScratch,
+          _fppInteractionScratch
         );
 
         syncAndAnimateActors(tSec, dt, curFppId);
