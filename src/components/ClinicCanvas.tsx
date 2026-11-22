@@ -320,7 +320,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pointerSurfaceRef = useRef<HTMLDivElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [glbsReady, setGlbsReady] = useState<boolean>(() => glbRegistry.ready);
+  const [glbsReady, setGlbsReady] = useState<boolean>(() => glbRegistry.coreReady);
   const hoveredEditItemIdRef = useRef<string | null>(null);
   const draggingDraftActiveRef = useRef(false);
   const liveDragDraftRef = useRef<PlacementDraft | null>(null);
@@ -2340,6 +2340,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         facingRad: number;
         turnLean: number;
         actorSeed: number;
+        needsTier2Upgrade?: boolean;
         bedStationId?: string;
         bedPhase?: 'to_edge' | 'sit_edge' | 'reclining' | 'lying' | 'stand_beside';
         bedTimer?: number;
@@ -2914,7 +2915,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     };
 
     const rebuildWorld = (nextRooms: ClinicRoom[], nextRemovedTreeIds: string[] = []) => {
-      if (!glbRegistry.ready) return;
+      if (!glbRegistry.coreReady) return;
       if (worldHandle) worldHandle.dispose();
       while (worldLayer.children.length > 0) {
         worldLayer.remove(worldLayer.children[0]);
@@ -2958,7 +2959,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       gx >= 1.98 && gx < 22 && gy >= 1.98 && gy < 22;
 
     const syncItems = (nextItems: PlacedItem[], movingId?: string) => {
-      if (!glbRegistry.ready) return;
+      if (!glbRegistry.coreReady) return;
       const keepIds = new Set<string>();
       const catMap = latestRef.current.catalogMap;
       let foundKiosk = false;
@@ -2972,7 +2973,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         const sig = `${item.catalogId}_${item.gridX}_${item.gridY}_${item.rotation}`;
         const existing = itemMeshes.get(item.instanceId);
-        if (existing && existing.sig === sig) continue;
+        if (existing && existing.sig === sig && !existing.mesh.userData.needsGlbUpgrade) continue;
 
         if (existing) {
           itemsLayer.remove(existing.mesh);
@@ -3013,7 +3014,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     };
 
     const syncDraft = (draft: PlacementDraft | null) => {
-      if (!glbRegistry.ready) return;
+      if (!glbRegistry.coreReady) return;
       hasDraftDisplayKiosk = Boolean(draft && draft.catalogItem.sprite === 'reception_display_stand');
       if (!draft) {
         draftPadMesh.visible = false;
@@ -3076,7 +3077,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
     let sceneAssetsInitialized = false;
     const initSceneAssets = () => {
-      if (disposed || sceneAssetsInitialized || !glbRegistry.ready) return;
+      if (disposed || sceneAssetsInitialized || !glbRegistry.coreReady) return;
       sceneAssetsInitialized = true;
       rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
       syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
@@ -3096,10 +3097,44 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     };
 
     startPreloadGlbs(maxAniso);
-    const unsubGlb = glbRegistry.onReady(() => {
+    const unsubGlb = glbRegistry.onCoreReady(() => {
       initSceneAssets();
     });
-    if (glbRegistry.ready) {
+    const unsubFullGlb = glbRegistry.onReady(() => {
+      if (disposed) return;
+      for (const [pid, entry] of patientRigs.entries()) {
+        if (!entry.needsTier2Upgrade) continue;
+        actorsLayer.remove(entry.rig.root);
+        disposeHumanoid3D(entry.rig);
+        patientRigs.delete(pid);
+      }
+    });
+    const unsubAssetLoaded = glbRegistry.onAssetLoaded((key) => {
+      if (disposed || !sceneAssetsInitialized) return;
+      if (
+        (key === 'bush_1' || key === 'bush_2' || key === 'grass_clump') &&
+        worldHandle?.group.userData.usesFallbackGlb
+      ) {
+        rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
+      }
+      if (key.startsWith('furn_')) {
+        let hasPendingUpgrade = false;
+        for (const entry of itemMeshes.values()) {
+          if (entry.mesh.userData.usesFallbackGlb) {
+            entry.mesh.userData.needsGlbUpgrade = true;
+            hasPendingUpgrade = true;
+          }
+        }
+        if (hasPendingUpgrade) {
+          syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
+        }
+        if (draftGhost?.userData.usesFallbackGlb && latestRef.current.placementDraft) {
+          draftMeshSig = '';
+          syncDraft(latestRef.current.placementDraft);
+        }
+      }
+    });
+    if (glbRegistry.coreReady) {
       initSceneAssets();
     }
 
@@ -4351,7 +4386,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     let cachedDeskPose: ReturnType<typeof getReceptionDeskPose> | null = null;
 
     const syncAndAnimateActors = (timeSec: number, dt: number, pureFppId: string | null = null) => {
-      if (!glbRegistry.ready) return;
+      if (!glbRegistry.coreReady) return;
       actorsOrEquipMoving = false;
       const {
         patients: curPatients,
@@ -4666,13 +4701,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         let entry = patientRigs.get(p.id);
         if (!entry) {
           const rig = createHumanoid3D({
-            modelKey:
-              p.modelKey ||
-              (p.clinicalCase.id.startsWith('case_lbp_radiculopathy')
-                ? 'char_patient_realistic_1'
-                : p.clinicalCase.id.startsWith('case_knee_oa_elder')
-                  ? 'char_sudanese_man_1'
-                  : undefined),
+            modelKey: p.modelKey,
             skinTone: p.skinTone,
             hairColor: p.hairColor,
             shirtColor: p.shirtColor,
@@ -4682,6 +4711,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             outfitStyle: p.outfitStyle,
             shirtStyle: p.shirtStyle,
             heightScale: p.heightScale,
+            buildScale: p.buildScale,
+            eyewearStyle: p.eyewearStyle,
+            eyewearColor: p.eyewearColor,
+            facialHairStyle: p.facialHairStyle,
+            headwearStyle: p.headwearStyle,
+            orthosisType: p.orthosisType ?? p.clinicalCase.orthosisType ?? 'none',
+            age: p.clinicalCase.age,
             hasBeard: p.hasBeard,
             isFemale: p.clinicalCase.gender === 'female',
             variantSeed: p.id.charCodeAt(p.id.length - 1),
@@ -4689,6 +4725,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             isStaff: false,
             ...pbrCharMaps,
           });
+          const needsTier2Upgrade = Boolean(
+            (p.modelKey === 'char_patient_realistic_1' || p.modelKey === 'char_sudanese_man_1') &&
+              !glbRegistry.getModel(p.modelKey)
+          );
           actorsLayer.add(rig.root);
           entry = {
             rig,
@@ -4715,6 +4755,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             turnLean: 0,
             actorSeed:
               p.id.split('').reduce((acc, ch) => acc * 31 + ch.charCodeAt(0), 7) & 0xffff,
+            needsTier2Upgrade,
           };
           patientRigs.set(p.id, entry);
         } else if (p.gridX !== entry.lastLogicalX || p.gridY !== entry.lastLogicalZ) {
@@ -5438,10 +5479,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             const seatAngle = p.seatFacingRad !== undefined ? p.seatFacingRad : fallbackAngle;
             entry.facingRad = lerpAngle(entry.facingRad, seatAngle, Math.min(1, dt * 14));
           } else if (p.state === 'waiting_checkin' && p.isSeatedWait === false) {
+            const subtleSway = Math.sin(timeSec * 0.42 + entry.actorSeed) * 0.14;
             const lookAngle =
               p.headingRad !== undefined
-                ? p.headingRad
-                : Math.sin(timeSec * 0.7 + p.id.charCodeAt(p.id.length - 1)) * 0.45 + Math.PI;
+                ? p.headingRad + subtleSway
+                : Math.sin(timeSec * 0.65 + entry.actorSeed) * 0.45 + Math.PI;
             entry.facingRad = lerpAngle(entry.facingRad, lookAngle, Math.min(1, dt * 4.5));
           } else if (isAtStation && stationFacing !== null) {
             entry.facingRad = lerpAngle(entry.facingRad, stationFacing, Math.min(1, dt * 10));
@@ -5718,7 +5760,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
           if (!entry.recHandledPatients) {
             entry.recHandledPatients = new Set<string>();
-          } else if (entry.recHandledPatients.size > 16) {
+          } else if (entry.recHandledPatients.size > 32) {
             const activeIds = new Set(curPatients.map((pt) => pt.id));
             for (const oldId of entry.recHandledPatients) {
               if (!activeIds.has(oldId)) entry.recHandledPatients.delete(oldId);
@@ -6734,16 +6776,31 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               }
             } else if (recActiveMode === 'desk') {
               const checkinPt = curPatients.find((pt) => pt.state === 'checkin_at_desk');
+              let glanceTarget = checkinPt;
+              if (!glanceTarget) {
+                let bestD = 4.6;
+                for (const pt of curPatients) {
+                  if (pt.state !== 'waiting_checkin' && pt.state !== 'walking_to_wait') continue;
+                  const ptRig = patientRigs.get(pt.id);
+                  const px = ptRig ? ptRig.visX : pt.gridX + 0.5;
+                  const pz = ptRig ? ptRig.visZ : pt.gridY + 0.5;
+                  const d = Math.hypot(px - entry.visX, pz - entry.visZ);
+                  if (d < bestD) {
+                    bestD = d;
+                    glanceTarget = pt;
+                  }
+                }
+              }
               let desiredFacing = recSeatFacing;
-              if (checkinPt) {
-                const ptRig = patientRigs.get(checkinPt.id);
-                const px = ptRig ? ptRig.visX : checkinPt.gridX + 0.5;
-                const pz = ptRig ? ptRig.visZ : checkinPt.gridY + 0.5;
+              if (glanceTarget) {
+                const ptRig = patientRigs.get(glanceTarget.id);
+                const px = ptRig ? ptRig.visX : glanceTarget.gridX + 0.5;
+                const pz = ptRig ? ptRig.visZ : glanceTarget.gridY + 0.5;
                 const rawAng = Math.atan2(px - entry.visX, pz - entry.visZ);
                 let delta = rawAng - recSeatFacing;
                 while (delta > Math.PI) delta -= Math.PI * 2;
                 while (delta < -Math.PI) delta += Math.PI * 2;
-                desiredFacing = recSeatFacing + THREE.MathUtils.clamp(delta, -0.55, 0.55);
+                desiredFacing = recSeatFacing + THREE.MathUtils.clamp(delta, -0.58, 0.58);
               }
               entry.facingRad = lerpAngle(entry.facingRad, desiredFacing, Math.min(1, dt * 8));
             }
@@ -9573,6 +9630,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       disposed = true;
       soundFx.stopAllDevices();
       unsubGlb();
+      unsubFullGlb();
+      unsubAssetLoaded();
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       sceneHooksRef.current = null;
@@ -10339,9 +10398,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         )}
       </div>
 
-      {/* Minimal Corner Center-Camera Control (safely above Store button) */}
+      {/* Minimal Corner Center-Camera Control (safely above Store button; hidden on mobile during active placement) */}
       {!firstPersonPatientId && (
-        <div className="absolute left-3.5 bottom-20 z-20 flex flex-col gap-2">
+        <div
+          className={`absolute left-3.5 z-20 flex-col gap-2 ${
+            placementDraft ? 'hidden sm:flex' : 'flex'
+          } bottom-[calc(env(safe-area-inset-bottom,0px)+5.25rem)] sm:bottom-20`}
+        >
           <button
             type="button"
             onClick={() => {
@@ -10362,83 +10425,100 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
       {/* Subtle Edit-Mode Guide when no item is grabbed */}
       {editMode && !placementDraft && (
-        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-slate-900/94 text-slate-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg whitespace-nowrap">
+        <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-20 bg-slate-900/94 text-slate-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg whitespace-nowrap max-w-[92vw] truncate">
           {language === 'ar'
             ? 'اسحب أي عنصر لنقله مباشرة أو اضغط عليه للتعديل'
             : 'Drag any item to move or tap to edit'}
         </div>
       )}
 
-      {/* Smart Floating Placement & Rearranging Action Dock */}
+      {/* Smart Floating Placement & Rearranging Action Dock (Elevated clearly above Store & Rearrange buttons on mobile) */}
       {placementDraft && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2 bg-slate-900/96 text-white px-3 py-2 rounded-2xl border border-white/20 shadow-2xl max-w-[95vw]">
-          <div className="flex flex-col leading-tight min-w-0 max-w-[125px] sm:max-w-[165px]">
-            <span className="text-xs font-extrabold truncate">
-              {language === 'ar' ? placementDraft.catalogItem.nameAr : placementDraft.catalogItem.nameEn}
-            </span>
-            <span
-              className={`text-[10px] font-semibold truncate ${
-                draftValid ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
-              {!draftValid
-                ? language === 'ar'
-                  ? 'موقع غير متاح'
-                  : 'Blocked slot'
-                : placementDraft.catalogItem.isWallDecor
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-40 flex flex-col sm:flex-row sm:items-center gap-2 bg-slate-900/96 text-white px-3 py-2.5 sm:py-2 rounded-2xl border border-white/20 shadow-2xl w-[calc(100vw-1.5rem)] max-w-md sm:w-auto sm:max-w-[95vw]"
+        >
+          <div className="flex items-center justify-between gap-2 min-w-0 sm:max-w-[175px]">
+            <div className="flex flex-col leading-tight min-w-0">
+              <span className="text-xs sm:text-[13px] font-extrabold truncate">
+                {language === 'ar' ? placementDraft.catalogItem.nameAr : placementDraft.catalogItem.nameEn}
+              </span>
+              <span
+                className={`text-[11px] sm:text-[10px] font-semibold truncate ${
+                  draftValid ? 'text-emerald-400' : 'text-rose-400'
+                }`}
+              >
+                {!draftValid
                   ? language === 'ar'
-                    ? 'على الجدار · اسحب أو ثبّت'
-                    : 'Wall mount · drag or confirm'
-                  : language === 'ar'
-                    ? 'جاهز · اسحب أو ثبّت'
-                    : 'Ready · drag or confirm'}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onRotatePlacement}
-            title={language === 'ar' ? 'تدوير (R)' : 'Rotate (R)'}
-            className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-xs font-bold whitespace-nowrap active:scale-95 transition-transform"
-          >
-            {language === 'ar' ? 'تدوير ↻' : 'Rotate ↻'}
-          </button>
-          {placementDraft.movingInstanceId && onSellMovingDraft && (
+                    ? 'موقع غير متاح'
+                    : 'Blocked slot'
+                  : placementDraft.catalogItem.isWallDecor
+                    ? language === 'ar'
+                      ? 'على الجدار · اسحب أو ثبّت'
+                      : 'Wall mount · drag or confirm'
+                    : language === 'ar'
+                      ? 'جاهز · اسحب أو ثبّت'
+                      : 'Ready · drag or confirm'}
+              </span>
+            </div>
             <button
               type="button"
-              onClick={() => onSellMovingDraft(placementDraft.movingInstanceId!)}
-              title={language === 'ar' ? 'بيع واسترداد' : 'Sell & refund'}
-              className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-xs font-bold whitespace-nowrap active:scale-95 transition-transform"
+              onClick={onCancelPlacement}
+              aria-label="Cancel placement"
+              title={language === 'ar' ? 'إلغاء (Esc)' : 'Cancel (Esc)'}
+              className="sm:hidden min-w-[40px] min-h-[40px] px-2.5 rounded-xl bg-rose-600/90 hover:bg-rose-500 text-xs font-bold flex items-center justify-center shrink-0 active:scale-95 transition-transform"
             >
-              {language === 'ar' ? `بيع +${sellRefund}` : `Sell +${sellRefund}`}
+              ✕
             </button>
-          )}
-          <button
-            type="button"
-            disabled={!draftValid}
-            onClick={() =>
-              onConfirmPlacement(
-                placementDraft.hoverX,
-                placementDraft.hoverY,
-                placementDraft.rotation
-              )
-            }
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-black whitespace-nowrap active:scale-95 transition-transform ${
-              draftValid
-                ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
-                : 'bg-slate-700 text-slate-400 cursor-not-allowed'
-            }`}
-          >
-            {language === 'ar' ? 'تثبيت ✓' : 'Place ✓'}
-          </button>
-          <button
-            type="button"
-            onClick={onCancelPlacement}
-            aria-label="Cancel placement"
-            title={language === 'ar' ? 'إلغاء (Esc)' : 'Cancel (Esc)'}
-            className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold whitespace-nowrap active:scale-95 transition-transform"
-          >
-            ✕
-          </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={onRotatePlacement}
+              title={language === 'ar' ? 'تدوير (R)' : 'Rotate (R)'}
+              className="flex-1 sm:flex-none min-h-[44px] sm:min-h-[38px] px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-xs font-bold whitespace-nowrap active:scale-95 transition-transform"
+            >
+              {language === 'ar' ? 'تدوير ↻' : 'Rotate ↻'}
+            </button>
+            {placementDraft.movingInstanceId && onSellMovingDraft && (
+              <button
+                type="button"
+                onClick={() => onSellMovingDraft(placementDraft.movingInstanceId!)}
+                title={language === 'ar' ? 'بيع واسترداد' : 'Sell & refund'}
+                className="flex-1 sm:flex-none min-h-[44px] sm:min-h-[38px] px-2.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-xs font-bold whitespace-nowrap active:scale-95 transition-transform"
+              >
+                {language === 'ar' ? `بيع +${sellRefund}` : `Sell +${sellRefund}`}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={!draftValid}
+              onClick={() =>
+                onConfirmPlacement(
+                  placementDraft.hoverX,
+                  placementDraft.hoverY,
+                  placementDraft.rotation
+                )
+              }
+              className={`flex-[1.25] sm:flex-none min-h-[44px] sm:min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-black whitespace-nowrap active:scale-95 transition-transform ${
+                draftValid
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                  : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              {language === 'ar' ? 'تثبيت ✓' : 'Place ✓'}
+            </button>
+            <button
+              type="button"
+              onClick={onCancelPlacement}
+              aria-label="Cancel placement"
+              title={language === 'ar' ? 'إلغاء (Esc)' : 'Cancel (Esc)'}
+              className="hidden sm:flex items-center justify-center min-w-[38px] min-h-[38px] px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold whitespace-nowrap active:scale-95 transition-transform"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
     </div>

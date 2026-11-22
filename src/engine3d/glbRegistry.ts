@@ -7,14 +7,19 @@ export interface GlbProgressInfo {
   loaded: number;
   total: number;
   progress: number;
+  coreLoaded: number;
+  coreTotal: number;
+  coreProgress: number;
   bytesLoaded: number;
   bytesTotal: number;
   cacheHits: number;
   currentAsset?: string;
+  coreReady: boolean;
   ready: boolean;
 }
 
 export interface GlbRegistry {
+  coreReady: boolean;
   ready: boolean;
   progress: number;
   getProgressInfo: () => GlbProgressInfo;
@@ -29,23 +34,17 @@ export interface GlbRegistry {
     }
   ) => THREE.Group | null;
   cloneSkinned: (key: string, targetHeight: number) => THREE.Group | null;
+  onCoreReady: (cb: () => void) => () => void;
   onReady: (cb: () => void) => () => void;
   onProgress: (cb: (info: GlbProgressInfo) => void) => () => void;
+  onAssetLoaded: (cb: (key: string) => void) => () => void;
 }
 
-const ASSET_CACHE_NAME = 'therason-clinic-assets-v1';
+const ASSET_CACHE_NAME = 'therason-clinic-assets-v2';
+const LEGACY_ASSET_CACHE_NAME = 'therason-clinic-assets-v1';
 
-const MODEL_PATHS: Record<string, string> = {
-  // Rigged Characters & FPP Clinician Hands (active lineup only)
-  char_woman_suit: '/models/chars/woman_suit.glb',
-  char_man2: '/models/chars/man_casual2.glb',
-  char_suit: '/models/chars/man_suit.glb',
-  char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
-  char_sudanese_man_1: '/models/chars/patient_sudanese_1.glb',
-  hand_left: '/models/chars/hand_left.glb',
-  hand_right: '/models/chars/hand_right.glb',
-
-  // Furniture & Clinic Props (active lineup only)
+// Tier 1 (Priority Core): Small clinic furniture, world nature, textures & primary avatars
+const CORE_MODEL_PATHS: Record<string, string> = {
   furn_desk: '/models/furn/desk.glb',
   furn_chair_desk: '/models/furn/chair_desk.glb',
   furn_monitor: '/models/furn/monitor.glb',
@@ -60,11 +59,20 @@ const MODEL_PATHS: Record<string, string> = {
   furn_trashcan: '/models/furn/trashcan.glb',
   furn_lamp_floor: '/models/furn/lamp_floor.glb',
   furn_lamp_desk: '/models/furn/lamp_desk.glb',
-
-  // Outdoor Nature Props (active lineup only)
   bush_1: '/models/nature/bush_1.glb',
   bush_2: '/models/nature/bush_2.glb',
   grass_clump: '/models/nature/grass_clump.glb',
+  char_woman_suit: '/models/chars/woman_suit.glb',
+  char_man2: '/models/chars/man_casual2.glb',
+  char_suit: '/models/chars/man_suit.glb',
+};
+
+// Tier 2 (Deferred High-Detail): FPP clinician hands & heavy scanned patients streamed right after Tier 1
+const EXTENDED_MODEL_PATHS: Record<string, string> = {
+  hand_left: '/models/chars/hand_left.glb',
+  hand_right: '/models/chars/hand_right.glb',
+  char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
+  char_sudanese_man_1: '/models/chars/patient_sudanese_1.glb',
 };
 
 const EXTRA_TEXTURE_ASSETS: Array<{ key: string; url: string; contentType: string }> = [
@@ -84,15 +92,28 @@ interface CachedBounds {
 const loadedTemplates = new Map<string, THREE.Object3D>();
 const normalizedBoundsCache = new Map<string, CachedBounds>();
 const skinnedBoundsCache = new Map<string, CachedBounds>();
+const coreListeners = new Set<() => void>();
 const listeners = new Set<() => void>();
 const progressListeners = new Set<(info: GlbProgressInfo) => void>();
+const assetLoadedListeners = new Set<(key: string) => void>();
+const failedModelQueue = new Map<string, string>();
+let legacyCachePurged = false;
 
-const TOTAL_MODELS = Object.keys(MODEL_PATHS).length;
-const TOTAL_ASSETS = TOTAL_MODELS + EXTRA_TEXTURE_ASSETS.length;
+const CORE_KEYS = new Set<string>([
+  ...Object.keys(CORE_MODEL_PATHS),
+  ...EXTRA_TEXTURE_ASSETS.map((a) => a.key),
+]);
+const TOTAL_CORE_ASSETS = CORE_KEYS.size;
+const TOTAL_ASSETS =
+  Object.keys(CORE_MODEL_PATHS).length +
+  Object.keys(EXTENDED_MODEL_PATHS).length +
+  EXTRA_TEXTURE_ASSETS.length;
 
 let loadedCount = 0;
+let coreLoadedCount = 0;
 let cacheHitsCount = 0;
 let loadingStarted = false;
+let coreLoaded = false;
 let allLoaded = false;
 let lastCurrentAsset: string | undefined;
 
@@ -108,11 +129,16 @@ const _tmpCenter = new THREE.Vector3();
 
 function buildProgressSnapshot(): GlbProgressInfo {
   let sumRatio = 0;
+  let coreSumRatio = 0;
   let bytesLoaded = 0;
   let bytesTotal = 0;
 
-  for (const r of fileProgressRatio.values()) {
-    sumRatio += Math.min(1, Math.max(0, r));
+  for (const [k, r] of fileProgressRatio.entries()) {
+    const clamped = Math.min(1, Math.max(0, r));
+    sumRatio += clamped;
+    if (CORE_KEYS.has(k)) {
+      coreSumRatio += clamped;
+    }
   }
   for (const b of fileBytesLoaded.values()) {
     bytesLoaded += b;
@@ -127,14 +153,24 @@ function buildProgressSnapshot(): GlbProgressInfo {
       ? Math.min(0.995, sumRatio / TOTAL_ASSETS)
       : 1;
 
+  const continuousCoreProgress = coreLoaded
+    ? 1
+    : TOTAL_CORE_ASSETS > 0
+      ? Math.min(0.995, coreSumRatio / TOTAL_CORE_ASSETS)
+      : 1;
+
   return {
     loaded: loadedCount,
     total: TOTAL_ASSETS,
     progress: continuousProgress,
+    coreLoaded: coreLoadedCount,
+    coreTotal: TOTAL_CORE_ASSETS,
+    coreProgress: continuousCoreProgress,
     bytesLoaded,
     bytesTotal: Math.max(bytesLoaded, bytesTotal),
     cacheHits: cacheHitsCount,
     currentAsset: lastCurrentAsset,
+    coreReady: coreLoaded,
     ready: allLoaded,
   };
 }
@@ -228,9 +264,33 @@ function refineGlbAssets(obj: THREE.Object3D) {
   });
 }
 
+function isValidGlbBuffer(buf: ArrayBuffer): boolean {
+  if (buf.byteLength < 12) return false;
+  const view = new Uint8Array(buf, 0, 4);
+  // 'glTF'
+  return view[0] === 0x67 && view[1] === 0x6c && view[2] === 0x54 && view[3] === 0x46;
+}
+
+function isValidBinaryForContentType(buf: ArrayBuffer, contentType: string, url: string): boolean {
+  if (buf.byteLength === 0) return false;
+  if (contentType.includes('gltf-binary') || url.endsWith('.glb')) {
+    return isValidGlbBuffer(buf);
+  }
+  if (contentType === 'image/png' || url.endsWith('.png')) {
+    if (buf.byteLength < 8) return false;
+    const v = new Uint8Array(buf, 0, 4);
+    return v[0] === 0x89 && v[1] === 0x50 && v[2] === 0x4e && v[3] === 0x47;
+  }
+  return true;
+}
+
 export async function openAssetCache(): Promise<Cache | null> {
   try {
     if (typeof window !== 'undefined' && 'caches' in window && window.caches) {
+      if (!legacyCachePurged) {
+        legacyCachePurged = true;
+        void window.caches.delete(LEGACY_ASSET_CACHE_NAME).catch(() => {});
+      }
       return await window.caches.open(ASSET_CACHE_NAME);
     }
   } catch {
@@ -245,6 +305,11 @@ export async function getCachedAssetBlobUrl(url: string): Promise<string | null>
   try {
     const cached = await cache.match(url);
     if (cached && cached.ok) {
+      const ct = (cached.headers.get('Content-Type') || '').toLowerCase();
+      if (ct.includes('text/html')) {
+        await cache.delete(url).catch(() => {});
+        return null;
+      }
       const blob = await cached.blob();
       if (blob.size > 0 && typeof URL !== 'undefined') {
         return URL.createObjectURL(blob);
@@ -261,11 +326,19 @@ export async function cacheStaticAssetUrl(url: string, contentType?: string): Pr
   if (!cache) return;
   try {
     const existing = await cache.match(url);
-    if (existing && existing.ok) return;
+    if (existing && existing.ok) {
+      const bufExisting = await existing.clone().arrayBuffer();
+      if (isValidBinaryForContentType(bufExisting, contentType || existing.headers.get('Content-Type') || '', url)) {
+        return;
+      }
+      await cache.delete(url).catch(() => {});
+    }
     const res = await fetch(url, { cache: 'default' });
     if (!res.ok) return;
+    const ct = (contentType || res.headers.get('Content-Type') || 'application/octet-stream').toLowerCase();
+    if (ct.includes('text/html')) return;
     const buf = await res.arrayBuffer();
-    if (buf.byteLength === 0) return;
+    if (!isValidBinaryForContentType(buf, ct, url)) return;
     await cache.put(
       url,
       new Response(buf, {
@@ -285,16 +358,17 @@ async function fetchAndCacheBinary(
   key: string,
   url: string,
   contentType: string,
-  cache: Cache | null
+  cache: Cache | null,
+  forceReload = false
 ): Promise<ArrayBuffer> {
   lastCurrentAsset = key;
 
-  if (cache) {
+  if (cache && !forceReload) {
     try {
       const cached = await cache.match(url);
       if (cached && cached.ok) {
         const buf = await cached.arrayBuffer();
-        if (buf.byteLength > 0) {
+        if (isValidBinaryForContentType(buf, contentType, url)) {
           cacheHitsCount += 1;
           fileBytesLoaded.set(key, buf.byteLength);
           fileBytesTotal.set(key, buf.byteLength);
@@ -302,15 +376,21 @@ async function fetchAndCacheBinary(
           emitProgress();
           return buf;
         }
+        await cache.delete(url).catch(() => {});
       }
     } catch {
       // Fallback to network fetch
     }
   }
 
-  const res = await fetch(url, { cache: 'default' });
+  const fetchUrl = forceReload ? `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}` : url;
+  const res = await fetch(fetchUrl, { cache: forceReload ? 'reload' : 'default' });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} for ${url}`);
+  }
+  const respCt = (res.headers.get('Content-Type') || '').toLowerCase();
+  if (respCt.includes('text/html')) {
+    throw new Error(`Unexpected HTML response for ${url}`);
   }
 
   const contentLength = Number(res.headers.get('content-length') || 0);
@@ -352,6 +432,10 @@ async function fetchAndCacheBinary(
     fileBytesTotal.set(key, buffer.byteLength);
     fileProgressRatio.set(key, 0.85);
     emitProgress();
+  }
+
+  if (!isValidBinaryForContentType(buffer, contentType, url)) {
+    throw new Error(`Corrupt or invalid binary header for ${url}`);
   }
 
   if (cache && buffer.byteLength > 0) {
@@ -405,6 +489,13 @@ function prewarmModelBounds(key: string, sceneObj: THREE.Object3D) {
   }
 }
 
+function yieldToUiFrame(): Promise<void> {
+  if (typeof requestAnimationFrame === 'function') {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  }
+  return new Promise((resolve) => setTimeout(resolve, 16));
+}
+
 export function startPreloadGlbs(maxAnisotropy = 8) {
   maxGlbAnisotropy = Math.min(16, Math.max(1, maxAnisotropy));
   if (loadingStarted) return;
@@ -413,13 +504,26 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
 
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
-  const entries = Object.entries(MODEL_PATHS);
+  const coreEntries = Object.entries(CORE_MODEL_PATHS);
+  const extendedEntries = Object.entries(EXTENDED_MODEL_PATHS);
   let remaining = TOTAL_ASSETS;
+  let remainingCore = TOTAL_CORE_ASSETS;
 
   const markAssetDone = (key: string) => {
     loadedCount += 1;
     fileProgressRatio.set(key, 1);
     remaining -= 1;
+
+    if (CORE_KEYS.has(key)) {
+      coreLoadedCount += 1;
+      remainingCore -= 1;
+      if (remainingCore <= 0 && !coreLoaded) {
+        coreLoaded = true;
+        emitProgress(true);
+        coreListeners.forEach((cb) => cb());
+      }
+    }
+
     if (remaining <= 0) {
       allLoaded = true;
       emitProgress(true);
@@ -429,11 +533,91 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
     }
   };
 
+  const parseBuffer = (buf: ArrayBuffer, url: string) =>
+    new Promise<THREE.Object3D>((resolve, reject) => {
+      loader.parse(
+        buf,
+        getBaseResourceDir(url),
+        (gltf) => resolve(gltf.scene),
+        (err) => reject(err || new Error(`Parse failed for ${url}`))
+      );
+    });
+
+  const loadSingleModel = async (key: string, url: string, cache: Cache | null, yieldOnHeavy: boolean) => {
+    let loaded = false;
+    for (let attempt = 0; attempt < 2 && !loaded; attempt++) {
+      try {
+        const forceReload = attempt > 0;
+        if (attempt > 0) {
+          await new Promise<void>((r) => setTimeout(r, 260));
+        }
+        const buf = await fetchAndCacheBinary(key, url, 'model/gltf-binary', cache, forceReload);
+        if (yieldOnHeavy && buf.byteLength > 180_000) {
+          await yieldToUiFrame();
+        }
+        const sceneObj = await parseBuffer(buf, url);
+        refineGlbAssets(sceneObj);
+        loadedTemplates.set(key, sceneObj);
+        prewarmModelBounds(key, sceneObj);
+        failedModelQueue.delete(key);
+        assetLoadedListeners.forEach((cb) => cb(key));
+        loaded = true;
+      } catch {
+        if (cache) {
+          await cache.delete(url).catch(() => {});
+        }
+      }
+    }
+    if (!loaded) {
+      failedModelQueue.set(key, url);
+    }
+    markAssetDone(key);
+  };
+
+  const runTier = async (
+    entries: Array<[string, string]>,
+    concurrency: number,
+    cache: Cache | null,
+    yieldOnHeavy: boolean
+  ) => {
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < entries.length) {
+        const idx = nextIndex++;
+        const [key, url] = entries[idx];
+        await loadSingleModel(key, url, cache, yieldOnHeavy);
+      }
+    };
+    const count = Math.min(concurrency, entries.length);
+    await Promise.all(Array.from({ length: count }, () => worker()));
+  };
+
+  const recoverFailedModels = async (cache: Cache | null) => {
+    for (const delayMs of [1200, 3500]) {
+      if (failedModelQueue.size === 0) return;
+      await new Promise<void>((r) => setTimeout(r, delayMs));
+      const pending = Array.from(failedModelQueue.entries());
+      for (const [key, url] of pending) {
+        try {
+          const buf = await fetchAndCacheBinary(key, url, 'model/gltf-binary', cache, true);
+          const sceneObj = await parseBuffer(buf, url);
+          refineGlbAssets(sceneObj);
+          loadedTemplates.set(key, sceneObj);
+          prewarmModelBounds(key, sceneObj);
+          failedModelQueue.delete(key);
+          assetLoadedListeners.forEach((cb) => cb(key));
+        } catch {
+          // Will retry on next pass if remaining
+        }
+      }
+    }
+  };
+
   void (async () => {
     await MeshoptDecoder.ready;
     const cache = await openAssetCache();
 
-    // 1. Download & cache external referenced texture(s) into browser CacheStorage & image cache first
+    // 1. Download & cache external referenced texture(s) into browser CacheStorage first
     await Promise.all(
       EXTRA_TEXTURE_ASSETS.map(async (asset) => {
         try {
@@ -461,75 +645,24 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
       })
     );
 
-    // 2. Download, persist in CacheStorage, parse, refine materials & pre-warm bounds for all 3D GLBs
-    // Run with bounded concurrency (5 concurrent streams) so mobile & desktop connections hydrate cleanly
-    let nextIndex = 0;
-    const CONCURRENCY = 5;
+    // 2. Priority Tier 1 (Essential clinic furniture, world nature & core characters)
+    await runTier(coreEntries, 6, cache, true);
 
-    const worker = async () => {
-      while (nextIndex < entries.length) {
-        const idx = nextIndex++;
-        const [key, url] = entries[idx];
-        try {
-          const buf = await fetchAndCacheBinary(key, url, 'model/gltf-binary', cache);
-          await new Promise<void>((resolve) => {
-            loader.parse(
-              buf,
-              getBaseResourceDir(url),
-              (gltf) => {
-                refineGlbAssets(gltf.scene);
-                loadedTemplates.set(key, gltf.scene);
-                prewarmModelBounds(key, gltf.scene);
-                markAssetDone(key);
-                resolve();
-              },
-              () => {
-                loader.load(
-                  url,
-                  (gltf) => {
-                    refineGlbAssets(gltf.scene);
-                    loadedTemplates.set(key, gltf.scene);
-                    prewarmModelBounds(key, gltf.scene);
-                    markAssetDone(key);
-                    resolve();
-                  },
-                  undefined,
-                  () => {
-                    markAssetDone(key);
-                    resolve();
-                  }
-                );
-              }
-            );
-          });
-        } catch {
-          await new Promise<void>((resolve) => {
-            loader.load(
-              url,
-              (gltf) => {
-                refineGlbAssets(gltf.scene);
-                loadedTemplates.set(key, gltf.scene);
-                prewarmModelBounds(key, gltf.scene);
-                markAssetDone(key);
-                resolve();
-              },
-              undefined,
-              () => {
-                markAssetDone(key);
-                resolve();
-              }
-            );
-          });
-        }
-      }
-    };
+    // 3. Yield briefly so initial 3D clinic renders smoothly, then stream Tier 2 heavy assets (2 workers = zero UI stutter)
+    await yieldToUiFrame();
+    await runTier(extendedEntries, 2, cache, true);
 
-    const workerCount = Math.min(CONCURRENCY, entries.length);
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    // 4. Automatically recover any failed GLB (e.g. during server reload or transient drop)
+    if (failedModelQueue.size > 0) {
+      void recoverFailedModels(cache);
+    }
   })();
 }
 
 export const glbRegistry: GlbRegistry = {
+  get coreReady() {
+    return coreLoaded;
+  },
   get ready() {
     return allLoaded;
   },
@@ -626,6 +759,16 @@ export const glbRegistry: GlbRegistry = {
     wrapper.add(clone);
     return wrapper;
   },
+  onCoreReady(cb) {
+    if (coreLoaded) {
+      cb();
+      return () => {};
+    }
+    coreListeners.add(cb);
+    return () => {
+      coreListeners.delete(cb);
+    };
+  },
   onReady(cb) {
     if (allLoaded) {
       cb();
@@ -641,6 +784,12 @@ export const glbRegistry: GlbRegistry = {
     cb(buildProgressSnapshot());
     return () => {
       progressListeners.delete(cb);
+    };
+  },
+  onAssetLoaded(cb) {
+    assetLoadedListeners.add(cb);
+    return () => {
+      assetLoadedListeners.delete(cb);
     };
   },
 };

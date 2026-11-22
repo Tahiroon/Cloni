@@ -114,9 +114,9 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
       depth: c.depth,
     }));
     let cancelChunked = () => {};
-    const unsub = glbRegistry.onReady(() => {
+    const unsub = glbRegistry.onCoreReady(() => {
       cancelChunked();
-      cancelChunked = renderMissingCatalogThumbsChunked(specs, 6, 20);
+      cancelChunked = renderMissingCatalogThumbsChunked(specs, 3, 28);
     });
     return () => {
       unsub();
@@ -433,7 +433,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
                         type="button"
                         disabled={!canAfford}
                         onClick={() => onBuyAndPlace(item)}
-                        className={`w-full py-2 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 whitespace-nowrap transition-transform active:scale-95 ${
+                        className={`w-full min-h-[40px] py-2 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 whitespace-nowrap transition-transform active:scale-95 ${
                           canAfford
                             ? 'bg-gradient-to-b from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-600 text-white shadow'
                             : isNight
@@ -452,6 +452,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
               </div>
             </section>
           )}
+          <div className="h-[env(safe-area-inset-bottom)]" />
         </div>
       </div>
     </div>

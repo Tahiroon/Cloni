@@ -165,6 +165,18 @@ export interface ObjectiveTest {
   isPositive: boolean;
 }
 
+export type OrthosisType =
+  | 'none'
+  | 'knee_brace'
+  | 'ankle_brace'
+  | 'wrist_splint'
+  | 'cervical_collar'
+  | 'shoulder_kinesio';
+
+export type EyewearStyle = 'none' | 'round' | 'square' | 'half_rim' | 'sunglasses';
+export type FacialHairStyle = 'none' | 'mustache' | 'goatee' | 'full_beard';
+export type HeadwearStyle = 'none' | 'turban' | 'taqiyah' | 'cap';
+
 export interface ClinicalCase {
   id: string;
   specialty: RoomSpecialty;
@@ -208,6 +220,7 @@ export interface ClinicalCase {
     temp: string;
   };
   mobilityAid?: 'none' | 'cane' | 'crutches';
+  orthosisType?: OrthosisType;
 }
 
 export type PatientState =
@@ -380,6 +393,12 @@ export interface PatientEntity {
   outfitStyle?: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe';
   shirtStyle?: 'tshirt' | 'shirt';
   heightScale?: number;
+  buildScale?: number;
+  eyewearStyle?: EyewearStyle;
+  eyewearColor?: string;
+  facialHairStyle?: FacialHairStyle;
+  headwearStyle?: HeadwearStyle;
+  orthosisType?: OrthosisType;
   pose?: CharacterPose;
   state: PatientState;
   assignedStationId: string | null;

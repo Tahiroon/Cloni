@@ -1,5 +1,12 @@
 import * as THREE from 'three';
-import { CharacterPose, StaffRole } from '../types/clinic';
+import {
+  CharacterPose,
+  EyewearStyle,
+  FacialHairStyle,
+  HeadwearStyle,
+  OrthosisType,
+  StaffRole,
+} from '../types/clinic';
 import { glbRegistry } from './glbRegistry';
 
 export type OutfitStyle = 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe';
@@ -16,6 +23,13 @@ export interface HumanoidAppearance {
   outfitStyle?: OutfitStyle;
   shirtStyle?: 'tshirt' | 'shirt';
   heightScale?: number;
+  buildScale?: number;
+  eyewearStyle?: EyewearStyle;
+  eyewearColor?: string;
+  facialHairStyle?: FacialHairStyle;
+  headwearStyle?: HeadwearStyle;
+  orthosisType?: OrthosisType;
+  age?: number;
   isFemale?: boolean;
   variantSeed?: number;
   mobilityAid?: 'none' | 'cane' | 'crutches';
@@ -77,6 +91,8 @@ export interface HumanoidRig {
   hitMesh: THREE.Mesh;
   handCup?: THREE.Group;
   handFile?: THREE.Group;
+  orthosisMesh?: THREE.Object3D;
+  mobilityAidGroup?: THREE.Object3D;
   blinkLids?: [THREE.Mesh, THREE.Mesh];
   brows?: [THREE.Mesh, THREE.Mesh];
   mouthLower?: THREE.Mesh;
@@ -188,9 +204,27 @@ let sharedGeomPool: {
   watchStrap: THREE.TorusGeometry;
   watchFace: THREE.CylinderGeometry;
   glassRim: THREE.TorusGeometry;
+  glassRimSquare: THREE.ExtrudeGeometry;
+  glassHalfRim: THREE.TorusGeometry;
   glassLens: THREE.CircleGeometry;
+  glassLensSquare: THREE.ShapeGeometry;
   glassArm: THREE.BoxGeometry;
   glassBridge: THREE.BoxGeometry;
+  taqiyahSide: THREE.CylinderGeometry;
+  taqiyahTop: THREE.SphereGeometry;
+  capCrown: THREE.SphereGeometry;
+  capBrim: THREE.CylinderGeometry;
+  mustacheTube: THREE.TubeGeometry;
+  goateeChin: THREE.SphereGeometry;
+  kneeBraceCyl: THREE.CylinderGeometry;
+  kneeBraceTrim: THREE.TorusGeometry;
+  ankleBraceCyl: THREE.CylinderGeometry;
+  wristSplintCyl: THREE.CylinderGeometry;
+  cervicalCollarCyl: THREE.CylinderGeometry;
+  kinesioStrip: THREE.BoxGeometry;
+  caneShaft: THREE.CylinderGeometry;
+  caneHandle: THREE.TorusGeometry;
+  caneTip: THREE.CylinderGeometry;
 } | null = null;
 
 function getSharedHumanoidGeoms() {
@@ -206,6 +240,40 @@ function getSharedHumanoidGeoms() {
     ]);
     return new THREE.TubeGeometry(curve, 12, isFem ? 0.0028 : 0.0038, 8, false);
   };
+
+  // Rectangular eyeglass frame + lens shape (shared once across all characters)
+  const makeRoundedRectShape = (hw: number, hh: number, r: number) => {
+    const s = new THREE.Shape();
+    s.moveTo(-hw + r, -hh);
+    s.lineTo(hw - r, -hh);
+    s.quadraticCurveTo(hw, -hh, hw, -hh + r);
+    s.lineTo(hw, hh - r);
+    s.quadraticCurveTo(hw, hh, hw - r, hh);
+    s.lineTo(-hw + r, hh);
+    s.quadraticCurveTo(-hw, hh, -hw, hh - r);
+    s.lineTo(-hw, -hh + r);
+    s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+    return s;
+  };
+  const sqOuter = makeRoundedRectShape(0.022, 0.0155, 0.005);
+  const sqInner = makeRoundedRectShape(0.018, 0.012, 0.0035);
+  sqOuter.holes.push(sqInner);
+  const glassRimSquare = new THREE.ExtrudeGeometry(sqOuter, {
+    depth: 0.004,
+    bevelEnabled: false,
+    curveSegments: 4,
+  });
+  glassRimSquare.translate(0, 0, -0.002);
+  const glassLensSquare = new THREE.ShapeGeometry(sqInner, 4);
+
+  const stacheCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.024, -0.003, -0.004),
+    new THREE.Vector3(-0.011, 0.002, 0.002),
+    new THREE.Vector3(0, 0.001, 0.003),
+    new THREE.Vector3(0.011, 0.002, 0.002),
+    new THREE.Vector3(0.024, -0.003, -0.004),
+  ]);
+
   sharedGeomPool = {
     contactShadowPlane: new THREE.PlaneGeometry(0.68, 0.68),
     selectRing: new THREE.RingGeometry(0.25, 0.32, 24),
@@ -238,9 +306,27 @@ function getSharedHumanoidGeoms() {
     watchStrap: new THREE.TorusGeometry(0.036, 0.007, 10, 20),
     watchFace: new THREE.CylinderGeometry(0.016, 0.016, 0.008, 16),
     glassRim: new THREE.TorusGeometry(0.020, 0.0030, 8, 20),
+    glassRimSquare,
+    glassHalfRim: new THREE.TorusGeometry(0.020, 0.0032, 8, 16, Math.PI * 1.04),
     glassLens: new THREE.CircleGeometry(0.019, 16),
+    glassLensSquare,
     glassArm: new THREE.BoxGeometry(0.004, 0.004, 0.105),
     glassBridge: new THREE.BoxGeometry(0.022, 0.004, 0.004),
+    taqiyahSide: new THREE.CylinderGeometry(0.108, 0.112, 0.055, 22),
+    taqiyahTop: new THREE.SphereGeometry(0.108, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
+    capCrown: new THREE.SphereGeometry(0.114, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    capBrim: new THREE.CylinderGeometry(0.118, 0.122, 0.012, 18, 1, false, -Math.PI * 0.36, Math.PI * 0.72),
+    mustacheTube: new THREE.TubeGeometry(stacheCurve, 12, 0.0048, 7, false),
+    goateeChin: new THREE.SphereGeometry(0.032, 12, 10),
+    kneeBraceCyl: new THREE.CylinderGeometry(0.064, 0.058, 0.155, 16, 1, true),
+    kneeBraceTrim: new THREE.TorusGeometry(0.063, 0.005, 8, 18),
+    ankleBraceCyl: new THREE.CylinderGeometry(0.044, 0.048, 0.095, 14, 1, true),
+    wristSplintCyl: new THREE.CylinderGeometry(0.038, 0.034, 0.105, 14, 1, true),
+    cervicalCollarCyl: new THREE.CylinderGeometry(0.066, 0.072, 0.078, 18),
+    kinesioStrip: new THREE.BoxGeometry(0.016, 0.11, 0.005),
+    caneShaft: new THREE.CylinderGeometry(0.011, 0.009, 1.0, 10),
+    caneHandle: new THREE.TorusGeometry(0.036, 0.011, 8, 14, Math.PI * 1.15),
+    caneTip: new THREE.CylinderGeometry(0.014, 0.016, 0.032, 10),
   };
   return sharedGeomPool;
 }
@@ -262,6 +348,14 @@ let sharedFixedMats: {
   badgeCard: THREE.MeshStandardMaterial;
   lanyardBlue: THREE.MeshStandardMaterial;
   glassLens: THREE.MeshStandardMaterial;
+  sunglassLens: THREE.MeshStandardMaterial;
+  neopreneDark: THREE.MeshStandardMaterial;
+  neopreneTrim: THREE.MeshStandardMaterial;
+  foamCollar: THREE.MeshStandardMaterial;
+  kinesioBlue: THREE.MeshStandardMaterial;
+  caneShaftMat: THREE.MeshStandardMaterial;
+  caneHandleMat: THREE.MeshStandardMaterial;
+  caneTipMat: THREE.MeshStandardMaterial;
 } | null = null;
 
 function getSharedFixedMats() {
@@ -306,9 +400,54 @@ function getSharedFixedMats() {
     glassLens: new THREE.MeshStandardMaterial({
       color: 0xe0f2fe,
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.26,
       roughness: 0.08,
       metalness: 0.1,
+      side: THREE.DoubleSide,
+    }),
+    sunglassLens: new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      transparent: true,
+      opacity: 0.80,
+      roughness: 0.08,
+      metalness: 0.28,
+      side: THREE.DoubleSide,
+    }),
+    neopreneDark: new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
+      roughness: 0.78,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+    }),
+    neopreneTrim: new THREE.MeshStandardMaterial({
+      color: 0x0284c7,
+      roughness: 0.55,
+      metalness: 0.04,
+    }),
+    foamCollar: new THREE.MeshStandardMaterial({
+      color: 0xe2e8f0,
+      roughness: 0.86,
+      metalness: 0.0,
+    }),
+    kinesioBlue: new THREE.MeshStandardMaterial({
+      color: 0x0ea5e9,
+      roughness: 0.62,
+      metalness: 0.0,
+    }),
+    caneShaftMat: new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      roughness: 0.30,
+      metalness: 0.72,
+    }),
+    caneHandleMat: new THREE.MeshStandardMaterial({
+      color: 0x5c3a21,
+      roughness: 0.46,
+      metalness: 0.06,
+    }),
+    caneTipMat: new THREE.MeshStandardMaterial({
+      color: 0x18181b,
+      roughness: 0.90,
+      metalness: 0.0,
     }),
   };
   return sharedFixedMats;
@@ -365,12 +504,43 @@ interface RealisticBodyMapPair {
   albedo: THREE.CanvasTexture;
   roughness: THREE.CanvasTexture;
 }
-let cachedRealisticBodyMaps: RealisticBodyMapPair | null = null;
+const realisticBodyMapCache = new Map<string, RealisticBodyMapPair>();
+const sudaneseBodyMapCache = new Map<string, THREE.CanvasTexture>();
 
-function getEnhancedRealisticBodyMaps(origMap: THREE.Texture | null | undefined): RealisticBodyMapPair | null {
-  if (cachedRealisticBodyMaps) return cachedRealisticBodyMaps;
+function getEnhancedRealisticBodyMaps(
+  origMap: THREE.Texture | null | undefined,
+  opts?: {
+    shirtHex?: number;
+    pantsHex?: number;
+    shoeHex?: number;
+    skinMul?: number;
+    hairGrayAmt?: number;
+  }
+): RealisticBodyMapPair | null {
+  const shirtHex = opts?.shirtHex ?? 0x5884b6;
+  const pantsHex = opts?.pantsHex ?? 0xa28e6e;
+  const shoeHex = opts?.shoeHex ?? 0x262220;
+  const skinMul = THREE.MathUtils.clamp(opts?.skinMul ?? 1.0, 0.80, 1.12);
+  const hairGrayAmt = THREE.MathUtils.clamp(opts?.hairGrayAmt ?? 0, 0, 0.75);
+  const cacheKey = `${shirtHex.toString(16)}_${pantsHex.toString(16)}_${shoeHex.toString(16)}_${skinMul.toFixed(2)}_${hairGrayAmt.toFixed(2)}`;
+  const cached = realisticBodyMapCache.get(cacheKey);
+  if (cached) return cached;
+
   const img = origMap?.image as CanvasImageSource & { width?: number; height?: number } | undefined;
   if (!img || !img.width || !img.height || typeof document === 'undefined') return null;
+
+  const shirtCol = new THREE.Color(shirtHex);
+  const pantsCol = new THREE.Color(pantsHex);
+  const shoeCol = new THREE.Color(shoeHex);
+  const sR = Math.round(shirtCol.r * 255);
+  const sG = Math.round(shirtCol.g * 255);
+  const sB = Math.round(shirtCol.b * 255);
+  const pR = Math.round(pantsCol.r * 255);
+  const pG = Math.round(pantsCol.g * 255);
+  const pB = Math.round(pantsCol.b * 255);
+  const shR = Math.round(shoeCol.r * 255);
+  const shG = Math.round(shoeCol.g * 255);
+  const shB = Math.round(shoeCol.b * 255);
 
   const w = Math.min(256, img.width);
   const h = Math.min(256, img.height);
@@ -416,9 +586,9 @@ function getEnhancedRealisticBodyMaps(origMap: THREE.Texture | null | undefined)
         const cL = clamp((lum - 0.52) * 1.26 + 0.47, 0.08, 0.96);
         const buttonBlend = lum > 0.86 && Math.abs(r - b) < 16 ? (lum - 0.86) / 0.14 : 0;
         const bt = buttonBlend * 0.85;
-        r = Math.round(88 * cL + (244 - 88 * cL) * bt);
-        g = Math.round(132 * cL + (245 - 132 * cL) * bt);
-        b = Math.round(182 * cL + (242 - 182 * cL) * bt);
+        r = Math.round(sR * cL + (244 - sR * cL) * bt);
+        g = Math.round(sG * cL + (245 - sG * cL) * bt);
+        b = Math.round(sB * cL + (242 - sB * cL) * bt);
         roughByte = Math.round(214 + (86 - 214) * buttonBlend);
       } else if (isBeltStrip) {
         if (lum > 0.55 && Math.abs(r - b) < 18) {
@@ -431,23 +601,32 @@ function getEnhancedRealisticBodyMaps(origMap: THREE.Texture | null | undefined)
         }
       } else if (isTrousersRegion) {
         const cL = clamp((lum - 0.50) * 1.24 + 0.44, 0.06, 0.94);
-        r = Math.round(clamp(162 * cL + r * 0.18, 0, 255));
-        g = Math.round(clamp(142 * cL + g * 0.16, 0, 255));
-        b = Math.round(clamp(110 * cL + b * 0.14, 0, 255));
+        r = Math.round(clamp(pR * cL + r * 0.14, 0, 255));
+        g = Math.round(clamp(pG * cL + g * 0.14, 0, 255));
+        b = Math.round(clamp(pB * cL + b * 0.14, 0, 255));
         roughByte = 228;
       } else if (isShoesRegion) {
         const isSole = lum > 0.68 && Math.abs(r - b) < 22;
         if (!isSole) {
-          const cL = clamp((lum - 0.35) * 1.18 + 0.33, 0.04, 0.92);
-          const sc = 0.75 + cL * 0.35;
-          r = Math.round(clamp(r * 0.88 * sc, 0, 255));
-          g = Math.round(clamp(g * 0.86 * sc, 0, 255));
-          b = Math.round(clamp(b * 0.84 * sc, 0, 255));
+          const cL = clamp((lum - 0.35) * 1.18 + 0.33, 0.08, 0.95);
+          r = Math.round(clamp((shR * 0.82 + r * 0.25) * (0.65 + cL * 0.55), 0, 255));
+          g = Math.round(clamp((shG * 0.82 + g * 0.25) * (0.65 + cL * 0.55), 0, 255));
+          b = Math.round(clamp((shB * 0.82 + b * 0.25) * (0.65 + cL * 0.55), 0, 255));
           roughByte = 116;
         } else {
           roughByte = 175;
         }
-      } else if (!isWarmSkin && lum < 0.24) {
+      } else if (isWarmSkin) {
+        r = Math.round(clamp(r * skinMul, 0, 255));
+        g = Math.round(clamp(g * (0.98 * skinMul + 0.02), 0, 255));
+        b = Math.round(clamp(b * (0.95 * skinMul + 0.04), 0, 255));
+      } else if (u < 0.31 && lum < 0.24) {
+        if (hairGrayAmt > 0.02) {
+          const gray = 136 + Math.round((lum - 0.10) * 180);
+          r = Math.round(r + (gray - r) * hairGrayAmt);
+          g = Math.round(g + (gray - g) * hairGrayAmt);
+          b = Math.round(b + (gray - b) * hairGrayAmt);
+        }
         roughByte = 198;
       }
 
@@ -479,8 +658,76 @@ function getEnhancedRealisticBodyMaps(origMap: THREE.Texture | null | undefined)
   roughTex.anisotropy = 4;
   roughTex.needsUpdate = true;
 
-  cachedRealisticBodyMaps = { albedo: albedoTex, roughness: roughTex };
-  return cachedRealisticBodyMaps;
+  const pair = { albedo: albedoTex, roughness: roughTex };
+  if (realisticBodyMapCache.size >= 18) {
+    const firstKey = realisticBodyMapCache.keys().next().value;
+    if (firstKey) realisticBodyMapCache.delete(firstKey);
+  }
+  realisticBodyMapCache.set(cacheKey, pair);
+  return pair;
+}
+
+function getSudaneseBodyMap(
+  origMap: THREE.Texture | null | undefined,
+  clothHex: number,
+  skinMul = 1.0
+): THREE.CanvasTexture | null {
+  const sMul = THREE.MathUtils.clamp(skinMul, 0.82, 1.12);
+  const cacheKey = `${clothHex.toString(16)}_${sMul.toFixed(2)}`;
+  const cached = sudaneseBodyMapCache.get(cacheKey);
+  if (cached) return cached;
+
+  const img = origMap?.image as CanvasImageSource & { width?: number; height?: number } | undefined;
+  if (!img || !img.width || !img.height || typeof document === 'undefined') return null;
+
+  const clothCol = new THREE.Color(clothHex);
+  const cR = clothCol.r;
+  const cG = clothCol.g;
+  const cB = clothCol.b;
+
+  const w = Math.min(256, img.width);
+  const h = Math.min(256, img.height);
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, w, h);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const px = imgData.data;
+  const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i];
+    const g = px[i + 1];
+    const b = px[i + 2];
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+    const isWarmSkin = r > g + 14 && g > b + 6 && r > 62;
+    if (!isWarmSkin && chroma < 38 && lum > 0.48) {
+      px[i] = clamp(Math.round(r * cR), 0, 255);
+      px[i + 1] = clamp(Math.round(g * cG), 0, 255);
+      px[i + 2] = clamp(Math.round(b * cB), 0, 255);
+    } else if (isWarmSkin) {
+      px[i] = clamp(Math.round(r * sMul), 0, 255);
+      px[i + 1] = clamp(Math.round(g * (0.98 * sMul + 0.02)), 0, 255);
+      px[i + 2] = clamp(Math.round(b * (0.95 * sMul + 0.04)), 0, 255);
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = origMap?.flipY ?? false;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+
+  if (sudaneseBodyMapCache.size >= 14) {
+    const firstKey = sudaneseBodyMapCache.keys().next().value;
+    if (firstKey) sudaneseBodyMapCache.delete(firstKey);
+  }
+  sudaneseBodyMapCache.set(cacheKey, tex);
+  return tex;
 }
 function getIdBadgeTexture(): THREE.CanvasTexture {
   if (cachedIdBadgeTex) return cachedIdBadgeTex;
@@ -1027,12 +1274,42 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             outfitStyle === 'sudanese_thobe'
         ));
 
-  const glbKey = appearance.modelKey || pickGlbKey(appearance);
+  const requestedGlbKey = appearance.modelKey || pickGlbKey(appearance);
+  const glbKey =
+    glbRegistry.getModel(requestedGlbKey) ||
+    (requestedGlbKey !== 'char_patient_realistic_1' && requestedGlbKey !== 'char_sudanese_man_1')
+      ? requestedGlbKey
+      : 'char_man2';
   const isRocketboxScan = glbKey === 'char_sudanese_man_1';
   const isRealisticScan = glbKey === 'char_patient_realistic_1' || isRocketboxScan;
   const targetH = (isRealisticScan ? 1.54 : 1.34) * (appearance.heightScale || 1);
+  const buildScale = THREE.MathUtils.clamp(appearance.buildScale ?? 1, 0.90, 1.12);
+  const skinLum = 0.2126 * skinCol.r + 0.7152 * skinCol.g + 0.0722 * skinCol.b;
+  const skinMul = THREE.MathUtils.clamp(0.84 + (skinLum - 0.12) * 0.85, 0.82, 1.12);
+  const hairLum = 0.2126 * hairCol.r + 0.7152 * hairCol.g + 0.0722 * hairCol.b;
+  const hairGrayAmt =
+    hairLum > 0.28
+      ? THREE.MathUtils.clamp((hairLum - 0.22) * 1.1, 0.25, 0.72)
+      : appearance.age !== undefined && appearance.age >= 55
+        ? 0.42
+        : appearance.age !== undefined && appearance.age >= 46
+          ? 0.16
+          : 0;
+  const hideRocketboxEmama =
+    isRocketboxScan &&
+    (appearance.hasTurban === false ||
+      appearance.headwearStyle === 'taqiyah' ||
+      appearance.headwearStyle === 'cap' ||
+      appearance.headwearStyle === 'none');
+  const emamaPalette = [0xf8f6f0, 0xefe3cb, 0xe2eaf2, 0xe8dcc6];
+  const emamaTintHex = emamaPalette[seedIdx % emamaPalette.length];
+
   const skinnedModel = glbRegistry.cloneSkinned(glbKey, targetH);
   if (skinnedModel) {
+    if (Math.abs(buildScale - 1) > 0.004) {
+      skinnedModel.scale.x *= buildScale;
+      skinnedModel.scale.z *= 1 + (buildScale - 1) * 0.75;
+    }
     bodyPivot.add(skinnedModel);
 
     // Center pelvis/hips on Z=0 for Mixamo scanned avatar (Rocketbox Bip01 Pelvis is already centered on Z=0)
@@ -1060,6 +1337,9 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         }
 
         if (isRocketboxScan) {
+          if (mesh.name === 'Sudanese_Emama' && hideRocketboxEmama) {
+            mesh.visible = false;
+          }
           const sk = mesh as THREE.SkinnedMesh;
           if (sk.isSkinnedMesh && sk.morphTargetDictionary && sk.morphTargetInfluences) {
             morphMeshes.push({
@@ -1074,9 +1354,18 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             const mName = orig.name || '';
             const isEmamaMat = mName === 'sudanese_emama';
             const isHeadMat = mName === 'sudanese_head';
+            const isBodyMat = mName === 'sudanese_body' || (!isEmamaMat && !isHeadMat);
+            const customBodyMap = isBodyMat
+              ? getSudaneseBodyMap(orig.map, shirtCol.getHex(), skinMul)
+              : null;
             return new THREE.MeshStandardMaterial({
               name: mName,
-              map: orig.map ?? null,
+              color: isEmamaMat
+                ? new THREE.Color(emamaTintHex)
+                : isHeadMat
+                  ? new THREE.Color(skinMul, skinMul * 0.99, skinMul * 0.97)
+                  : new THREE.Color(0xffffff),
+              map: customBodyMap ?? orig.map ?? null,
               normalMap: orig.normalMap ?? null,
               normalScale: new THREE.Vector2(isEmamaMat ? 0.65 : 0.85, isEmamaMat ? -0.65 : -0.85),
               roughness: isEmamaMat ? 0.88 : isHeadMat ? 0.72 : 0.78,
@@ -1104,7 +1393,13 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           const tunedMats = origMats.map((m) => {
             const orig = m as THREE.MeshStandardMaterial;
             if (!orig) return orig;
-            const bodyMaps = getEnhancedRealisticBodyMaps(orig.map);
+            const bodyMaps = getEnhancedRealisticBodyMaps(orig.map, {
+              shirtHex: shirtCol.getHex(),
+              pantsHex: pantsCol.getHex(),
+              shoeHex: shoeLeatherHex,
+              skinMul,
+              hairGrayAmt,
+            });
             if (isEyeMesh) {
               return new THREE.MeshStandardMaterial({
                 map: bodyMaps?.albedo ?? orig.map ?? null,
@@ -2327,12 +2622,20 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         bones['Head'].bone.add(faceGrp);
       }
 
-      if (outfitStyle === 'jalabiya' && !isFemaleLook && !appearance.isStaff) {
+      const resolvedHeadwear: HeadwearStyle =
+        appearance.headwearStyle ??
+        (outfitStyle === 'jalabiya' && !isFemaleLook && !appearance.isStaff
+          ? appearance.hasTurban
+            ? 'turban'
+            : 'taqiyah'
+          : 'none');
+
+      if (!isFemaleLook && !appearance.isStaff && resolvedHeadwear !== 'none') {
         const headAcc = new THREE.Group();
         headAcc.scale.setScalar(0.01);
         const whiteCloth = makeClothMat(0xf4f2ec, appearance, 0.82, 0.45);
 
-        if (appearance.hasTurban) {
+        if (resolvedHeadwear === 'turban') {
           for (const [ty, rad, tubeR, tiltX, tiltY] of [
             [0.190, 0.132, 0.030, 0.08, 0.09],
             [0.216, 0.128, 0.029, -0.06, -0.08],
@@ -2360,21 +2663,35 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           emmaTail.rotation.z = -0.18;
           emmaTail.rotation.x = 0.22;
           headAcc.add(crown, emmaTail);
-        } else {
-          const taqMat = makeClothMat(0xede9df, appearance, 0.82, 0.35);
+        } else if (resolvedHeadwear === 'cap') {
+          const capColors = [0x1e3a8a, 0x334155, 0x065f46, 0x7c2d12, 0x18181b];
+          const capHex = capColors[seedIdx % capColors.length];
+          const capMat = makeClothMat(capHex, appearance, 0.80, 0.35);
+          const crown = new THREE.Mesh(sGeoms.capCrown, capMat);
+          crown.userData.sharedGlbGeom = true;
+          crown.scale.set(1.06, 0.96, 1.06);
+          crown.position.set(0, 0.194, 0.042);
+          crown.castShadow = true;
+          const brim = new THREE.Mesh(sGeoms.capBrim, capMat);
+          brim.userData.sharedGlbGeom = true;
+          brim.scale.set(1.06, 1.0, 1.15);
+          brim.position.set(0, 0.188, 0.072);
+          brim.rotation.x = 0.12;
+          headAcc.add(crown, brim);
+        } else if (resolvedHeadwear === 'taqiyah') {
+          const taqPalette = [0xede9df, 0xe6e0d2, 0xf3f4f6, 0xdad2bf];
+          const taqMat = makeClothMat(taqPalette[seedIdx % taqPalette.length], appearance, 0.82, 0.35);
           const brimStitchMat = makeClothMat(0xcabfa8, appearance, 0.78, 0.2);
-          const capSide = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.120, 0.124, 0.062, 28),
-            taqMat
-          );
+          const capSide = new THREE.Mesh(sGeoms.taqiyahSide, taqMat);
+          capSide.userData.sharedGlbGeom = true;
+          capSide.scale.set(1.11, 1.12, 1.11);
           capSide.position.set(0, 0.212, 0.042);
           const capRim = new THREE.Mesh(new THREE.TorusGeometry(0.123, 0.007, 12, 32), brimStitchMat);
           capRim.rotation.x = Math.PI / 2;
           capRim.position.set(0, 0.184, 0.042);
-          const capTop = new THREE.Mesh(
-            new THREE.SphereGeometry(0.120, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.5),
-            taqMat
-          );
+          const capTop = new THREE.Mesh(sGeoms.taqiyahTop, taqMat);
+          capTop.userData.sharedGlbGeom = true;
+          capTop.scale.set(1.11, 1.08, 1.11);
           capTop.position.set(0, 0.242, 0.042);
           headAcc.add(capSide, capRim, capTop);
         }
@@ -2669,8 +2986,12 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         }
       }
 
-      // Sculpted 3D beard for bearded adult men
-      if (appearance.hasBeard && !isFemaleLook) {
+      // Sculpted facial hair variants for adult men (full beard, goatee, mustache)
+      const resolvedFacialHair: FacialHairStyle =
+        !isFemaleLook
+          ? appearance.facialHairStyle ?? (appearance.hasBeard ? 'full_beard' : 'none')
+          : 'none';
+      if (resolvedFacialHair !== 'none') {
         const beardGrp = new THREE.Group();
         beardGrp.scale.setScalar(0.01);
         const beardMat = new THREE.MeshStandardMaterial({
@@ -2680,43 +3001,70 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           roughness: 0.82,
           metalness: 0.0,
         });
-        const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.048, 14, 12), beardMat);
-        chinBeard.scale.set(1.0, 0.88, 0.80);
-        chinBeard.position.set(0, 0.008, 0.115);
-        const jawBeard = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.082, 0.066, 0.044, 16, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
-          beardMat
-        );
-        jawBeard.position.set(0, 0.032, 0.078);
-        beardGrp.add(chinBeard, jawBeard);
+        if (resolvedFacialHair === 'mustache' || resolvedFacialHair === 'goatee' || resolvedFacialHair === 'full_beard') {
+          const stache = new THREE.Mesh(sGeoms.mustacheTube, beardMat);
+          stache.userData.sharedGlbGeom = true;
+          stache.position.set(0, 0.032, 0.160);
+          beardGrp.add(stache);
+        }
+        if (resolvedFacialHair === 'goatee') {
+          const goatee = new THREE.Mesh(sGeoms.goateeChin, beardMat);
+          goatee.userData.sharedGlbGeom = true;
+          goatee.scale.set(0.95, 0.92, 0.72);
+          goatee.position.set(0, 0.004, 0.130);
+          beardGrp.add(goatee);
+        }
+        if (resolvedFacialHair === 'full_beard') {
+          const chinBeard = new THREE.Mesh(new THREE.SphereGeometry(0.048, 14, 12), beardMat);
+          chinBeard.scale.set(1.0, 0.88, 0.80);
+          chinBeard.position.set(0, 0.008, 0.115);
+          const jawBeard = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.082, 0.066, 0.044, 16, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+            beardMat
+          );
+          jawBeard.position.set(0, 0.032, 0.078);
+          beardGrp.add(chinBeard, jawBeard);
+        }
         bones['Head'].bone.add(beardGrp);
       }
 
-      // Slim optical eyeglasses on ~25% of patients for crisp life-like variety
-      if (!appearance.isStaff && !appearance.isPlayer && Math.abs(appearance.variantSeed || 0) % 4 === 0) {
+      // Eyewear variants (round, square, half_rim, sunglasses) on stylized characters
+      const styEyewear: EyewearStyle =
+        appearance.eyewearStyle ??
+        (!appearance.isStaff && !appearance.isPlayer && seedIdx % 4 === 0 ? 'round' : 'none');
+      if (styEyewear !== 'none') {
         const glassGrp = new THREE.Group();
         glassGrp.scale.setScalar(0.01);
-        const frameMat = makeMetalMat(0x27272a, appearance, 0.3, 0.75);
-        const lensMat = sMats.glassLens;
+        const frameHex = appearance.eyewearColor
+          ? new THREE.Color(appearance.eyewearColor).getHex()
+          : 0x27272a;
+        const frameMat = makeMetalMat(frameHex, appearance, 0.3, 0.75);
+        const lensMat = styEyewear === 'sunglasses' ? sMats.sunglassLens : sMats.glassLens;
         const gEyeX = isFemaleLook ? 0.0462 : 0.0443;
         const gEyeY = isFemaleLook ? 0.1004 : 0.1082;
         const gEyeZ = isFemaleLook ? 0.167 : 0.165;
+        const isSq = styEyewear === 'square' || styEyewear === 'sunglasses';
+        const isHalf = styEyewear === 'half_rim';
         for (const side of [-1, 1]) {
-          const rim = new THREE.Mesh(sGeoms.glassRim, frameMat);
+          const rimGeom = isSq ? sGeoms.glassRimSquare : isHalf ? sGeoms.glassHalfRim : sGeoms.glassRim;
+          const rim = new THREE.Mesh(rimGeom, frameMat);
           rim.userData.sharedGlbGeom = true;
-          rim.position.set(side * gEyeX, gEyeY, gEyeZ);
-          const lens = new THREE.Mesh(sGeoms.glassLens, lensMat);
+          rim.position.set(side * gEyeX, gEyeY + (isHalf ? 0.001 : 0), gEyeZ);
+          if (isHalf) {
+            rim.rotation.z = -0.06;
+          }
+          const lens = new THREE.Mesh(isSq ? sGeoms.glassLensSquare : sGeoms.glassLens, lensMat);
           lens.userData.sharedGlbGeom = true;
           lens.userData.sharedGlbMat = true;
           lens.position.set(side * gEyeX, gEyeY, gEyeZ);
           const arm = new THREE.Mesh(sGeoms.glassArm, frameMat);
           arm.userData.sharedGlbGeom = true;
-          arm.position.set(side * (gEyeX + 0.022), gEyeY, gEyeZ - 0.052);
+          arm.position.set(side * (gEyeX + 0.022), gEyeY + (isHalf ? 0.003 : 0), gEyeZ - 0.052);
           glassGrp.add(rim, lens, arm);
         }
         const bridge = new THREE.Mesh(sGeoms.glassBridge, frameMat);
         bridge.userData.sharedGlbGeom = true;
-        bridge.position.set(0, gEyeY + 0.002, gEyeZ + 0.001);
+        bridge.position.set(0, gEyeY + 0.003, gEyeZ + 0.001);
         glassGrp.add(bridge);
         bones['Head'].bone.add(glassGrp);
       }
@@ -2799,14 +3147,280 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
     const hScale = appearance.heightScale || 1;
     let measuredHipH = 0.63 * hScale;
+    bodyPivot.updateMatrixWorld(true);
     const hipBoneRef = bones['UpperLegL']?.bone || bones['UpperLegR']?.bone || bones['Hips']?.bone;
     if (hipBoneRef) {
-      bodyPivot.updateMatrixWorld(true);
       const tmpHip = new THREE.Vector3();
       hipBoneRef.getWorldPosition(tmpHip);
       if (tmpHip.y > 0.25 && tmpHip.y < 1.15) {
         measuredHipH = tmpHip.y;
       }
+    }
+
+    // Orientation-proof accessories for scanned models + clinical orthoses via world-space attach()
+    if (isRealisticScan && bones['Head']) {
+      const realEyewear: EyewearStyle = appearance.eyewearStyle ?? 'none';
+      if (realEyewear !== 'none' && bones['EyeL'] && bones['EyeR']) {
+        const pL = new THREE.Vector3();
+        const pR = new THREE.Vector3();
+        bones['EyeL'].bone.getWorldPosition(pL);
+        bones['EyeR'].bone.getWorldPosition(pR);
+        const halfIpd = Math.max(0.024, pL.distanceTo(pR) * 0.5);
+        const gScale = halfIpd / 0.044;
+        const bridgeX = (pL.x + pR.x) * 0.5;
+        const bridgeY = (pL.y + pR.y) * 0.5;
+        const bridgeZ = Math.max(pL.z, pR.z) + 0.024 * hScale;
+        const frameHex = appearance.eyewearColor
+          ? new THREE.Color(appearance.eyewearColor).getHex()
+          : 0x27272a;
+        const frameMat = makeMetalMat(frameHex, appearance, 0.28, 0.78);
+        const lensMat = realEyewear === 'sunglasses' ? sMats.sunglassLens : sMats.glassLens;
+        const isSq = realEyewear === 'square' || realEyewear === 'sunglasses';
+        const isHalf = realEyewear === 'half_rim';
+
+        const realGlassGrp = new THREE.Group();
+        realGlassGrp.position.set(bridgeX, bridgeY, bridgeZ);
+        realGlassGrp.scale.setScalar(gScale);
+        for (const side of [-1, 1]) {
+          const rim = new THREE.Mesh(
+            isSq ? sGeoms.glassRimSquare : isHalf ? sGeoms.glassHalfRim : sGeoms.glassRim,
+            frameMat
+          );
+          rim.userData.sharedGlbGeom = true;
+          rim.position.set(side * 0.042, isHalf ? 0.001 : 0, 0);
+          if (isHalf) rim.rotation.z = -0.06;
+          const lens = new THREE.Mesh(isSq ? sGeoms.glassLensSquare : sGeoms.glassLens, lensMat);
+          lens.userData.sharedGlbGeom = true;
+          lens.userData.sharedGlbMat = true;
+          lens.position.set(side * 0.042, 0, 0);
+          const arm = new THREE.Mesh(sGeoms.glassArm, frameMat);
+          arm.userData.sharedGlbGeom = true;
+          arm.position.set(side * 0.064, isHalf ? 0.003 : 0, -0.052);
+          realGlassGrp.add(rim, lens, arm);
+        }
+        const bridge = new THREE.Mesh(sGeoms.glassBridge, frameMat);
+        bridge.userData.sharedGlbGeom = true;
+        bridge.position.set(0, 0.003, 0.001);
+        realGlassGrp.add(bridge);
+        root.add(realGlassGrp);
+        realGlassGrp.updateMatrixWorld(true);
+        bones['Head'].bone.attach(realGlassGrp);
+      }
+
+      if (appearance.headwearStyle === 'taqiyah' || appearance.headwearStyle === 'cap') {
+        const headW = new THREE.Vector3();
+        bones['Head'].bone.getWorldPosition(headW);
+        const crownGrp = new THREE.Group();
+        crownGrp.position.set(headW.x, headW.y + 0.115 * hScale, headW.z + 0.006 * hScale);
+        crownGrp.scale.set(hScale * 1.02 * buildScale, hScale * 1.02, hScale * 1.04);
+        if (appearance.headwearStyle === 'taqiyah') {
+          const taqPalette = [0xf2eee4, 0xe7dfd0, 0xf8fafc, 0xd9d0bc];
+          const taqMat = makeClothMat(taqPalette[seedIdx % taqPalette.length], appearance, 0.84, 0.35);
+          const sideM = new THREE.Mesh(sGeoms.taqiyahSide, taqMat);
+          sideM.userData.sharedGlbGeom = true;
+          const topM = new THREE.Mesh(sGeoms.taqiyahTop, taqMat);
+          topM.userData.sharedGlbGeom = true;
+          topM.position.y = 0.026;
+          crownGrp.add(sideM, topM);
+        } else {
+          const capColors = [0x1e3a8a, 0x334155, 0x065f46, 0x7c2d12, 0x18181b];
+          const capMat = makeClothMat(capColors[seedIdx % capColors.length], appearance, 0.80, 0.35);
+          const crownM = new THREE.Mesh(sGeoms.capCrown, capMat);
+          crownM.userData.sharedGlbGeom = true;
+          crownM.scale.set(1.03, 0.94, 1.04);
+          const brimM = new THREE.Mesh(sGeoms.capBrim, capMat);
+          brimM.userData.sharedGlbGeom = true;
+          brimM.position.set(0, -0.012, 0.030);
+          brimM.rotation.x = 0.12;
+          crownGrp.add(crownM, brimM);
+        }
+        root.add(crownGrp);
+        crownGrp.updateMatrixWorld(true);
+        bones['Head'].bone.attach(crownGrp);
+      }
+    }
+
+    // Clinical orthosis cuffs / braces / kinesio tape (auto-hidden during FPP treatment)
+    let orthosisMesh: THREE.Object3D | undefined;
+    const orthoType = appearance.orthosisType ?? 'none';
+    const upVec = new THREE.Vector3(0, 1, 0);
+    if (orthoType !== 'none' && !appearance.isStaff && !appearance.isPlayer) {
+      const scanScale = isRealisticScan ? 1.15 * hScale : hScale;
+      if (orthoType === 'knee_brace' && bones['LowerLegR'] && bones['FootR']) {
+        const kneeW = new THREE.Vector3();
+        const footW = new THREE.Vector3();
+        bones['LowerLegR'].bone.getWorldPosition(kneeW);
+        bones['FootR'].bone.getWorldPosition(footW);
+        const segDir = kneeW.clone().sub(footW).normalize();
+        const grp = new THREE.Group();
+        const sleeve = new THREE.Mesh(sGeoms.kneeBraceCyl, sMats.neopreneDark);
+        sleeve.userData.sharedGlbGeom = true;
+        sleeve.userData.sharedGlbMat = true;
+        const trimT = new THREE.Mesh(sGeoms.kneeBraceTrim, sMats.neopreneTrim);
+        trimT.userData.sharedGlbGeom = true;
+        trimT.userData.sharedGlbMat = true;
+        trimT.rotation.x = Math.PI / 2;
+        trimT.position.y = 0.068;
+        const trimB = new THREE.Mesh(sGeoms.kneeBraceTrim, sMats.neopreneTrim);
+        trimB.userData.sharedGlbGeom = true;
+        trimB.userData.sharedGlbMat = true;
+        trimB.rotation.x = Math.PI / 2;
+        trimB.position.y = -0.068;
+        grp.add(sleeve, trimT, trimB);
+        grp.position.copy(kneeW).lerp(footW, 0.03);
+        grp.quaternion.setFromUnitVectors(upVec, segDir);
+        grp.scale.set(scanScale * buildScale, scanScale, scanScale * buildScale);
+        root.add(grp);
+        grp.updateMatrixWorld(true);
+        bones['LowerLegR'].bone.attach(grp);
+        orthosisMesh = grp;
+      } else if (orthoType === 'ankle_brace' && bones['LowerLegR'] && bones['FootR']) {
+        const kneeW = new THREE.Vector3();
+        const footW = new THREE.Vector3();
+        bones['LowerLegR'].bone.getWorldPosition(kneeW);
+        bones['FootR'].bone.getWorldPosition(footW);
+        const segDir = kneeW.clone().sub(footW).normalize();
+        const grp = new THREE.Group();
+        const brace = new THREE.Mesh(sGeoms.ankleBraceCyl, sMats.neopreneDark);
+        brace.userData.sharedGlbGeom = true;
+        brace.userData.sharedGlbMat = true;
+        const trim = new THREE.Mesh(sGeoms.kneeBraceTrim, sMats.neopreneTrim);
+        trim.userData.sharedGlbGeom = true;
+        trim.userData.sharedGlbMat = true;
+        trim.scale.setScalar(0.72);
+        trim.rotation.x = Math.PI / 2;
+        trim.position.y = 0.038;
+        grp.add(brace, trim);
+        grp.position.copy(kneeW).lerp(footW, 0.90);
+        grp.quaternion.setFromUnitVectors(upVec, segDir);
+        grp.scale.set(scanScale * buildScale, scanScale, scanScale * buildScale);
+        root.add(grp);
+        grp.updateMatrixWorld(true);
+        bones['LowerLegR'].bone.attach(grp);
+        orthosisMesh = grp;
+      } else if (orthoType === 'wrist_splint' && bones['LowerArmR'] && bones['HandR']) {
+        const elbowW = new THREE.Vector3();
+        const handW = new THREE.Vector3();
+        bones['LowerArmR'].bone.getWorldPosition(elbowW);
+        bones['HandR'].bone.getWorldPosition(handW);
+        const armDir = elbowW.clone().sub(handW).normalize();
+        const grp = new THREE.Group();
+        const splint = new THREE.Mesh(sGeoms.wristSplintCyl, sMats.neopreneDark);
+        splint.userData.sharedGlbGeom = true;
+        splint.userData.sharedGlbMat = true;
+        const strap = new THREE.Mesh(sGeoms.kneeBraceTrim, sMats.neopreneTrim);
+        strap.userData.sharedGlbGeom = true;
+        strap.userData.sharedGlbMat = true;
+        strap.scale.setScalar(0.62);
+        strap.rotation.x = Math.PI / 2;
+        strap.position.y = 0.032;
+        grp.add(splint, strap);
+        grp.position.copy(elbowW).lerp(handW, 0.86);
+        grp.quaternion.setFromUnitVectors(upVec, armDir);
+        grp.scale.set(scanScale, scanScale, scanScale);
+        root.add(grp);
+        grp.updateMatrixWorld(true);
+        bones['LowerArmR'].bone.attach(grp);
+        orthosisMesh = grp;
+      } else if (orthoType === 'cervical_collar' && bones['Neck'] && bones['Head']) {
+        const neckW = new THREE.Vector3();
+        const headW = new THREE.Vector3();
+        bones['Neck'].bone.getWorldPosition(neckW);
+        bones['Head'].bone.getWorldPosition(headW);
+        const grp = new THREE.Group();
+        const collar = new THREE.Mesh(sGeoms.cervicalCollarCyl, sMats.foamCollar);
+        collar.userData.sharedGlbGeom = true;
+        collar.userData.sharedGlbMat = true;
+        const strap = new THREE.Mesh(sGeoms.kneeBraceTrim, sMats.neopreneTrim);
+        strap.userData.sharedGlbGeom = true;
+        strap.userData.sharedGlbMat = true;
+        strap.scale.setScalar(1.08);
+        strap.rotation.x = Math.PI / 2;
+        grp.add(collar, strap);
+        grp.position.copy(neckW).lerp(headW, 0.35);
+        grp.scale.set(scanScale * buildScale, scanScale, scanScale * buildScale);
+        root.add(grp);
+        grp.updateMatrixWorld(true);
+        bones['Neck'].bone.attach(grp);
+        orthosisMesh = grp;
+      } else if (orthoType === 'shoulder_kinesio' && bones['UpperArmR'] && bones['LowerArmR']) {
+        const shW = new THREE.Vector3();
+        const elW = new THREE.Vector3();
+        bones['UpperArmR'].bone.getWorldPosition(shW);
+        bones['LowerArmR'].bone.getWorldPosition(elW);
+        const grp = new THREE.Group();
+        const stripA = new THREE.Mesh(sGeoms.kinesioStrip, sMats.kinesioBlue);
+        stripA.userData.sharedGlbGeom = true;
+        stripA.userData.sharedGlbMat = true;
+        stripA.rotation.set(0.28, 0, -0.35);
+        const stripB = new THREE.Mesh(sGeoms.kinesioStrip, sMats.kinesioBlue);
+        stripB.userData.sharedGlbGeom = true;
+        stripB.userData.sharedGlbMat = true;
+        stripB.rotation.set(-0.28, 0, -0.35);
+        grp.add(stripA, stripB);
+        grp.position.set(
+          THREE.MathUtils.lerp(shW.x, elW.x, 0.24) - 0.044 * scanScale,
+          THREE.MathUtils.lerp(shW.y, elW.y, 0.24) + 0.03 * scanScale,
+          shW.z
+        );
+        grp.scale.setScalar(scanScale);
+        root.add(grp);
+        grp.updateMatrixWorld(true);
+        bones['UpperArmR'].bone.attach(grp);
+        orthosisMesh = grp;
+      }
+    }
+
+    // Walking cane attached cleanly in the left hand (free from right-hand water cup & file folder)
+    let mobilityAidGroup: THREE.Group | undefined;
+    if (appearance.mobilityAid === 'cane' && bones['HandL'] && bones['UpperArmL'] && bones['LowerArmL']) {
+      const savedUpperQ = bones['UpperArmL'].bone.quaternion.clone();
+      const savedLowerQ = bones['LowerArmL'].bone.quaternion.clone();
+      applyArmSagittal(
+        bones['UpperArmL'],
+        (isRocketboxScan ? -1.37 : isRealisticScan ? -1.425 : -1.43) + (isRocketboxScan ? 0.76 : 0),
+        -0.035,
+        0
+      );
+      applyLocalElbowFlex(bones['LowerArmL'], true, 0.22, isRealisticScan, isRocketboxScan);
+      bodyPivot.updateMatrixWorld(true);
+
+      const handLW = new THREE.Vector3();
+      bones['HandL'].bone.getWorldPosition(handLW);
+      const handGripY = Math.max(0.42, handLW.y);
+      const floorOff = 0.048;
+      const shaftLen = Math.max(0.36, handGripY - floorOff);
+
+      const caneGrp = new THREE.Group();
+      caneGrp.position.set(handLW.x + 0.015, handGripY, handLW.z + 0.025);
+
+      const shaft = new THREE.Mesh(sGeoms.caneShaft, sMats.caneShaftMat);
+      shaft.userData.sharedGlbGeom = true;
+      shaft.userData.sharedGlbMat = true;
+      shaft.scale.set(1, shaftLen, 1);
+      shaft.position.set(0, -shaftLen * 0.5, 0);
+      shaft.castShadow = true;
+
+      const handle = new THREE.Mesh(sGeoms.caneHandle, sMats.caneHandleMat);
+      handle.userData.sharedGlbGeom = true;
+      handle.userData.sharedGlbMat = true;
+      handle.rotation.y = Math.PI / 2;
+      handle.position.set(0, 0.014, -0.022);
+
+      const tip = new THREE.Mesh(sGeoms.caneTip, sMats.caneTipMat);
+      tip.userData.sharedGlbGeom = true;
+      tip.userData.sharedGlbMat = true;
+      tip.position.set(0, -shaftLen + 0.014, 0);
+
+      caneGrp.add(shaft, handle, tip);
+      root.add(caneGrp);
+      caneGrp.updateMatrixWorld(true);
+      bones['HandL'].bone.attach(caneGrp);
+      mobilityAidGroup = caneGrp;
+
+      bones['UpperArmL'].bone.quaternion.copy(savedUpperQ);
+      bones['LowerArmL'].bone.quaternion.copy(savedLowerQ);
+      bodyPivot.updateMatrixWorld(true);
     }
 
     return {
@@ -2816,6 +3430,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       hitMesh,
       handCup,
       handFile,
+      orthosisMesh,
+      mobilityAidGroup,
       blinkLids,
       brows,
       mouthLower,
@@ -3567,6 +4183,13 @@ export function animateHumanoid3D(
     rig.handFile.visible = showFile;
   }
 
+  if (rig.orthosisMesh) {
+    rig.orthosisMesh.visible = !isFppSession;
+  }
+  if (rig.mobilityAidGroup) {
+    rig.mobilityAidGroup.visible = !isFppSession && lie < 0.12 && sit < 0.30 && !activeDrink && !holdingFile;
+  }
+
   if (rig.isSkinnedGlb && rig.bones) {
     const b = rig.bones;
     rig.root.rotation.y = facingRad;
@@ -4255,6 +4878,74 @@ export function animateHumanoid3D(
     }
 
     // Arms blend smoothly across relaxed stance, human walk swing, door push, drinking, file shelf pick/carry, seated, and lying
+    // Spontaneous waiting-room standing idle stances (5 natural variations keyed by actorSeed, modulated gently over time)
+    const canCustomIdlePose =
+      standIdleAmt > 0.02 && !activeDrink && !activePickFile && !activePlaceFile && !hsActive && !isFppSession;
+    const rawStanceKind = Math.abs(Math.floor(actorSeed)) % 5;
+    const idleBiasAmt = canCustomIdlePose ? standIdleAmt : 0;
+    // Periodic natural micro-shifts (~every 9-14s smoothly via sine envelope)
+    const stancePulse = Math.max(0, Math.sin(t * 0.27 + seedMod * 0.6));
+    const smoothStancePulse = stancePulse * stancePulse * (3 - 2 * stancePulse);
+
+    let idleArmLSwingOff = 0;
+    let idleArmRSwingOff = 0;
+    let idleArmLAdductOff = 0;
+    let idleArmRAdductOff = 0;
+    let idleArmLDropOff = 0;
+    let idleArmRDropOff = 0;
+    let idleElbowLOff = 0;
+    let idleElbowROff = 0;
+    let idleLookPitchOff = 0;
+    let idleLookYawOff = 0;
+
+    if (idleBiasAmt > 0.02) {
+      if (rawStanceKind === 0) {
+        // Stance 0: Hands loosely clasped / resting calmly in front of waist
+        idleArmLSwingOff = -0.20 * idleBiasAmt;
+        idleArmRSwingOff = -0.22 * idleBiasAmt;
+        idleArmLAdductOff = -0.14 * idleBiasAmt;
+        idleArmRAdductOff = 0.14 * idleBiasAmt;
+        idleElbowLOff = 0.52 * idleBiasAmt;
+        idleElbowROff = 0.56 * idleBiasAmt;
+      } else if (rawStanceKind === 1) {
+        // Stance 1: Casual contrapposto with one arm relaxed akimbo near hip
+        const akimboBlend = (0.55 + 0.45 * smoothStancePulse) * idleBiasAmt;
+        idleArmRSwingOff = 0.10 * akimboBlend;
+        idleArmRDropOff = -0.18 * akimboBlend;
+        idleArmRAdductOff = -0.06 * akimboBlend;
+        idleElbowROff = 0.88 * akimboBlend;
+        idleArmLSwingOff = -0.04 * idleBiasAmt;
+        idleElbowLOff = 0.14 * idleBiasAmt;
+      } else if (rawStanceKind === 2) {
+        // Stance 2: Occasional natural glance at watch / wrist / phone while waiting
+        const checkWindow = Math.max(0, (Math.sin(t * 0.34 + 0.7) - 0.35) / 0.65);
+        const checkSmooth = checkWindow * checkWindow * (3 - 2 * checkWindow) * idleBiasAmt;
+        idleArmRSwingOff = -0.44 * checkSmooth;
+        idleArmRAdductOff = 0.24 * checkSmooth;
+        idleElbowROff = 1.08 * checkSmooth;
+        idleLookPitchOff = 0.14 * checkSmooth;
+        idleLookYawOff = -0.12 * checkSmooth;
+      } else if (rawStanceKind === 3) {
+        // Stance 3: Arms loosely folded across midsection
+        const foldBlend = (0.6 + 0.4 * smoothStancePulse) * idleBiasAmt;
+        idleArmLSwingOff = -0.25 * foldBlend;
+        idleArmRSwingOff = -0.29 * foldBlend;
+        idleArmLAdductOff = -0.26 * foldBlend;
+        idleArmRAdductOff = 0.26 * foldBlend;
+        idleElbowLOff = 0.94 * foldBlend;
+        idleElbowROff = 1.02 * foldBlend;
+      } else {
+        // Stance 4: Relaxed conversational weight shift & occasional gentle open-hand gesture
+        const gestWindow = Math.max(0, (Math.sin(t * 0.42 + 1.4) - 0.52) / 0.48);
+        const gestSmooth = gestWindow * gestWindow * (3 - 2 * gestWindow) * idleBiasAmt;
+        idleArmRSwingOff = -0.28 * gestSmooth;
+        idleArmRDropOff = -0.08 * gestSmooth;
+        idleElbowROff = 0.58 * gestSmooth + 0.12 * idleBiasAmt;
+        idleArmLSwingOff = -0.08 * idleBiasAmt;
+        idleElbowLOff = 0.22 * idleBiasAmt;
+      }
+    }
+
     const standArmGest = Math.max(0, (Math.sin(t * 0.31 + 0.9) - 0.62) / 0.38) * standIdleAmt;
     const smoothStandGest = standArmGest * standArmGest * (3 - 2 * standArmGest);
 
@@ -4276,9 +4967,9 @@ export function animateHumanoid3D(
     const armSwing = armStride * (isRealScan ? 0.22 : 0.27) * activeBlend * (1 + 0.22 * stairEffort);
     const carryFileArm = holdingFile && !activePickFile && !activePlaceFile && sit < 0.2 && lie < 0.05;
     const armStandL =
-      armSwing - 0.035 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03;
+      armSwing - 0.035 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03 + idleArmLSwingOff;
     const armStandRBase =
-      -armSwing - 0.035 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.16;
+      -armSwing - 0.035 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.10 + idleArmRSwingOff;
 
     const pickArmX = THREE.MathUtils.lerp(
       THREE.MathUtils.lerp(-0.18, -1.26, pickReach),
@@ -4323,7 +5014,7 @@ export function animateHumanoid3D(
 
     const drinkAdductSip = isRealScan ? 0.62 : 0.49;
     const realSitAdductR = isRealScan ? THREE.MathUtils.lerp(0.22, 0.10, gestFade) * sit : gestFade * 0.16 * sit;
-    const standAdductR = 0;
+    const standAdductR = idleArmRAdductOff;
     let rightArmAdductY = activeDrink
       ? THREE.MathUtils.lerp(0.14 * drinkFillReach + 0.14 * (1 - drinkFillReach), drinkAdductSip + drinkSipAmt * 0.03, drinkRaise)
       : activePickFile
@@ -4337,7 +5028,7 @@ export function animateHumanoid3D(
     let rightArmDropZ = (activeDrink
       ? THREE.MathUtils.lerp(1.45, 1.38, drinkRaise)
       : THREE.MathUtils.lerp(
-          isRocketbox ? 1.37 : isRealScan ? 1.425 : 1.43,
+          (isRocketbox ? 1.37 : isRealScan ? 1.425 : 1.43) + idleArmRDropOff,
           isRealScan ? 1.39 : 1.42,
           sit
         )) - rbArmOffset;
@@ -4349,7 +5040,10 @@ export function animateHumanoid3D(
         : carryFileArm
           ? 1.16 + Math.sin(walkPhase) * 0.03 * activeBlend
           : THREE.MathUtils.lerp(
-              (isRealScan ? 0.22 : 0.24) + smoothStandGest * 0.36 + Math.max(0, armStride) * 0.22 * activeBlend,
+              (isRealScan ? 0.22 : 0.24) +
+                smoothStandGest * 0.24 +
+                idleElbowROff +
+                Math.max(0, armStride) * 0.22 * activeBlend,
               0.46,
               pushAmt
             );
@@ -4376,13 +5070,13 @@ export function animateHumanoid3D(
     const stimArmBraceL = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperL * 0.08;
     const stimArmBraceR = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperR * 0.08;
     const baseArmDropL = THREE.MathUtils.lerp(
-      isRocketbox ? -1.37 : isRealScan ? -1.425 : -1.43,
+      (isRocketbox ? -1.37 : isRealScan ? -1.425 : -1.43) - idleArmLDropOff,
       isRealScan ? -1.39 : -1.42,
       sit
     ) + rbArmOffset;
     const baseArmSwingL =
       THREE.MathUtils.lerp(armStandL, sitArmLSwing, sit) - stimArmBraceL * 0.45;
-    const baseArmAdductL = isRealScan ? -0.22 * sit : 0;
+    const baseArmAdductL = THREE.MathUtils.lerp(idleArmLAdductOff, isRealScan ? -0.22 : 0, sit);
 
     applyArmSagittal(
       b['UpperArmL'],
@@ -4400,7 +5094,8 @@ export function animateHumanoid3D(
     const elbowStandL =
       (isRealScan ? 0.20 : 0.24) +
       Math.max(0, -armStride) * 0.26 * activeBlend +
-      Math.sin(t * 0.47) * 0.03 * standIdleAmt;
+      Math.sin(t * 0.47) * 0.03 * standIdleAmt +
+      idleElbowLOff;
     const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit) + stimArmBraceL;
     applyLocalElbowFlex(
       b['LowerArmL'],
@@ -4502,14 +5197,15 @@ export function animateHumanoid3D(
 
     // Natural head stabilization during walk & spontaneous FPP human eye contact
     const standYaw =
-      (Math.sin(t * 0.51) * 0.16 + Math.sin(t * 0.21 + 0.9) * 0.11) *
+      (Math.sin(t * 0.51) * 0.18 + Math.sin(t * 0.21 + 0.9) * 0.12 + idleLookYawOff) *
       (1 - activeBlend * 0.68) *
       (1 - pushAmt);
     const standPitch = activePickFile
       ? THREE.MathUtils.lerp(-0.07, 0.04, pickGrasp) * pickReach
       : activePlaceFile
         ? 0.24 * placeReach
-        : (Math.sin(t * 0.78) * 0.032 + Math.sin(t * 0.29) * 0.02) * (1 - activeBlend * 0.45) -
+        : (Math.sin(t * 0.78) * 0.032 + Math.sin(t * 0.29) * 0.02 + idleLookPitchOff) *
+            (1 - activeBlend * 0.45) -
           cos2 * 0.016 * activeBlend;
 
     const lookYaw = activeDrink

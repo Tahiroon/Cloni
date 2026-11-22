@@ -52,6 +52,7 @@ import {
 } from './services/gameBootLoader';
 import {
   loadClinicLocal,
+  loadClinicLocalSync,
   saveClinicLocal,
   scheduleSilentCloudSync,
 } from './services/indexedDbStorage';
@@ -60,6 +61,8 @@ import {
   CatalogItem,
   ClinicRoom,
   ClinicSaveState,
+  EyewearStyle,
+  FacialHairStyle,
   FloatingFeedback,
   FppActiveDeviceState,
   FppDeviceCommandApi,
@@ -67,6 +70,7 @@ import {
   FppNearbyDeviceInfo,
   FppPatientPosture,
   FriendClinic,
+  HeadwearStyle,
   Language,
   LightingMode,
   NavTab,
@@ -158,6 +162,31 @@ const FEMALE_SUDANESE_THOBE_LOOKS = [
   { thobe: '#9c3b27', inner: '#f5eadf' }, // Henna Terracotta Thobe + Sand Ivory Inner
 ];
 
+const REALISTIC_CASUAL_LOOKS = [
+  { shirt: '#bfdbfe', pants: '#1e293b' }, // Sky Shirt + Dark Navy
+  { shirt: '#cbd5e1', pants: '#3f352c' }, // Cool Slate Shirt + Espresso
+  { shirt: '#a7f3d0', pants: '#1f2937' }, // Soft Mint Shirt + Charcoal
+  { shirt: '#fef3c7', pants: '#273549' }, // Ivory Cream Shirt + Slate Blue
+  { shirt: '#991b1b', pants: '#cbb696' }, // Deep Burgundy Shirt + Khaki
+  { shirt: '#1d4ed8', pants: '#d6cfc2' }, // Cobalt Shirt + Light Stone
+  { shirt: '#0f766e', pants: '#1e293b' }, // Deep Teal Shirt + Dark Navy
+  { shirt: '#f1f5f9', pants: '#334155' }, // Crisp White Shirt + Graphite
+];
+
+const SUDANESE_ROBE_LOOKS = [
+  { robe: '#f4f1ea', headwear: 'turban' as HeadwearStyle },
+  { robe: '#ebe2cf', headwear: 'turban' as HeadwearStyle },
+  { robe: '#dce6ee', headwear: 'taqiyah' as HeadwearStyle },
+  { robe: '#e3e8df', headwear: 'taqiyah' as HeadwearStyle },
+  { robe: '#f0e7d8', headwear: 'cap' as HeadwearStyle },
+  { robe: '#e2dcd3', headwear: 'turban' as HeadwearStyle },
+];
+
+const EYEWEAR_VARIETY: EyewearStyle[] = ['round', 'square', 'half_rim', 'sunglasses'];
+const EYEWEAR_FRAME_PALETTE = ['#18181b', '#78350f', '#94a3b8', '#b45309', '#1e3a8a'];
+const YOUTH_HAIR_TONES = ['#17100c', '#241712', '#100c0a', '#2e1d15'];
+const SENIOR_HAIR_TONES = ['#6b7280', '#9ca3af', '#4b5563', '#858a91'];
+
 const EMPTY_REMOVED_TREES: string[] = [];
 const BED_STATION_SPRITES = new Set([
   'treatment_bed',
@@ -174,8 +203,239 @@ const TREE_SPECIES_LABELS: Record<WorldTreeSpecies, { ar: string; en: string }> 
   birch: { ar: 'شجرة بتولا برية', en: 'Wild Birch Tree' },
 };
 
+const STATIC_CATALOG_BY_ID = new Map<string, CatalogItem>(
+  CATALOG_ITEMS.map((c) => [c.id, c])
+);
+
+function migrateClinicSaveState(saved: ClinicSaveState): ClinicSaveState {
+  let nextState: ClinicSaveState = saved;
+  const needsExpansionMigration =
+    (saved.version || 1) < 6 || (saved.rooms[0]?.maxX ?? 0) < 21;
+
+  if (needsExpansionMigration) {
+    const fresh = createInitialSaveState();
+    const prevRoomMap = new Map(saved.rooms.map((r) => [r.id, r]));
+    const prevStaffMap = new Map(saved.staff.map((s) => [s.id, s]));
+
+    nextState = {
+      ...fresh,
+      studentId: saved.studentId || fresh.studentId,
+      language: saved.language || fresh.language,
+      soundEnabled: saved.soundEnabled ?? fresh.soundEnabled,
+      lightingMode: saved.lightingMode || 'day',
+      stars: saved.stars || 0,
+      xp: saved.xp || 0,
+      level: saved.level || 1,
+      satisfaction: saved.satisfaction || 98,
+      patientsTreatedTotal: saved.patientsTreatedTotal || 0,
+      redFlagsCaughtTotal: saved.redFlagsCaughtTotal || 0,
+      missions: saved.missions?.length ? saved.missions : fresh.missions,
+      rooms: fresh.rooms.map((r) => {
+        const old = prevRoomMap.get(r.id);
+        if (old && old.unlocked && old.specialty) {
+          const meta = SPECIALTY_META[old.specialty];
+          return {
+            ...r,
+            unlocked: true,
+            specialty: old.specialty,
+            floorTheme: meta?.floorTheme || r.floorTheme,
+            nameAr: meta?.nameAr || r.nameAr,
+            nameEn: meta?.nameEn || r.nameEn,
+          };
+        }
+        return r;
+      }),
+      staff: fresh.staff.map((st) => {
+        const old = prevStaffMap.get(st.id);
+        return old?.hired ? { ...st, hired: true } : st;
+      }),
+      removedTreeIds: saved.removedTreeIds || [],
+      lastSyncedAt: saved.lastSyncedAt || null,
+    };
+  }
+
+  // Relocate any legacy south-zone solar panels cleanly to the Rear Solar Zone behind the clinic
+  const relocatedItems = nextState.placedItems.map((it) => ({ ...it }));
+  let nextRearSolarIdx = 0;
+  const rearOccupied = new Set<string>();
+  for (const it of relocatedItems) {
+    if (it.catalogId === 'solar_panel' && isInSolarZone(it.gridX, it.gridY, 2, 2)) {
+      for (let dx = 0; dx < 2; dx++) {
+        for (let dy = 0; dy < 2; dy++) {
+          rearOccupied.add(`${it.gridX + dx},${it.gridY + dy}`);
+        }
+      }
+    }
+  }
+  const rearSlots: Array<{ gx: number; gy: number }> = [];
+  for (let y = SOLAR_ZONE.minY; y <= SOLAR_ZONE.maxY - 1; y += 2) {
+    for (let x = SOLAR_ZONE.minX; x <= SOLAR_ZONE.maxX - 1; x += 2) {
+      rearSlots.push({ gx: x, gy: y });
+    }
+  }
+  for (const it of relocatedItems) {
+    if (it.catalogId === 'solar_panel' && !isInSolarZone(it.gridX, it.gridY, 2, 2)) {
+      while (nextRearSolarIdx < rearSlots.length) {
+        const slot = rearSlots[nextRearSolarIdx++];
+        let busy = false;
+        for (let dx = 0; dx < 2 && !busy; dx++) {
+          for (let dy = 0; dy < 2; dy++) {
+            if (rearOccupied.has(`${slot.gx + dx},${slot.gy + dy}`)) {
+              busy = true;
+              break;
+            }
+          }
+        }
+        if (!busy) {
+          it.gridX = slot.gx;
+          it.gridY = slot.gy;
+          for (let dx = 0; dx < 2; dx++) {
+            for (let dy = 0; dy < 2; dy++) {
+              rearOccupied.add(`${slot.gx + dx},${slot.gy + dy}`);
+            }
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // Auto-repair any legacy wall-mounted items whose saved rotation/tile is not on a visible wall face
+  const occupiedWallKeys = new Set<string>();
+  for (const it of relocatedItems) {
+    const cat = STATIC_CATALOG_BY_ID.get(it.catalogId);
+    if (!cat?.isWallDecor && !isWallDecorId(it.catalogId)) continue;
+    if (isValidWallMount(it.gridX, it.gridY, it.rotation, nextState.rooms)) {
+      const k = `${it.gridX},${it.gridY},${it.rotation}`;
+      if (!occupiedWallKeys.has(k)) {
+        occupiedWallKeys.add(k);
+        continue;
+      }
+    }
+    const tileRots = getValidWallRotationsForTile(it.gridX, it.gridY, nextState.rooms);
+    const freeTileRot = tileRots.find((r) => !occupiedWallKeys.has(`${it.gridX},${it.gridY},${r}`));
+    if (freeTileRot !== undefined) {
+      it.rotation = freeTileRot;
+      occupiedWallKeys.add(`${it.gridX},${it.gridY},${freeTileRot}`);
+      continue;
+    }
+    const fallback = snapToNearestValidWallSlot(
+      it.gridX + 0.5,
+      it.gridY + 0.5,
+      it.rotation === 0 ? 0 : 1,
+      nextState.rooms
+    );
+    if (fallback) {
+      it.gridX = fallback.gx;
+      it.gridY = fallback.gy;
+      it.rotation = fallback.rotation;
+      occupiedWallKeys.add(`${fallback.gx},${fallback.gy},${fallback.rotation}`);
+    }
+  }
+
+  // Ensure essential starter reception assets (file_cabinet & reception_desk) are never missing from saved clinics
+  const ensureEssentialReceptionItem = (
+    catalogId: 'file_cabinet' | 'reception_desk',
+    defaultItem: PlacedItem
+  ) => {
+    if (relocatedItems.some((it) => it.catalogId === catalogId)) return;
+    const cat = STATIC_CATALOG_BY_ID.get(catalogId);
+    if (!cat) return;
+    const occupiedTiles = new Set<string>();
+    for (const existing of relocatedItems) {
+      const eCat = STATIC_CATALOG_BY_ID.get(existing.catalogId);
+      if (!eCat || eCat.isWallDecor || eCat.id === 'floor_rug' || eCat.id === 'stone_pathway') {
+        continue;
+      }
+      const ew = existing.rotation % 2 === 0 ? eCat.width : eCat.depth;
+      const ed = existing.rotation % 2 === 0 ? eCat.depth : eCat.width;
+      for (let dx = 0; dx < ew; dx++) {
+        for (let dy = 0; dy < ed; dy++) {
+          occupiedTiles.add(`${existing.gridX + dx},${existing.gridY + dy}`);
+        }
+      }
+    }
+    const receptionRoom = nextState.rooms.find((r) => r.id === 'room_reception');
+    const minX = receptionRoom?.minX ?? 12;
+    const maxX = receptionRoom?.maxX ?? 21;
+    const minY = receptionRoom?.minY ?? 10;
+    const maxY = receptionRoom?.maxY ?? 21;
+    const canPlaceAt = (gx: number, gy: number) => {
+      for (let dx = 0; dx < cat.width; dx++) {
+        for (let dy = 0; dy < cat.depth; dy++) {
+          const tx = gx + dx;
+          const ty = gy + dy;
+          if (tx < minX || tx > maxX || ty < minY || ty > maxY) return false;
+          // Keep interior clinic doors clear
+          if ((tx === 12 && (ty === 14 || ty === 15)) || (ty === 10 && (tx === 16 || tx === 17))) {
+            return false;
+          }
+          if (occupiedTiles.has(`${tx},${ty}`)) return false;
+        }
+      }
+      return true;
+    };
+
+    if (canPlaceAt(defaultItem.gridX, defaultItem.gridY)) {
+      relocatedItems.push({ ...defaultItem });
+      return;
+    }
+    for (let gy = minY; gy <= maxY; gy++) {
+      for (let gx = minX; gx <= maxX; gx++) {
+        if (canPlaceAt(gx, gy)) {
+          relocatedItems.push({ ...defaultItem, gridX: gx, gridY: gy });
+          return;
+        }
+      }
+    }
+  };
+
+  ensureEssentialReceptionItem('file_cabinet', {
+    instanceId: 'init_cabinet',
+    catalogId: 'file_cabinet',
+    gridX: 13,
+    gridY: 10,
+    rotation: 0,
+    roomId: 'room_reception',
+  });
+  ensureEssentialReceptionItem('reception_desk', {
+    instanceId: 'init_desk',
+    catalogId: 'reception_desk',
+    gridX: 14,
+    gridY: 12,
+    rotation: 0,
+    roomId: 'room_reception',
+  });
+
+  const migratedStaff = (nextState.staff || [])
+    .filter((st) => st.id !== 'staff_therapist_1')
+    .map((st) => (st.role === 'receptionist' ? { ...st, hired: true } : st));
+
+  return {
+    ...nextState,
+    staff: migratedStaff,
+    playerProfile: normalizePlayerProfile(nextState.playerProfile),
+    placedItems: relocatedItems,
+    lightingMode: nextState.lightingMode || 'day',
+    removedTreeIds: nextState.removedTreeIds || [],
+    version: 6,
+    coins: 999999,
+  };
+}
+
 export default function App() {
   const [clinic, setClinic] = useState<ClinicSaveState>(() => {
+    const syncSaved = loadClinicLocalSync();
+    if (syncSaved) {
+      const migrated = migrateClinicSaveState(syncSaved);
+      soundFx.enabled = migrated.soundEnabled;
+      persistBootLanguage(migrated.language);
+      if (typeof document !== 'undefined') {
+        document.documentElement.lang = migrated.language;
+        document.documentElement.dir = migrated.language === 'ar' ? 'rtl' : 'ltr';
+      }
+      return migrated;
+    }
     const initial = createInitialSaveState();
     const savedLang = getInitialBootLanguage();
     return savedLang !== initial.language ? { ...initial, language: savedLang } : initial;
@@ -202,7 +462,6 @@ export default function App() {
   const [friendsOpen, setFriendsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [bonusOpen, setBonusOpen] = useState(false);
-  const [orbitStep] = useState(0);
 
   const [unlockTargetRoom, setUnlockTargetRoom] = useState<ClinicRoom | null>(null);
   const [selectedWorldTree, setSelectedWorldTree] = useState<WorldTreeDef | null>(null);
@@ -227,7 +486,7 @@ export default function App() {
   const receptionCheckedInIdsRef = useRef<Set<string>>(new Set());
   const fppMoveInputRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const initialSpawnTimeRef = useRef<number | null>(null);
+  const activePatientCountRef = useRef(0);
   const sessionSpawnedRealisticRef = useRef(false);
   const sessionSpawnedSudaneseRef = useRef(false);
   const fppBlinkLockRef = useRef(false);
@@ -340,153 +599,13 @@ export default function App() {
     [clinic.rooms, clinic.placedItems, itemFootprints, clinic.removedTreeIds]
   );
 
-  // Hydrate offline-first from IndexedDB / LocalStorage (+ clean v2 expanded clinic migration & infinite coins)
+  // Reconcile offline-first save & missions cleanly with IndexedDB (frame 0 already hydrated from sync mirror)
   useEffect(() => {
     let active = true;
     loadClinicLocal().then((saved) => {
       if (!active) return;
       if (saved && saved.rooms && saved.placedItems) {
-        let nextState: ClinicSaveState = saved;
-        const needsExpansionMigration =
-          (saved.version || 1) < 6 || (saved.rooms[0]?.maxX ?? 0) < 21;
-
-        if (needsExpansionMigration) {
-          const fresh = createInitialSaveState();
-          const prevRoomMap = new Map(saved.rooms.map((r) => [r.id, r]));
-          const prevStaffMap = new Map(saved.staff.map((s) => [s.id, s]));
-
-          nextState = {
-            ...fresh,
-            studentId: saved.studentId || fresh.studentId,
-            language: saved.language || fresh.language,
-            soundEnabled: saved.soundEnabled ?? fresh.soundEnabled,
-            lightingMode: saved.lightingMode || 'day',
-            stars: saved.stars || 0,
-            xp: saved.xp || 0,
-            level: saved.level || 1,
-            satisfaction: saved.satisfaction || 98,
-            patientsTreatedTotal: saved.patientsTreatedTotal || 0,
-            redFlagsCaughtTotal: saved.redFlagsCaughtTotal || 0,
-            missions: saved.missions?.length ? saved.missions : fresh.missions,
-            rooms: fresh.rooms.map((r) => {
-              const old = prevRoomMap.get(r.id);
-              if (old && old.unlocked && old.specialty) {
-                const meta = SPECIALTY_META[old.specialty];
-                return {
-                  ...r,
-                  unlocked: true,
-                  specialty: old.specialty,
-                  floorTheme: meta?.floorTheme || r.floorTheme,
-                  nameAr: meta?.nameAr || r.nameAr,
-                  nameEn: meta?.nameEn || r.nameEn,
-                };
-              }
-              return r;
-            }),
-            staff: fresh.staff.map((st) => {
-              const old = prevStaffMap.get(st.id);
-              return old?.hired ? { ...st, hired: true } : st;
-            }),
-            removedTreeIds: saved.removedTreeIds || [],
-            lastSyncedAt: saved.lastSyncedAt || null,
-          };
-        }
-
-        // Relocate any legacy south-zone solar panels cleanly to the new Rear Solar Zone behind the clinic
-        const relocatedItems = nextState.placedItems.map((it) => ({ ...it }));
-        let nextRearSolarIdx = 0;
-        const rearOccupied = new Set<string>();
-        for (const it of relocatedItems) {
-          if (it.catalogId === 'solar_panel' && isInSolarZone(it.gridX, it.gridY, 2, 2)) {
-            for (let dx = 0; dx < 2; dx++) {
-              for (let dy = 0; dy < 2; dy++) {
-                rearOccupied.add(`${it.gridX + dx},${it.gridY + dy}`);
-              }
-            }
-          }
-        }
-        const rearSlots: Array<{ gx: number; gy: number }> = [];
-        for (let y = SOLAR_ZONE.minY; y <= SOLAR_ZONE.maxY - 1; y += 2) {
-          for (let x = SOLAR_ZONE.minX; x <= SOLAR_ZONE.maxX - 1; x += 2) {
-            rearSlots.push({ gx: x, gy: y });
-          }
-        }
-        for (const it of relocatedItems) {
-          if (it.catalogId === 'solar_panel' && !isInSolarZone(it.gridX, it.gridY, 2, 2)) {
-            while (nextRearSolarIdx < rearSlots.length) {
-              const slot = rearSlots[nextRearSolarIdx++];
-              let busy = false;
-              for (let dx = 0; dx < 2 && !busy; dx++) {
-                for (let dy = 0; dy < 2; dy++) {
-                  if (rearOccupied.has(`${slot.gx + dx},${slot.gy + dy}`)) {
-                    busy = true;
-                    break;
-                  }
-                }
-              }
-              if (!busy) {
-                it.gridX = slot.gx;
-                it.gridY = slot.gy;
-                for (let dx = 0; dx < 2; dx++) {
-                  for (let dy = 0; dy < 2; dy++) {
-                    rearOccupied.add(`${slot.gx + dx},${slot.gy + dy}`);
-                  }
-                }
-                break;
-              }
-            }
-          }
-        }
-
-        // Auto-repair any legacy wall-mounted items whose saved rotation/tile is not on a visible wall face
-        const occupiedWallKeys = new Set<string>();
-        for (const it of relocatedItems) {
-          const cat = catalogById.get(it.catalogId);
-          if (!cat?.isWallDecor && !isWallDecorId(it.catalogId)) continue;
-          if (isValidWallMount(it.gridX, it.gridY, it.rotation, nextState.rooms)) {
-            const k = `${it.gridX},${it.gridY},${it.rotation}`;
-            if (!occupiedWallKeys.has(k)) {
-              occupiedWallKeys.add(k);
-              continue;
-            }
-          }
-          const tileRots = getValidWallRotationsForTile(it.gridX, it.gridY, nextState.rooms);
-          const freeTileRot = tileRots.find((r) => !occupiedWallKeys.has(`${it.gridX},${it.gridY},${r}`));
-          if (freeTileRot !== undefined) {
-            it.rotation = freeTileRot;
-            occupiedWallKeys.add(`${it.gridX},${it.gridY},${freeTileRot}`);
-            continue;
-          }
-          const fallback = snapToNearestValidWallSlot(
-            it.gridX + 0.5,
-            it.gridY + 0.5,
-            it.rotation === 0 ? 0 : 1,
-            nextState.rooms
-          );
-          if (fallback) {
-            it.gridX = fallback.gx;
-            it.gridY = fallback.gy;
-            it.rotation = fallback.rotation;
-            occupiedWallKeys.add(`${fallback.gx},${fallback.gy},${fallback.rotation}`);
-          }
-        }
-
-        // Strip legacy Dr. Sara (staff_therapist_1) & ensure Receptionist Layla is active on duty
-        const migratedStaff = (nextState.staff || [])
-          .filter((st) => st.id !== 'staff_therapist_1')
-          .map((st) => (st.role === 'receptionist' ? { ...st, hired: true } : st));
-
-        // Keep unlimited coins active on this account
-        nextState = {
-          ...nextState,
-          staff: migratedStaff,
-          playerProfile: normalizePlayerProfile(nextState.playerProfile),
-          placedItems: relocatedItems,
-          lightingMode: nextState.lightingMode || 'day',
-          removedTreeIds: nextState.removedTreeIds || [],
-          version: 6,
-          coins: 999999,
-        };
+        const nextState = migrateClinicSaveState(saved);
         setClinic(nextState);
         setLastSyncedAt(nextState.lastSyncedAt || null);
         soundFx.enabled = nextState.soundEnabled;
@@ -501,7 +620,7 @@ export default function App() {
     };
   }, []);
 
-  // Debounced persist to IndexedDB/LocalStorage + flush on page exit + silent cloud sync
+  // Idle-scheduled local persist (zero frame drops on mobile) + guaranteed flush on page exit + silent cloud sync
   const latestClinicRef = useRef(clinic);
   latestClinicRef.current = clinic;
   const pendingLocalSaveRef = useRef(false);
@@ -509,28 +628,54 @@ export default function App() {
   useEffect(() => {
     if (!hydrated) return;
     pendingLocalSaveRef.current = true;
+    let idleId: number | null = null;
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+
     const saveTimer = setTimeout(() => {
-      pendingLocalSaveRef.current = false;
-      void saveClinicLocal(clinic);
-    }, 600);
+      const commitSave = () => {
+        pendingLocalSaveRef.current = false;
+        void saveClinicLocal(latestClinicRef.current);
+      };
+      if (typeof w.requestIdleCallback === 'function') {
+        idleId = w.requestIdleCallback(commitSave, { timeout: 1200 });
+      } else {
+        commitSave();
+      }
+    }, 450);
+
     scheduleSilentCloudSync(clinic, (iso) => {
       setLastSyncedAt(iso);
     });
-    return () => clearTimeout(saveTimer);
+    return () => {
+      clearTimeout(saveTimer);
+      if (idleId !== null && typeof w.cancelIdleCallback === 'function') {
+        w.cancelIdleCallback(idleId);
+      }
+    };
   }, [clinic, hydrated]);
 
   useEffect(() => {
     const flushLocalSave = () => {
       if (pendingLocalSaveRef.current) {
         pendingLocalSaveRef.current = false;
-        void saveClinicLocal(latestClinicRef.current);
+        void saveClinicLocal(latestClinicRef.current, true);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        flushLocalSave();
       }
     };
     window.addEventListener('pagehide', flushLocalSave);
     window.addEventListener('beforeunload', flushLocalSave);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('pagehide', flushLocalSave);
       window.removeEventListener('beforeunload', flushLocalSave);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -779,76 +924,161 @@ export default function App() {
     [getReceptionWaitSeatSlots]
   );
 
-  // Pick an open non-colliding standing waiting spot strictly inside Reception when all chairs are full
+  // Receptionist seat & desk-front hub in tile coordinates (for spontaneous gathering & natural gaze)
+  const getReceptionHubCoords = useCallback(() => {
+    const desk = clinic.placedItems.find((it) => it.catalogId === 'reception_desk');
+    if (desk) {
+      const pose = getReceptionDeskPose(desk);
+      return {
+        recTileX: pose.seatTileX - 0.5,
+        recTileY: pose.seatTileY - 0.5,
+        frontTileX: pose.deskFrontWorldX - 0.5,
+        frontTileY: pose.deskFrontWorldZ - 0.5,
+      };
+    }
+    return {
+      recTileX: 14.5,
+      recTileY: 11.7,
+      frontTileX: 14.5,
+      frontTileY: 13.4,
+    };
+  }, [clinic.placedItems]);
+
+  // Natural standing gaze: mostly faces the receptionist/desk, occasionally chats/glances toward a nearby patient or lobby
+  const pickSpontaneousStandingHeading = useCallback(
+    (
+      x: number,
+      y: number,
+      currentPatients: PatientEntity[],
+      excludePatientId?: string
+    ): number => {
+      const { recTileX, recTileY } = getReceptionHubCoords();
+      const roll = Math.random();
+      if (roll < 0.26) {
+        const nearby = currentPatients.filter(
+          (pt) =>
+            pt.id !== excludePatientId &&
+            pt.state !== 'treated_leaving' &&
+            (pt.state === 'waiting_checkin' || pt.state === 'walking_to_wait') &&
+            Math.hypot(pt.gridX - x, pt.gridY - y) >= 0.75 &&
+            Math.hypot(pt.gridX - x, pt.gridY - y) <= 2.6
+        );
+        if (nearby.length > 0) {
+          const peer = nearby[Math.floor(Math.random() * nearby.length)];
+          return Math.atan2(peer.gridX - x, peer.gridY - y) + (Math.random() - 0.5) * 0.42;
+        }
+      }
+      if (roll < 0.86) {
+        return Math.atan2(recTileX - x, recTileY - y) + (Math.random() - 0.5) * 0.78;
+      }
+      return Math.atan2(15.2 - x, 15.0 - y) + (Math.random() - 0.5) * 1.65;
+    },
+    [getReceptionHubCoords]
+  );
+
+  // Pick an open non-colliding standing waiting spot clustered organically around the receptionist/desk when chairs are full
   const findStandingWaitSpot = useCallback(
     (currentPatients: PatientEntity[], excludePatientId?: string) => {
       const recRoom = clinic.rooms.find(
         (r) => r.unlocked && (r.id === 'room_reception' || r.specialty === 'reception')
       );
-      const minX = (recRoom?.minX ?? 12) + 1.1;
-      const maxX = (recRoom?.maxX ?? 21) - 1.4; // Keep well inside away from exterior door x=21..22
-      const minY = (recRoom?.minY ?? 10) + 2.4;
-      const maxY = (recRoom?.maxY ?? 21) - 1.1;
+      const minX = (recRoom?.minX ?? 12) + 0.85;
+      const maxX = (recRoom?.maxX ?? 21) - 1.35; // Keep well inside away from exterior door x=21..22
+      const minY = (recRoom?.minY ?? 10) + 1.85;
+      const maxY = (recRoom?.maxY ?? 21) - 1.05;
 
-      const candidates: Array<{ x: number; y: number }> = [];
-      for (let x = minX; x <= maxX; x += 1.05) {
-        for (let y = minY; y <= maxY; y += 1.05) {
-          const jx = x + (Math.random() - 0.5) * 0.35;
-          const jy = y + (Math.random() - 0.5) * 0.35;
-          // Keep doorway threshold corridors clear
-          if (jx > maxX - 0.6 && jy >= 13.0 && jy <= 16.8) continue;
-          if (!isTileWalkable(jx, jy, 0.26, obstacleBoxes)) continue;
-          const crowded = currentPatients.some(
-            (pt) =>
-              pt.id !== excludePatientId &&
-              pt.state !== 'treated_leaving' &&
-              Math.hypot(pt.gridX - jx, pt.gridY - jy) < 0.88
-          );
-          if (!crowded) candidates.push({ x: jx, y: jy });
+      const { recTileX, recTileY, frontTileX, frontTileY } = getReceptionHubCoords();
+      const seatSlots = getReceptionWaitSeatSlots();
+
+      const rawCandidates: Array<{ x: number; y: number; distToHub: number }> = [];
+      for (let x = minX; x <= maxX; x += 0.72) {
+        for (let y = minY; y <= maxY; y += 0.72) {
+          const jx = x + (Math.random() - 0.5) * 0.34;
+          const jy = y + (Math.random() - 0.5) * 0.34;
+          // Keep doorway threshold corridors clear (east main door, west wing door, north wing door)
+          if (jx > maxX - 0.55 && jy >= 13.0 && jy <= 16.6) continue;
+          if (jx <= (recRoom?.minX ?? 12) + 1.15 && jy >= 13.1 && jy <= 15.7) continue;
+          if (jy <= (recRoom?.minY ?? 10) + 1.45 && jx >= 15.1 && jx <= 17.4) continue;
+          // Keep receptionist seat / cabinet corridor unobstructed
+          if (Math.hypot(jx - recTileX, jy - recTileY) < 1.05) continue;
+          // Keep waiting chair approaches clear so seated transitions never jam
+          if (
+            seatSlots.some(
+              (s) => Math.hypot(jx - s.approachTileX, jy - s.approachTileY) < 0.58
+            )
+          ) {
+            continue;
+          }
+          if (!isTileWalkable(jx, jy, 0.24, obstacleBoxes)) continue;
+          const dHub = Math.hypot(jx - frontTileX, jy - frontTileY);
+          rawCandidates.push({ x: jx, y: jy, distToHub: dHub });
         }
       }
-      if (candidates.length > 0) {
-        return candidates[Math.floor(Math.random() * candidates.length)];
+
+      const pickWithSeparation = (minSep: number) => {
+        const free = rawCandidates.filter(
+          (cand) =>
+            !currentPatients.some((pt) => {
+              if (pt.id === excludePatientId || pt.state === 'treated_leaving') return false;
+              const distNow = Math.hypot(pt.gridX - cand.x, pt.gridY - cand.y);
+              const distTarget = Math.hypot(pt.targetX - cand.x, pt.targetY - cand.y);
+              return distNow < minSep || distTarget < minSep;
+            })
+        );
+        if (free.length === 0) return null;
+
+        // Gather naturally around the receptionist/desk (sweet spot ~1.1m..3.4m around front/side of desk)
+        const scored = free.map((c) => {
+          const ringBias =
+            c.distToHub < 1.05
+              ? (1.05 - c.distToHub) * 2.2
+              : c.distToHub <= 3.35
+                ? c.distToHub * 0.45
+                : 1.5 + (c.distToHub - 3.35) * 1.15;
+          return {
+            ...c,
+            score: ringBias + Math.random() * 1.35,
+          };
+        });
+        scored.sort((a, b) => a.score - b.score);
+        const topSlice = scored.slice(0, Math.min(6, scored.length));
+        return topSlice[Math.floor(Math.random() * topSlice.length)];
+      };
+
+      const chosen = pickWithSeparation(0.72) || pickWithSeparation(0.56);
+      if (chosen) {
+        return { x: chosen.x, y: chosen.y };
       }
-      return { x: 16.0 + (Math.random() - 0.5) * 0.7, y: 15.6 + (Math.random() - 0.5) * 0.7 };
+      return {
+        x: Math.min(maxX, Math.max(minX, frontTileX + (Math.random() - 0.5) * 2.2)),
+        y: Math.min(maxY, Math.max(minY, frontTileY + 1.2 + Math.random() * 1.6)),
+      };
     },
-    [clinic.rooms, obstacleBoxes]
+    [clinic.rooms, obstacleBoxes, getReceptionHubCoords, getReceptionWaitSeatSlots]
   );
 
-  // Patient Spawner (always arrives -> Reception Desk -> nearest free seat or calm standing wait -> treatment wing)
+  useEffect(() => {
+    activePatientCountRef.current = patients.filter(
+      (p) => p.state !== 'treated_leaving'
+    ).length;
+  }, [patients]);
+
+  // Patient Spawner: gradually & spontaneously brings in all 20 unique clinical cases from the start
   useEffect(() => {
     if (!hydrated || visitingFriend || isFppSessionActive) return;
 
+    let cancelled = false;
+    let spawnTimer: ReturnType<typeof setTimeout> | null = null;
+
     const spawnCheck = () => {
       setPatients((prev) => {
-        const isFirstIntroFlow = clinic.patientsTreatedTotal === 0;
-        if (isFirstIntroFlow && prev.length >= 1) {
-          if (
-            initialSpawnTimeRef.current !== null &&
-            Date.now() - initialSpawnTimeRef.current < 45000
-          ) {
-            return prev;
-          }
-        }
-
-        const unlockedTreatmentWings = clinic.rooms.filter(
-          (r) => r.unlocked && r.specialty !== 'reception'
-        ).length;
-        const bedCount = clinic.placedItems.filter((i) => {
-          const cat = catalogById.get(i.catalogId);
-          return Boolean(cat?.isTreatmentStation && BED_STATION_SPRITES.has(cat.sprite));
-        }).length;
-        // Allow an active waiting lounge queue while keeping performance crisp
-        const maxActive = Math.min(
-          unlockedTreatmentWings >= 2 ? 5 : 4,
-          Math.max(3, bedCount + 2)
-        );
+        const maxActive = FALLBACK_CLINICAL_CASES.length;
         const activeCount = prev.filter((p) => p.state !== 'treated_leaving').length;
         if (activeCount >= maxActive) return prev;
 
-        const isInitialSinglePatient = isFirstIntroFlow && prev.length === 0;
+        const isFirstEntry = clinic.patientsTreatedTotal === 0 && prev.length === 0;
         const shouldUseRealisticFirst =
-          isInitialSinglePatient ||
+          isFirstEntry ||
           (!sessionSpawnedRealisticRef.current &&
             prev.length === 0 &&
             !prev.some((p) => p.modelKey === 'char_patient_realistic_1'));
@@ -856,9 +1086,6 @@ export default function App() {
           !shouldUseRealisticFirst &&
           !sessionSpawnedSudaneseRef.current &&
           !prev.some((p) => p.modelKey === 'char_sudanese_man_1');
-        if (isInitialSinglePatient && initialSpawnTimeRef.current === null) {
-          initialSpawnTimeRef.current = Date.now();
-        }
         if (shouldUseRealisticFirst) {
           sessionSpawnedRealisticRef.current = true;
         }
@@ -872,34 +1099,55 @@ export default function App() {
         const unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
         const casePool = unseenPool.length > 0 ? unseenPool : FALLBACK_CLINICAL_CASES;
         const sudanesePreferredCase =
-          casePool.find((c) => c.id === 'case_knee_oa_elder') ||
-          FALLBACK_CLINICAL_CASES.find((c) => c.id === 'case_knee_oa_elder') ||
+          casePool.find((c) => c.id === 'case_knee_oa_elder' || c.id === 'case_stroke_gait_neuro') ||
           casePool[0];
         const fallbackCase = shouldUseRealisticFirst
-          ? FALLBACK_CLINICAL_CASES[0]
+          ? casePool[0]
           : shouldUseSudaneseFirst
             ? sudanesePreferredCase
             : casePool[Math.floor(Math.random() * casePool.length)];
-        const useRealisticModel =
-          shouldUseRealisticFirst ||
-          (fallbackCase.id === 'case_lbp_radiculopathy' &&
-            !prev.some((p) => p.modelKey === 'char_patient_realistic_1'));
-        const useSudaneseRealisticModel =
-          !useRealisticModel &&
-          !prev.some((p) => p.modelKey === 'char_sudanese_man_1') &&
-          (shouldUseSudaneseFirst ||
-            fallbackCase.id === 'case_knee_oa_elder' ||
-            (fallbackCase.gender === 'male' && fallbackCase.age >= 35 && Math.random() < 0.65));
         const chosenCase = { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
+        const isFemale = chosenCase.gender === 'female';
+
+        // Pick base GLB intelligently across existing models so concurrent patients never look identical
+        let chosenModelKey: string | undefined;
+        if (!isFemale) {
+          if (shouldUseRealisticFirst) {
+            chosenModelKey = 'char_patient_realistic_1';
+          } else if (shouldUseSudaneseFirst) {
+            chosenModelKey = 'char_sudanese_man_1';
+          } else if (chosenCase.age < 15) {
+            chosenModelKey = undefined; // youth uses man_casual2 stylized rig cleanly at heightScale 0.78
+          } else {
+            const countModel = (k: string | undefined) =>
+              prev.filter((p) => p.clinicalCase.gender === 'male' && p.modelKey === k).length;
+            const candidates: Array<string | undefined> =
+              chosenCase.age >= 48
+                ? ['char_sudanese_man_1', 'char_patient_realistic_1', undefined]
+                : ['char_patient_realistic_1', undefined, 'char_sudanese_man_1'];
+            candidates.sort((a, b) => countModel(a) - countModel(b));
+            chosenModelKey = candidates[0];
+          }
+        }
+        const useRealisticModel = chosenModelKey === 'char_patient_realistic_1';
+        const useSudaneseRealisticModel = chosenModelKey === 'char_sudanese_man_1';
+
         const skin = useSudaneseRealisticModel
-          ? '#b07b58'
+          ? SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)]
           : useRealisticModel
-            ? '#9e6847'
+            ? SUDANESE_SKINS[Math.floor(Math.random() * Math.min(5, SUDANESE_SKINS.length))]
             : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
+        const hairColor =
+          chosenCase.age >= 54
+            ? SENIOR_HAIR_TONES[Math.floor(Math.random() * SENIOR_HAIR_TONES.length)]
+            : chosenCase.age >= 44 && Math.random() < 0.45
+              ? '#4b5563'
+              : YOUTH_HAIR_TONES[Math.floor(Math.random() * YOUTH_HAIR_TONES.length)];
+
         const receptionSpot = getReceptionCheckinSpot(prev);
-        const startX = 27.9;
-        const startY = 14.3 + (Math.random() - 0.5) * 0.5;
+        const startX = 27.85 + Math.random() * 0.95;
+        const startY = 14.0 + Math.random() * 1.35;
         const path = findGridPath(
           startX,
           startY,
@@ -911,16 +1159,22 @@ export default function App() {
           obstacleBoxes
         );
 
-        const isFemale = chosenCase.gender === 'female';
         let outfitStyle: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe' = 'casual';
         let shirtStyle: 'tshirt' | 'shirt' | undefined;
-        const heightScale = chosenCase.age < 15 ? 0.78 : undefined;
+        const heightScale =
+          chosenCase.age < 15 ? 0.78 : Number((0.95 + Math.random() * 0.11).toFixed(2));
+        const buildScale =
+          chosenCase.age < 15 ? 0.94 : Number((0.94 + Math.random() * 0.13).toFixed(2));
         let shirtColor = '#ece9e1';
         let pantsColor = '#1e293b';
         let hasHijab = false;
         let hasTurban = false;
+        let headwearStyle: HeadwearStyle = 'none';
+        let facialHairStyle: FacialHairStyle = 'none';
 
-        const activeOutfits = new Set(prev.map((p) => `${p.shirtColor}_${p.pantsColor}`));
+        const activeOutfits = new Set(
+          prev.map((p) => `${p.modelKey || p.outfitStyle}_${p.shirtColor}_${p.pantsColor}_${p.headwearStyle || 'none'}`)
+        );
         const pickDistinct = <T,>(items: T[], getKey: (x: T) => string): T => {
           const fresh = items.filter((item) => !activeOutfits.has(getKey(item)));
           const pool = fresh.length > 0 ? fresh : items;
@@ -928,74 +1182,113 @@ export default function App() {
         };
 
         if (useSudaneseRealisticModel) {
+          const robeLook = pickDistinct(
+            SUDANESE_ROBE_LOOKS,
+            (l) => `char_sudanese_man_1_${l.robe}_${l.robe}_${l.headwear}`
+          );
           outfitStyle = 'jalabiya';
-          shirtColor = '#f4f1ea';
-          pantsColor = '#f4f1ea';
+          shirtColor = robeLook.robe;
+          pantsColor = robeLook.robe;
           hasHijab = false;
-          hasTurban = true;
+          headwearStyle = shouldUseSudaneseFirst ? 'turban' : robeLook.headwear;
+          hasTurban = headwearStyle === 'turban';
+          facialHairStyle = 'full_beard';
         } else if (useRealisticModel) {
           outfitStyle = 'casual';
           shirtStyle = 'shirt';
-          shirtColor = '#bfdbfe';
-          pantsColor = '#1e293b';
+          const realLook = shouldUseRealisticFirst
+            ? REALISTIC_CASUAL_LOOKS[0]
+            : pickDistinct(
+                REALISTIC_CASUAL_LOOKS,
+                (l) => `char_patient_realistic_1_${l.shirt}_${l.pants}_none`
+              );
+          shirtColor = realLook.shirt;
+          pantsColor = realLook.pants;
           hasHijab = false;
+          headwearStyle = !shouldUseRealisticFirst && chosenCase.age <= 34 && Math.random() < 0.35 ? 'cap' : 'none';
           hasTurban = false;
+          facialHairStyle = 'none';
         } else if (isFemale) {
-          hasHijab = true; // All women wear a Tarha/Hijab or Sudanese Thobe cleanly
-          const thobeChance = chosenCase.age >= 48 ? 0.75 : chosenCase.age >= 28 ? 0.38 : 0.16;
+          hasHijab = true; // Women wear a Tarha/Hijab or Sudanese Thobe cleanly
+          const thobeChance = chosenCase.age >= 48 ? 0.72 : chosenCase.age >= 28 ? 0.36 : 0.16;
           if (Math.random() < thobeChance) {
             outfitStyle = 'sudanese_thobe';
             const thobeLook = pickDistinct(
               FEMALE_SUDANESE_THOBE_LOOKS,
-              (l) => `${l.thobe}_${l.inner}`
+              (l) => `sudanese_thobe_${l.thobe}_${l.inner}_none`
             );
             shirtColor = thobeLook.thobe;
             pantsColor = thobeLook.inner;
           } else {
             const roll = Math.random();
-            if (roll < 0.36) {
+            if (roll < 0.34) {
               outfitStyle = 'abaya';
-              shirtColor = pickDistinct(FEMALE_ABAYA_COLORS, (c) => `${c}_${c}`);
+              shirtColor = pickDistinct(FEMALE_ABAYA_COLORS, (c) => `abaya_${c}_${c}_none`);
               pantsColor = shirtColor;
-            } else if (roll < 0.65) {
+            } else if (roll < 0.64) {
               outfitStyle = 'abaya_open';
               const openLook = pickDistinct(
                 FEMALE_OPEN_ABAYA_LOOKS,
-                (l) => `${l.outer}_${l.inner}`
+                (l) => `abaya_open_${l.outer}_${l.inner}_none`
               );
               shirtColor = openLook.outer;
               pantsColor = openLook.inner;
-            } else if (roll < 0.84) {
+            } else if (roll < 0.82) {
               outfitStyle = 'dress';
-              shirtColor = pickDistinct(FEMALE_DRESS_COLORS, (c) => `${c}_${c}`);
+              shirtColor = pickDistinct(FEMALE_DRESS_COLORS, (c) => `dress_${c}_${c}_none`);
               pantsColor = shirtColor;
             } else {
               outfitStyle = 'casual';
-              const c = pickDistinct(FEMALE_CASUAL_LOOKS, (l) => `${l.shirt}_${l.pants}`);
+              const c = pickDistinct(FEMALE_CASUAL_LOOKS, (l) => `casual_${l.shirt}_${l.pants}_none`);
               shirtColor = c.shirt;
               pantsColor = c.pants;
             }
           }
         } else {
-          // Older men (>=35): mostly Jalabiya (~82%); youth/kids (<35): mostly trousers + t-shirt/shirt (~85-100%)
-          const jalabiyaChance = chosenCase.age < 15 ? 0 : chosenCase.age >= 35 ? 0.82 : 0.15;
+          // Stylized men: mix trousers + t-shirt/shirt, athletic cap, or Jalabiya with taqiyah/turban
+          const jalabiyaChance = chosenCase.age < 15 ? 0 : chosenCase.age >= 40 ? 0.52 : 0.14;
           const wearJalabiya = Math.random() < jalabiyaChance;
           outfitStyle = wearJalabiya ? 'jalabiya' : 'casual';
           if (wearJalabiya) {
             const jTones = ['#f8fafc', '#efe2c9', '#dbe8f4', '#dce6db', '#e6d3b3', '#e2e8f0'];
-            shirtColor = pickDistinct(jTones, (c) => `${c}_${c}`);
+            shirtColor = pickDistinct(jTones, (c) => `jalabiya_${c}_${c}_turban`);
             pantsColor = shirtColor;
-            hasTurban = chosenCase.age >= 40 ? Math.random() < 0.72 : Math.random() < 0.45;
+            headwearStyle = chosenCase.age >= 45 || Math.random() < 0.6 ? 'turban' : 'taqiyah';
+            hasTurban = headwearStyle === 'turban';
           } else {
-            const c = pickDistinct(MALE_CASUAL_LOOKS, (l) => `${l.shirt}_${l.pants}`);
+            const c = pickDistinct(MALE_CASUAL_LOOKS, (l) => `casual_${l.shirt}_${l.pants}_none`);
             shirtColor = c.shirt;
             pantsColor = c.pants;
             shirtStyle = c.shirtStyle;
+            if (c.shirtStyle === 'tshirt' && Math.random() < 0.42) {
+              headwearStyle = 'cap';
+            }
+          }
+          if (chosenCase.age >= 18) {
+            const fhChoices: FacialHairStyle[] =
+              chosenCase.age >= 45
+                ? ['full_beard', 'mustache', 'goatee', 'none']
+                : ['goatee', 'mustache', 'none', 'full_beard'];
+            facialHairStyle = fhChoices[Math.floor(Math.random() * fhChoices.length)];
+          }
+        }
+
+        // Assign distinct eyewear style (~42% of adult patients, prioritizing unused shapes)
+        let eyewearStyle: EyewearStyle = 'none';
+        let eyewearColor: string | undefined;
+        if (chosenCase.age >= 18) {
+          const glassesChance = chosenCase.age >= 42 ? 0.52 : 0.36;
+          if (Math.random() < glassesChance) {
+            const usedEyewear = new Set(prev.map((p) => p.eyewearStyle).filter(Boolean));
+            const availEye = EYEWEAR_VARIETY.filter((e) => !usedEyewear.has(e));
+            const eyePool = availEye.length > 0 ? availEye : EYEWEAR_VARIETY;
+            eyewearStyle = eyePool[Math.floor(Math.random() * eyePool.length)];
+            eyewearColor = EYEWEAR_FRAME_PALETTE[Math.floor(Math.random() * EYEWEAR_FRAME_PALETTE.length)];
           }
         }
 
         const newPatient: PatientEntity = {
-          id: isInitialSinglePatient
+          id: isFirstEntry
             ? 'pat_' + Date.now() + '_a3'
             : 'pat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
           gridX: startX,
@@ -1006,7 +1299,7 @@ export default function App() {
           walkPhase: 0,
           facing: 2,
           skinTone: skin,
-          hairColor: '#17100c',
+          hairColor,
           shirtColor,
           pantsColor,
           hasHijab,
@@ -1014,31 +1307,42 @@ export default function App() {
           outfitStyle,
           shirtStyle,
           heightScale,
-          hasBeard: useSudaneseRealisticModel
-            ? true
-            : useRealisticModel
-              ? false
-              : !isFemale && chosenCase.age >= 28,
+          buildScale,
+          eyewearStyle,
+          eyewearColor,
+          facialHairStyle,
+          headwearStyle,
+          orthosisType: chosenCase.orthosisType ?? 'none',
+          hasBeard: facialHairStyle === 'full_beard',
           state: 'arriving',
           assignedStationId: null,
           waitTimer: 0,
           clinicalCase: chosenCase,
           isAiGenerated: false,
-          modelKey: useSudaneseRealisticModel
-            ? 'char_sudanese_man_1'
-            : useRealisticModel
-              ? 'char_patient_realistic_1'
-              : undefined,
+          modelKey: chosenModelKey,
         };
         return [...prev, newPatient];
       });
     };
 
-    const bootTimer = setTimeout(spawnCheck, 1300);
-    const interval = setInterval(spawnCheck, 13800);
+    const scheduleNext = (delayMs: number) => {
+      if (cancelled) return;
+      spawnTimer = setTimeout(() => {
+        if (cancelled) return;
+        spawnCheck();
+        const curActive = activePatientCountRef.current;
+        const nextDelay =
+          curActive < 6
+            ? 1700 + Math.random() * 1400
+            : 2300 + Math.random() * 2100;
+        scheduleNext(nextDelay);
+      }, delayMs);
+    };
+
+    scheduleNext(900);
     return () => {
-      clearTimeout(bootTimer);
-      clearInterval(interval);
+      cancelled = true;
+      if (spawnTimer) clearTimeout(spawnTimer);
     };
   }, [
     hydrated,
@@ -1047,7 +1351,6 @@ export default function App() {
     clinic.placedItems,
     clinic.rooms,
     clinic.patientsTreatedTotal,
-    catalogById,
     itemFootprints,
     obstacleBoxes,
     getReceptionCheckinSpot,
@@ -1540,7 +1843,13 @@ export default function App() {
         updated.seatFacingRad = undefined;
         updated.targetX = standSpot.x;
         updated.targetY = standSpot.y;
-        updated.idleMoveTimer = 2400 + Math.random() * 2000;
+        updated.headingRad = pickSpontaneousStandingHeading(
+          standSpot.x,
+          standSpot.y,
+          claimedSoFar,
+          updated.id
+        );
+        updated.idleMoveTimer = 3600 + Math.random() * 3400;
         updated.path = buildPatientPath(updated, standSpot.x, standSpot.y);
       }
     };
@@ -1861,15 +2170,15 @@ export default function App() {
               const checkedByRec = receptionCheckedInIdsRef.current.has(updated.id);
               const maxCheckinMs =
                 receptionistHired && hasReceptionDesk && hasFileCabinet
-                  ? 15000
+                  ? 3600
                   : receptionistHired && hasReceptionDesk
-                    ? 2600
-                    : 2000;
+                    ? 2200
+                    : 1600;
               if ((checkedByRec && updated.waitTimer >= 650) || updated.waitTimer >= maxCheckinMs) {
                 receptionCheckedInIdsRef.current.delete(updated.id);
                 const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
                 const coolerSpot =
-                  Math.random() < 0.42
+                  Math.random() < 0.26
                     ? pickFreeWaterCoolerSpot(claimedSoFar, updated.id)
                     : null;
 
@@ -1977,28 +2286,40 @@ export default function App() {
                   }
                 }
 
-                // Natural standing waiting idle movements strictly inside Reception (countdown in local map avoids re-renders when idle)
-                const curIdle = standingIdleMap.get(updated.id) ?? updated.idleMoveTimer ?? 2400;
+                // Natural standing waiting idle movements strictly inside Reception around the receptionist
+                const curIdle = standingIdleMap.get(updated.id) ?? updated.idleMoveTimer ?? 3600;
                 const nextIdle = curIdle - dtMs;
                 if (nextIdle <= 0) {
-                  const resetIdle = 2600 + Math.random() * 2400;
+                  const resetIdle = 4200 + Math.random() * 4200;
                   standingIdleMap.set(updated.id, resetIdle);
                   updated.idleMoveTimer = resetIdle;
-                  if (Math.random() < 0.45) {
-                    const drift = findStandingWaitSpot([...nextList, ...prev.slice(idx + 1)], updated.id);
+                  const peers = [...nextList, ...prev.slice(idx + 1)];
+                  if (Math.random() < 0.32) {
+                    const drift = findStandingWaitSpot(peers, updated.id);
                     if (
-                      drift.x < 20.2 &&
-                      Math.hypot(drift.x - updated.gridX, drift.y - updated.gridY) <= 2.4
+                      drift.x < 19.8 &&
+                      Math.hypot(drift.x - updated.gridX, drift.y - updated.gridY) <= 1.95
                     ) {
                       const driftPath = buildPatientPath(updated, drift.x, drift.y);
                       if (driftPath.length > 0) {
                         updated.targetX = drift.x;
                         updated.targetY = drift.y;
+                        updated.headingRad = pickSpontaneousStandingHeading(
+                          drift.x,
+                          drift.y,
+                          peers,
+                          updated.id
+                        );
                         updated.path = driftPath;
                       }
                     }
                   } else {
-                    updated.headingRad = Math.PI + (Math.random() - 0.5) * 1.4;
+                    updated.headingRad = pickSpontaneousStandingHeading(
+                      updated.gridX,
+                      updated.gridY,
+                      peers,
+                      updated.id
+                    );
                   }
                   changed = true;
                 } else {
@@ -2945,6 +3266,40 @@ export default function App() {
 
   const handleSellMovingDraft = (instanceId: string) => {
     const targetItem = clinic.placedItems.find((it) => it.instanceId === instanceId);
+    if (targetItem) {
+      if (
+        targetItem.catalogId === 'file_cabinet' &&
+        clinic.placedItems.filter((it) => it.catalogId === 'file_cabinet').length <= 1
+      ) {
+        soundFx.alert();
+        addFloatingFeedback(
+          targetItem.gridX,
+          targetItem.gridY,
+          clinic.language === 'ar'
+            ? 'لا يمكن بيع آخر رف ملفات بالاستقبال'
+            : 'Keep at least 1 records shelf',
+          '#f87171'
+        );
+        setPlacementDraft(null);
+        return;
+      }
+      if (
+        targetItem.catalogId === 'reception_desk' &&
+        clinic.placedItems.filter((it) => it.catalogId === 'reception_desk').length <= 1
+      ) {
+        soundFx.alert();
+        addFloatingFeedback(
+          targetItem.gridX,
+          targetItem.gridY,
+          clinic.language === 'ar'
+            ? 'لا يمكن بيع مكتب الاستقبال الوحيد'
+            : 'Keep at least 1 reception desk',
+          '#f87171'
+        );
+        setPlacementDraft(null);
+        return;
+      }
+    }
     const cat = targetItem ? catalogById.get(targetItem.catalogId) : undefined;
     const refund = cat ? Math.round(cat.priceCoins * 0.7) : 30;
     soundFx.coin();
@@ -3109,7 +3464,7 @@ export default function App() {
       clearTimeout(speakingTimerRef.current);
       speakingTimerRef.current = null;
     }
-    initialSpawnTimeRef.current = null;
+    activePatientCountRef.current = 0;
     const fresh = createInitialSaveState();
     fresh.language = clinic.language;
     setClinic(fresh);
@@ -3260,7 +3615,7 @@ export default function App() {
 
   return (
     <main
-      className={`relative w-screen h-screen overflow-hidden transition-colors duration-500 ${
+      className={`relative w-screen h-[100dvh] overflow-hidden transition-colors duration-500 ${
         lightingMode === 'night' ? 'bg-[#050a18]' : 'bg-[#5aa332]'
       }`}
     >
@@ -3298,7 +3653,6 @@ export default function App() {
         placementDraft={placementDraft}
         editMode={editMode && !visitingFriend}
         language={clinic.language}
-        orbitStep={orbitStep}
         lightingMode={lightingMode}
         removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
         selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
@@ -3765,7 +4119,7 @@ export default function App() {
         <div
           dir={isAr ? 'rtl' : 'ltr'}
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed bottom-20 sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-sm"
+          className="pointer-events-auto fixed bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-sm"
         >
           <div
             className={`rounded-3xl border shadow-2xl p-4 ${
@@ -3875,7 +4229,7 @@ export default function App() {
         <div
           dir={isAr ? 'rtl' : 'ltr'}
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed bottom-20 sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-sm"
+          className="pointer-events-auto fixed bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-sm"
         >
           <div
             className={`rounded-3xl border shadow-2xl p-4 ${

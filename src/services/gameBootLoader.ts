@@ -123,7 +123,7 @@ export function persistBootLanguage(lang: Language): void {
   }
 }
 
-export async function waitForWebFonts(timeoutMs = 2400): Promise<void> {
+export async function waitForWebFonts(timeoutMs = 500): Promise<void> {
   if (typeof document === 'undefined' || !document.fonts?.ready) return;
   await Promise.race([
     document.fonts.ready.then(() => undefined).catch(() => undefined),
@@ -138,11 +138,12 @@ export async function waitForWebFonts(timeoutMs = 2400): Promise<void> {
 export async function resolveAndCacheSplashArt(src: string): Promise<string | null> {
   const cachedBlobUrl = await getCachedAssetBlobUrl(src);
   if (cachedBlobUrl) return cachedBlobUrl;
-  void cacheStaticAssetUrl(src, 'image/png');
+  const mime = src.endsWith('.webp') ? 'image/webp' : 'image/png';
+  void cacheStaticAssetUrl(src, mime);
   return null;
 }
 
-export async function decodeImageAsset(src: string, timeoutMs = 2200): Promise<void> {
+export async function decodeImageAsset(src: string, timeoutMs = 500): Promise<void> {
   if (typeof Image === 'undefined') return;
   await Promise.race([
     new Promise<void>((resolve) => {
@@ -175,15 +176,44 @@ function isSoftwareRenderer(): boolean {
   }
 }
 
+let smartCacheInitStarted = false;
+
+/**
+ * Registers the browser-first Service Worker and requests persistent storage
+ * so mobile & desktop browsers retain GLB models, thumbnails, and clinic saves.
+ */
+export function initSmartBrowserCache(): void {
+  if (smartCacheInitStarted || typeof window === 'undefined') return;
+  smartCacheInitStarted = true;
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+      // Graceful fallback when running in restricted embeds
+    });
+  }
+
+  const storage = navigator.storage as (StorageManager & { persisted?: () => Promise<boolean> }) | undefined;
+  if (storage && typeof storage.persist === 'function') {
+    storage.persisted?.().then((already) => {
+      if (!already) {
+        return storage.persist();
+      }
+      return true;
+    }).catch(() => {
+      // Ignore permission/browser-specific rejections
+    });
+  }
+}
+
 let thumbsPrewarmed = false;
 
 /**
  * Hydrates persisted WebP thumbnails from IndexedDB first, then pre-renders any missing
- * core clinic items cleanly so opening the Store Sheet is instant.
+ * core clinic items cleanly in small 2-item frame slices so boot stays silky smooth.
  */
 export async function prewarmCoreCatalogThumbs(): Promise<void> {
   await hydrateThumbCacheFromIdb();
-  if (thumbsPrewarmed || !glbRegistry.ready) return;
+  if (thumbsPrewarmed || !glbRegistry.coreReady) return;
   thumbsPrewarmed = true;
   if (isSoftwareRenderer()) return;
 
@@ -210,11 +240,9 @@ export async function prewarmCoreCatalogThumbs(): Promise<void> {
   const missing = getMissingCatalogThumbSpecs(specs);
   if (missing.length === 0) return;
 
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  renderThumbBatch(missing.slice(0, 4));
-  if (missing.length > 4) {
+  for (let i = 0; i < missing.length; i += 2) {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    renderThumbBatch(missing.slice(4));
+    renderThumbBatch(missing.slice(i, i + 2));
   }
 }
 
@@ -272,8 +300,8 @@ async function cacheWebFontsBestEffort(): Promise<void> {
 let idlePrewarmStarted = false;
 
 /**
- * Quietly hydrates persisted thumbnails and warms web font cache during idle slices
- * without running heavy offscreen WebGL rendering behind active clinic gameplay.
+ * Quietly hydrates persisted thumbnails and warms web font & store thumbnail cache
+ * during idle slices without impacting active clinic gameplay FPS.
  */
 export function scheduleIdleBrowserPrewarm(): () => void {
   if (idlePrewarmStarted || typeof window === 'undefined') return () => {};
@@ -281,10 +309,14 @@ export function scheduleIdleBrowserPrewarm(): () => void {
   let cancelled = false;
 
   void (async () => {
-    await waitForIdleSlice(2600);
+    initSmartBrowserCache();
+    await waitForIdleSlice(1400);
     if (cancelled) return;
 
     await hydrateThumbCacheFromIdb();
+    if (cancelled) return;
+
+    await prewarmCoreCatalogThumbs();
     if (cancelled) return;
 
     void cacheWebFontsBestEffort();

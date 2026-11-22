@@ -1252,6 +1252,10 @@ export function buildClinicWorld3D(
     [26.45, 3.8, 'bush_1'],
     [26.45, 20.6, 'bush_2'],
   ];
+  const fallbackShrubMat = trackMat(makeMat({ color: 0x3b6e32, roughness: 0.86, metalness: 0.0 }));
+  const fallbackShrubAccentMat = trackMat(makeMat({ color: 0x528f3d, roughness: 0.82, metalness: 0.0 }));
+  const fallbackBushCoreGeom = trackGeom(new THREE.DodecahedronGeometry(0.24, 1));
+  const fallbackGrassBladeGeom = trackGeom(new THREE.ConeGeometry(0.045, 0.28, 4));
   for (const [bx, bz, key] of bushCoords) {
     const bush = glbRegistry.cloneNormalized(key, { targetHeight: 0.62, rotY: bx + bz });
     if (bush) {
@@ -1260,6 +1264,27 @@ export function buildClinicWorld3D(
       });
       bush.position.set(bx, 0.02, bz);
       root.add(bush);
+    } else {
+      root.userData.usesFallbackGlb = true;
+      const fbBush = new THREE.Group();
+      fbBush.position.set(bx, 0.02, bz);
+      const offsets: Array<[number, number, number, number]> = [
+        [0, 0.25, 0, 1.1],
+        [-0.16, 0.19, 0.1, 0.82],
+        [0.16, 0.2, -0.09, 0.85],
+        [0.05, 0.36, 0.04, 0.72],
+      ];
+      offsets.forEach(([ox, oy, oz, sc], idx) => {
+        const lobe = new THREE.Mesh(
+          fallbackBushCoreGeom,
+          idx % 2 === 0 ? fallbackShrubMat : fallbackShrubAccentMat
+        );
+        lobe.position.set(ox, oy, oz);
+        lobe.scale.setScalar(sc);
+        lobe.receiveShadow = true;
+        fbBush.add(lobe);
+      });
+      root.add(fbBush);
     }
   }
   for (const [gx, gz] of [
@@ -1276,6 +1301,19 @@ export function buildClinicWorld3D(
       });
       grassClump.position.set(gx, 0.0, gz);
       microDetailsGroup.add(grassClump);
+    } else {
+      root.userData.usesFallbackGlb = true;
+      const fbClump = new THREE.Group();
+      fbClump.position.set(gx, 0.0, gz);
+      for (let bi = 0; bi < 4; bi++) {
+        const ang = (bi / 4) * Math.PI * 2 + gx;
+        const blade = new THREE.Mesh(fallbackGrassBladeGeom, fallbackShrubAccentMat);
+        blade.position.set(Math.sin(ang) * 0.06, 0.14, Math.cos(ang) * 0.06);
+        blade.rotation.z = Math.sin(ang) * 0.24;
+        blade.rotation.x = Math.cos(ang) * 0.24;
+        fbClump.add(blade);
+      }
+      microDetailsGroup.add(fbClump);
     }
   }
 
@@ -1771,26 +1809,34 @@ export function buildClinicWorld3D(
   addPilaster(22, 10, 0.28, 1.9);
   addPilaster(12, 22, 0.28, 1.15);
 
-  // Mounted Reception Brand Logo + Framed License Certificate + Anatomy Chart (clean matte glare-free plaque)
+  // Mounted Reception Brand Logo + Framed License Certificate (crisp high-contrast matte plaque)
   const wallLogoFrame = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(0.036, 0.75, 2.52)),
+    trackGeom(new THREE.BoxGeometry(0.042, 0.8, 2.66)),
     darkMullionMat
   );
   wallLogoFrame.position.set(12.126, 1.43, 18.6);
   clinicBuildingGroup.add(wallLogoFrame);
 
   const wallLogo = new THREE.Mesh(
-    trackGeom(new THREE.PlaneGeometry(2.44, 0.68)),
+    trackGeom(new THREE.PlaneGeometry(2.56, 0.72)),
     trackMat(
       makeMat({
         map: textures.therasonWall,
-        roughness: 0.92,
-        metalness: 0.0,
+        emissiveMap: textures.therasonWall,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.34,
+        roughness: 0.45,
+        metalness: 0.04,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       })
     )
   );
+  wallLogo.castShadow = false;
+  wallLogo.receiveShadow = false;
   wallLogo.rotation.y = Math.PI / 2;
-  wallLogo.position.set(12.148, 1.43, 18.6);
+  wallLogo.position.set(12.154, 1.43, 18.6);
   clinicBuildingGroup.add(wallLogo);
 
   const wallCert = new THREE.Mesh(
@@ -2010,23 +2056,35 @@ export function buildClinicWorld3D(
   const canopyBlue = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(1.4, 0.08, 2.86)), wainscotBlueMat);
   canopyBlue.position.set(0.46, 3.14, 0);
 
-  // Prominent Glowing Blue "Therason Clinic" Facade Signboard
+  // Prominent Crisp High-Contrast "THERASON CLINIC" Facade Signboard
   const facadeSignMat = trackMat(
     makeMat({
       map: textures.therasonFacadeSign,
       emissiveMap: textures.therasonFacadeSign,
-      emissive: 0x3b82f6,
-      emissiveIntensity: 0.38,
-      roughness: 0.25,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.36,
+      roughness: 0.44,
+      metalness: 0.04,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     })
   );
-  const facadeBox = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.16, 1.02, 3.35)), darkMullionMat);
+  const facadeBox = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.16, 1.04, 3.38)), darkMullionMat);
   facadeBox.position.set(0.32, 3.74, 0);
   facadeBox.castShadow = true;
-  const facadeFace = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.03, 0.94, 3.24)), facadeSignMat);
-  facadeFace.position.set(0.41, 3.74, 0);
+  const facadeBacking = new THREE.Mesh(
+    trackGeom(new THREE.BoxGeometry(0.025, 0.96, 3.28)),
+    trackMat(makeMat({ color: 0x0c2348, roughness: 0.5, metalness: 0.08 }))
+  );
+  facadeBacking.position.set(0.408, 3.74, 0);
+  const facadeFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(3.26, 0.94)), facadeSignMat);
+  facadeFace.rotation.y = Math.PI / 2;
+  facadeFace.position.set(0.425, 3.74, 0);
+  facadeFace.castShadow = false;
+  facadeFace.receiveShadow = false;
 
-  entranceGroup.add(canopy, canopyGlow, canopyBlue, facadeBox, facadeFace);
+  entranceGroup.add(canopy, canopyGlow, canopyBlue, facadeBox, facadeBacking, facadeFace);
   clinicBuildingGroup.add(entranceGroup);
 
   // 7. Wild Untamed Perimeter Trees (oak, wild_fig, acacia, cypress, birch)
@@ -3447,42 +3505,77 @@ export function createCatalogMesh3D(
       if (glbDesk) {
         glbDesk.position.set(0, 0, 0.21);
         inner.add(glbDesk);
-        const ledApron = box(
-          1.45,
-          0.036,
-          0.036,
-          makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.85 }),
-          0,
-          0.075,
-          0.47
-        );
-        ledApron.userData.noCastShadow = true;
-        const mon = glbRegistry.cloneNormalized('furn_monitor', {
-          targetHeight: 0.29,
-          rotY: Math.PI,
-        });
-        if (mon) {
-          mon.position.set(RECEPTION_CHAIR_LOCAL_X, 0.715, 0.14);
-          inner.add(mon);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        // Procedural clinical reception desk fallback matching exact GLB footprint & 0.72m surface height
+        bevelBox(1.66, 0.046, 0.56, 0.02, 0.008, woodMat, 0, 0.695, 0.21);
+        box(1.56, 0.65, 0.44, whiteBody, 0, 0.34, 0.21);
+        box(1.48, 0.54, 0.04, blueUpholstery, 0, 0.36, 0.44);
+        for (const lx of [-0.75, 0.75]) {
+          box(0.06, 0.68, 0.5, darkSlate, lx, 0.34, 0.21);
         }
-        const lamp = glbRegistry.cloneNormalized('furn_lamp_desk', {
-          targetHeight: 0.26,
-          rotY: -0.6,
-        });
-        if (lamp) {
-          lamp.position.set(0.56, 0.715, 0.22);
-          inner.add(lamp);
+        // Right drawer pedestal
+        box(0.42, 0.58, 0.46, darkSlate, 0.5, 0.32, 0.19);
+        for (const dy of [0.22, 0.44]) {
+          box(0.14, 0.022, 0.022, silverMetal, 0.5, dy, -0.05);
         }
-        inner.add(deskFile);
+      }
 
-        const chair = glbRegistry.cloneNormalized('furn_chair_desk', {
-          targetHeight: 0.8,
-          rotY: 0,
-        });
-        if (chair) {
-          chair.position.set(RECEPTION_CHAIR_LOCAL_X, 0, RECEPTION_CHAIR_LOCAL_Z);
-          inner.add(chair);
-        }
+      const ledApron = box(
+        1.45,
+        0.036,
+        0.036,
+        makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.85 }),
+        0,
+        0.075,
+        0.47
+      );
+      ledApron.userData.noCastShadow = true;
+
+      const mon = glbRegistry.cloneNormalized('furn_monitor', {
+        targetHeight: 0.29,
+        rotY: Math.PI,
+      });
+      if (mon) {
+        mon.position.set(RECEPTION_CHAIR_LOCAL_X, 0.715, 0.14);
+        inner.add(mon);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        box(0.16, 0.018, 0.12, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.725, 0.14);
+        box(0.035, 0.09, 0.03, silverMetal, RECEPTION_CHAIR_LOCAL_X, 0.77, 0.14);
+        box(0.38, 0.23, 0.024, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.87, 0.14);
+        box(0.35, 0.195, 0.01, receptionScreenMat, RECEPTION_CHAIR_LOCAL_X, 0.87, 0.128).userData.noCastShadow = true;
+      }
+
+      const lamp = glbRegistry.cloneNormalized('furn_lamp_desk', {
+        targetHeight: 0.26,
+        rotY: -0.6,
+      });
+      if (lamp) {
+        lamp.position.set(0.56, 0.715, 0.22);
+        inner.add(lamp);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        cyl(0.06, 0.065, 0.02, darkSlate, 0.56, 0.725, 0.22);
+        cyl(0.012, 0.014, 0.18, silverMetal, 0.56, 0.82, 0.22);
+        cyl(0.05, 0.08, 0.08, cyanAccent, 0.54, 0.92, 0.22);
+      }
+
+      inner.add(deskFile);
+
+      const chair = glbRegistry.cloneNormalized('furn_chair_desk', {
+        targetHeight: 0.8,
+        rotY: 0,
+      });
+      if (chair) {
+        chair.position.set(RECEPTION_CHAIR_LOCAL_X, 0, RECEPTION_CHAIR_LOCAL_Z);
+        inner.add(chair);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        cyl(0.2, 0.2, 0.03, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.04, RECEPTION_CHAIR_LOCAL_Z);
+        cyl(0.025, 0.03, 0.34, silverMetal, RECEPTION_CHAIR_LOCAL_X, 0.21, RECEPTION_CHAIR_LOCAL_Z);
+        box(0.42, 0.07, 0.4, blueUpholstery, RECEPTION_CHAIR_LOCAL_X, 0.39, RECEPTION_CHAIR_LOCAL_Z);
+        box(0.38, 0.36, 0.06, blueUpholstery, RECEPTION_CHAIR_LOCAL_X, 0.61, RECEPTION_CHAIR_LOCAL_Z - 0.18);
       }
       outer.userData.receptionDesk = { deskFile } satisfies ReceptionDeskRigMeta;
       break;
@@ -3755,6 +3848,15 @@ export function createCatalogMesh3D(
       });
       if (glbTable) {
         inner.add(glbTable);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        bevelBox(0.68, 0.042, 0.56, 0.04, 0.008, woodMat, 0, 0.33, 0);
+        box(0.54, 0.02, 0.42, frostGlassMat, 0, 0.14, 0).userData.noCastShadow = true;
+        for (const lx of [-0.27, 0.27]) {
+          for (const lz of [-0.21, 0.21]) {
+            cyl(0.022, 0.016, 0.32, darkSlate, lx, 0.16, lz);
+          }
+        }
       }
       break;
     }
@@ -3937,6 +4039,22 @@ export function createCatalogMesh3D(
       });
       if (glbMedCab) {
         inner.add(glbMedCab);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        // Procedural composite glass-door medical supply cabinet
+        box(0.7, 0.08, 0.42, darkSlate, 0, 0.04, 0);
+        box(0.72, 1.32, 0.44, whiteBody, 0, 0.74, -0.01);
+        box(0.66, 0.04, 0.4, silverMetal, 0, 1.41, -0.01);
+        for (const sy of [0.46, 0.78, 1.08]) {
+          box(0.64, 0.02, 0.34, silverMetal, 0, sy, 0.01);
+        }
+        for (const dx of [-0.165, 0.165]) {
+          box(0.31, 0.88, 0.026, frostGlassMat, dx, 0.92, 0.215).userData.noCastShadow = true;
+          box(0.018, 0.14, 0.024, silverMetal, dx > 0 ? dx - 0.1 : dx + 0.1, 0.92, 0.235);
+        }
+        // Subtle teal medical cross emblem
+        box(0.09, 0.026, 0.014, cyanAccent, 0, 1.24, 0.22);
+        box(0.026, 0.09, 0.014, cyanAccent, 0, 1.24, 0.22);
       }
       break;
     }
@@ -3996,16 +4114,35 @@ export function createCatalogMesh3D(
         }
       };
 
+      const glbShelfYs = [0.186, 0.361, 0.536, 0.712, 0.887, 1.062];
       if (glbShelf) {
         inner.add(glbShelf);
-        // Bookshelf normalized to 1.24m has shelf surfaces cleanly at these Y heights
-        const glbShelfYs = [0.186, 0.361, 0.536, 0.712, 0.887, 1.062];
-        glbShelfYs.forEach((sy, idx) => populateShelfRow(sy, idx, 0.52, 0.165));
-        // Top archive tray with extra active patient charts
-        box(0.24, 0.04, 0.17, darkSlate, 0.14, 1.255, 0);
-        box(0.2, 0.022, 0.14, binderMats[0], 0.14, 1.275, 0);
-        box(0.19, 0.012, 0.13, labelMat, 0.14, 1.288, 0).userData.noCastShadow = true;
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        // Resilient composite open-shelf records bookcase matching exact 0.65m x 1.24m x 0.22m GLB frame
+        const shelfFrameMat = makeMat({ color: 0x475569, roughness: 0.42, metalness: 0.35 });
+        const shelfPlankMat = makeMat({ color: 0xe2e8f0, roughness: 0.48, metalness: 0.1 });
+        // Base plinth & corner leveling feet
+        box(0.64, 0.06, 0.22, darkSlate, 0, 0.03, 0);
+        // Side uprights + solid backplate
+        for (const sx of [-0.305, 0.305]) {
+          box(0.032, 1.22, 0.22, shelfFrameMat, sx, 0.62, 0);
+        }
+        box(0.62, 1.2, 0.018, shelfFrameMat, 0, 0.62, -0.102);
+        // 6 shelf planks aligned cleanly beneath each row of binders + top cap
+        for (const sy of glbShelfYs) {
+          box(0.58, 0.018, 0.21, shelfPlankMat, 0, sy - 0.009, 0);
+        }
+        box(0.65, 0.026, 0.23, shelfFrameMat, 0, 1.227, 0);
+        // Brushed teal index nameplate on top header rail
+        box(0.22, 0.022, 0.012, cyanAccent, -0.14, 1.228, 0.116).userData.noCastShadow = true;
       }
+
+      // Always populate patient chart binders, folders & top active archive tray even if GLB failed
+      glbShelfYs.forEach((sy, idx) => populateShelfRow(sy, idx, 0.52, 0.165));
+      box(0.24, 0.04, 0.17, darkSlate, 0.14, 1.255, 0);
+      box(0.2, 0.022, 0.14, binderMats[0], 0.14, 1.275, 0);
+      box(0.19, 0.012, 0.13, labelMat, 0.14, 1.288, 0).userData.noCastShadow = true;
       break;
     }
 
@@ -4016,6 +4153,30 @@ export function createCatalogMesh3D(
       });
       if (glbChair) {
         inner.add(glbChair);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        // Procedural composite clinical transport wheelchair
+        for (const wx of [-0.26, 0.26]) {
+          const bigWheel = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.02, 8, 20), blackRubber);
+          bigWheel.userData.sharedGlbMat = true;
+          bigWheel.rotation.y = Math.PI / 2;
+          bigWheel.position.set(wx, 0.22, -0.06);
+          inner.add(bigWheel);
+          const pushRim = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.008, 6, 16), silverMetal);
+          pushRim.userData.sharedGlbMat = true;
+          pushRim.rotation.y = Math.PI / 2;
+          pushRim.position.set(wx > 0 ? wx + 0.022 : wx - 0.022, 0.22, -0.06);
+          inner.add(pushRim);
+          const caster = cyl(0.055, 0.055, 0.024, blackRubber, wx * 0.85, 0.056, 0.24);
+          caster.rotation.z = Math.PI / 2;
+          // Vertical push handles + armrest frame
+          cyl(0.016, 0.016, 0.52, silverMetal, wx * 0.85, 0.48, -0.2);
+          cyl(0.02, 0.02, 0.09, blackRubber, wx * 0.85, 0.74, -0.24);
+          box(0.036, 0.036, 0.36, darkSlate, wx * 0.88, 0.54, -0.02);
+          box(0.026, 0.016, 0.14, silverMetal, wx * 0.72, 0.14, 0.26);
+        }
+        box(0.42, 0.045, 0.38, blueUpholstery, 0, 0.36, 0.0);
+        box(0.42, 0.34, 0.045, blueUpholstery, 0, 0.56, -0.18);
       }
       break;
     }
@@ -4044,14 +4205,28 @@ export function createCatalogMesh3D(
       });
       if (glbCorner) {
         inner.add(glbCorner);
-        const mon = glbRegistry.cloneNormalized('furn_monitor', {
-          targetHeight: 0.29,
-          rotY: Math.PI,
-        });
-        if (mon) {
-          mon.position.set(0.22, 0.625, -0.15);
-          inner.add(mon);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        bevelBox(1.66, 0.045, 0.58, 0.02, 0.008, woodMat, 0, 0.615, -0.1);
+        bevelBox(0.56, 0.045, 0.82, 0.02, 0.008, woodMat, -0.55, 0.615, 0.01);
+        for (const [lx, lz] of [[-0.78, -0.34], [0.78, -0.34], [-0.78, 0.36], [0.78, 0.16]]) {
+          cyl(0.024, 0.02, 0.6, silverMetal, lx, 0.3, lz);
         }
+        box(0.38, 0.5, 0.44, darkSlate, 0.56, 0.3, -0.1);
+      }
+      const mon = glbRegistry.cloneNormalized('furn_monitor', {
+        targetHeight: 0.29,
+        rotY: Math.PI,
+      });
+      if (mon) {
+        mon.position.set(0.22, 0.625, -0.15);
+        inner.add(mon);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        box(0.16, 0.016, 0.12, darkSlate, 0.22, 0.64, -0.15);
+        box(0.032, 0.08, 0.026, silverMetal, 0.22, 0.68, -0.15);
+        box(0.36, 0.22, 0.022, darkSlate, 0.22, 0.79, -0.15);
+        box(0.33, 0.185, 0.01, receptionScreenMat, 0.22, 0.79, -0.138).userData.noCastShadow = true;
       }
       break;
     }
@@ -5554,6 +5729,21 @@ export function createCatalogMesh3D(
       if (glbPlant) {
         glbPlant.position.y = 0.02;
         inner.add(glbPlant);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        cyl(0.19, 0.14, 0.26, ceramicPot, 0, 0.16, 0);
+        cyl(0.175, 0.175, 0.03, soilMat, 0, 0.28, 0);
+        cyl(0.022, 0.032, 0.32, barkMat, 0, 0.42, 0);
+        const foliagePuffs: Array<[number, number, number, number]> = [
+          [0, 0.66, 0, 0.18],
+          [-0.12, 0.58, 0.09, 0.14],
+          [0.13, 0.6, -0.07, 0.14],
+          [0.04, 0.76, 0.06, 0.13],
+          [-0.08, 0.7, -0.1, 0.12],
+        ];
+        for (const [fx, fy, fz, fr] of foliagePuffs) {
+          sphereCap(fr, leafGreen, fx, fy, fz);
+        }
       }
       break;
     }
@@ -5691,9 +5881,14 @@ export function createCatalogMesh3D(
       });
       if (glbLamp) {
         inner.add(glbLamp);
-        const bulb = cyl(0.08, 0.105, 0.14, bulbMat, 0, 1.26, 0);
-        bulb.userData.noCastShadow = true;
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        cyl(0.18, 0.19, 0.035, darkSlate, 0, 0.018, 0);
+        cyl(0.018, 0.024, 1.2, silverMetal, 0, 0.62, 0);
+        cyl(0.14, 0.19, 0.24, whiteBody, 0, 1.32, 0);
       }
+      const bulb = cyl(0.08, 0.105, 0.14, bulbMat, 0, 1.26, 0);
+      bulb.userData.noCastShadow = true;
       addFloorHalo(2.35, 0xffe4b3, 0.45, 0, 0.026, 0);
       addBulbAura(0.25, 0xffe8bf, 0.32, 0, 1.28, 0);
       outer.userData.smartLight = {
@@ -5722,6 +5917,10 @@ export function createCatalogMesh3D(
       if (glbWallLamp) {
         glbWallLamp.position.set(-0.34, 1.38, 0);
         inner.add(glbWallLamp);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        box(0.032, 0.22, 0.14, darkSlate, -0.384, 1.44, 0);
+        box(0.11, 0.03, 0.04, silverMetal, -0.33, 1.44, 0);
       }
       const glassShade = cyl(0.065, 0.085, 0.18, sconceMat, -0.28, 1.5, 0);
       glassShade.userData.noCastShadow = true;
@@ -5758,9 +5957,14 @@ export function createCatalogMesh3D(
       if (glbDeskLamp) {
         glbDeskLamp.position.set(0, 0.49, 0);
         inner.add(glbDeskLamp);
-        const core = cyl(0.07, 0.09, 0.12, tableGlowMat, 0, 0.78, 0);
-        core.userData.noCastShadow = true;
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        cyl(0.08, 0.09, 0.03, darkSlate, 0, 0.505, 0);
+        cyl(0.016, 0.02, 0.22, silverMetal, 0, 0.62, 0);
+        cyl(0.09, 0.135, 0.16, whiteBody, 0, 0.78, 0);
       }
+      const core = cyl(0.07, 0.09, 0.12, tableGlowMat, 0, 0.78, 0);
+      core.userData.noCastShadow = true;
       addFloorHalo(2.15, 0xffe2ad, 0.4, 0, 0.026, 0);
       addBulbAura(0.21, 0xffe9be, 0.34, 0, 0.78, 0);
       inner.scale.setScalar(0.84);
@@ -6894,6 +7098,11 @@ export function createCatalogMesh3D(
       });
       if (glbTrash) {
         inner.add(glbTrash);
+      } else {
+        outer.userData.usesFallbackGlb = true;
+        cyl(0.145, 0.12, 0.36, silverMetal, 0, 0.18, 0);
+        cyl(0.148, 0.148, 0.024, darkSlate, 0, 0.365, 0);
+        box(0.07, 0.02, 0.05, blackRubber, 0, 0.015, 0.135);
       }
       break;
     }

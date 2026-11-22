@@ -6,7 +6,36 @@ const STORE_NAME = 'clinic_state';
 const RECORD_KEY = 'active_clinic';
 const LS_BACKUP_KEY = 'therason_clinic_backup_v1';
 
+type StoredClinicEnvelope = ClinicSaveState & { _savedAt?: number };
+
 let cachedDbPromise: Promise<IDBDatabase | null> | null = null;
+let lastSavedFingerprint = '';
+
+function computeQuickFingerprint(state: ClinicSaveState): string {
+  const mSig = state.missions.map((m) => `${m.progress}:${m.claimed ? 1 : 0}`).join(',');
+  return [
+    state.version,
+    state.language,
+    state.soundEnabled ? 1 : 0,
+    state.lightingMode || 'day',
+    state.coins,
+    state.stars,
+    state.xp || 0,
+    state.level || 1,
+    state.satisfaction,
+    state.patientsTreatedTotal,
+    state.redFlagsCaughtTotal,
+    state.placedItems.length,
+    state.rooms.filter((r) => r.unlocked).length,
+    state.staff.filter((s) => s.hired).length,
+    (state.removedTreeIds || []).length,
+    mSig,
+    state.playerProfile?.gender || '',
+    state.playerProfile?.outfitId || '',
+    state.playerProfile?.hasTarha ? 1 : 0,
+    state.placedItems.map((p) => `${p.instanceId}@${p.gridX},${p.gridY},${p.rotation}`).join(';'),
+  ].join('|');
+}
 
 function openDatabase(): Promise<IDBDatabase | null> {
   if (cachedDbPromise) return cachedDbPromise;
@@ -36,35 +65,59 @@ function openDatabase(): Promise<IDBDatabase | null> {
   return cachedDbPromise;
 }
 
+/**
+ * Synchronous frame-0 hydration from localStorage mirror so missions, rooms,
+ * profile, and language are available immediately before IndexedDB resolves.
+ */
+export function loadClinicLocalSync(): ClinicSaveState | null {
+  try {
+    const raw = localStorage.getItem(LS_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredClinicEnvelope;
+    if (parsed && Array.isArray(parsed.rooms) && Array.isArray(parsed.placedItems)) {
+      return parsed;
+    }
+  } catch {
+    // Ignore storage read / JSON parse errors
+  }
+  return null;
+}
+
 export async function loadClinicLocal(): Promise<ClinicSaveState | null> {
+  const lsState = loadClinicLocalSync() as StoredClinicEnvelope | null;
+  let idbState: StoredClinicEnvelope | null = null;
+
   const db = await openDatabase();
   if (db) {
     try {
-      const result = await new Promise<ClinicSaveState | null>((resolve) => {
+      idbState = await new Promise<StoredClinicEnvelope | null>((resolve) => {
         const tx = db.transaction(STORE_NAME, 'readonly');
         const store = tx.objectStore(STORE_NAME);
         const req = store.get(RECORD_KEY);
-        req.onsuccess = () => resolve((req.result as ClinicSaveState) || null);
+        req.onsuccess = () => resolve((req.result as StoredClinicEnvelope) || null);
         req.onerror = () => resolve(null);
       });
-      if (result) return result;
     } catch {
-      // Fallback to localStorage
+      idbState = null;
     }
   }
 
-  try {
-    const raw = localStorage.getItem(LS_BACKUP_KEY);
-    return raw ? (JSON.parse(raw) as ClinicSaveState) : null;
-  } catch {
-    return null;
+  if (idbState && lsState) {
+    return (lsState._savedAt || 0) > (idbState._savedAt || 0) ? lsState : idbState;
   }
+  return idbState || lsState || null;
 }
 
-export async function saveClinicLocal(state: ClinicSaveState): Promise<void> {
+export async function saveClinicLocal(state: ClinicSaveState, force = false): Promise<void> {
+  const fp = computeQuickFingerprint(state);
+  if (!force && fp === lastSavedFingerprint) return;
+  lastSavedFingerprint = fp;
+
+  const envelope: StoredClinicEnvelope = { ...state, _savedAt: Date.now() };
+
   // Compact payload for zero-lag mobile storage
   try {
-    localStorage.setItem(LS_BACKUP_KEY, JSON.stringify(state));
+    localStorage.setItem(LS_BACKUP_KEY, JSON.stringify(envelope));
   } catch {
     // Ignore quota errors
   }
@@ -76,7 +129,7 @@ export async function saveClinicLocal(state: ClinicSaveState): Promise<void> {
     await new Promise<void>((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const req = store.put(state, RECORD_KEY);
+      const req = store.put(envelope, RECORD_KEY);
       req.onsuccess = () => resolve();
       req.onerror = () => resolve();
     });

@@ -1369,48 +1369,103 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 11. Reception back wall THERASON architectural panel (1024x280 crisp print)
+  // 11. Reception back wall THERASON architectural panel (2048x576 crisp hi-DPI print)
   const therasonWall = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 280);
-    ctx.scale(1024 / 1536, 280 / 420);
-    ctx.fillStyle = '#f8fafc';
-    ctx.fillRect(0, 0, 1536, 420);
+    const W = 2048;
+    const H = 576;
+    const [c, ctx] = makeCanvas(W, H);
 
-    // Simple clean architectural border & cyan accent rule
-    ctx.strokeStyle = '#0f294a';
-    ctx.lineWidth = 8;
-    ctx.strokeRect(10, 10, 1516, 400);
+    const drawTherasonWall = () => {
+      ctx.save();
+      ctx.clearRect(0, 0, W, H);
 
-    ctx.fillStyle = '#0284c7';
-    ctx.fillRect(36, 354, 1464, 14);
+      // Deep architectural midnight-navy panel so crisp white lettering pops cleanly off pale clinic plaster
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+      bgGrad.addColorStop(0, '#0a1f3d');
+      bgGrad.addColorStop(0.55, '#0f2b52');
+      bgGrad.addColorStop(1, '#091b36');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, W, H);
 
-    // Clean emblem without glowing halo
-    drawTherasonMark(ctx, 195, 195, 3.6, '#0284c7', '#16a34a');
+      // Subtle architectural bevel border & bright cyan medical inner rule
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 10;
+      ctx.strokeRect(18, 18, W - 36, H - 36);
 
-    // Bold high-contrast THERASON lettering (no shadowBlur/glow)
-    ctx.fillStyle = '#0b223e';
-    ctx.font = '900 132px "Plus Jakarta Sans", Arial, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    const word = 'THERASON';
-    let cursorX = 330;
-    for (let i = 0; i < word.length; i++) {
-      const ch = word[i];
-      ctx.fillText(ch, cursorX, 162);
-      cursorX += ctx.measureText(ch).width + 12;
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.35)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(34, 34, W - 68, H - 68);
+
+      // Left emblem badge backdrop & crisp white/emerald biomechanical mark
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      ctx.beginPath();
+      ctx.arc(248, 276, 128, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.45)';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      drawTherasonMark(ctx, 252, 278, 5.1, '#ffffff', '#4ade80');
+
+      // High-contrast crisp THERASON title (weight 800 matches loaded Google Font)
+      ctx.direction = 'ltr';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = '800 176px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      const word = 'THERASON';
+      const letterGap = 18;
+      let cursorX = 432;
+      const titleY = 224;
+      for (let i = 0; i < word.length; i++) {
+        const ch = word[i];
+        // Crisp dark relief shadow (zero blur) + pure white foreground stroke & fill
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.65)';
+        ctx.fillText(ch, cursorX + 4, titleY + 5);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(ch, cursorX, titleY);
+        cursorX += ctx.measureText(ch).width + letterGap;
+      }
+
+      // Accent gradient divider line between title and subtitle
+      const divGrad = ctx.createLinearGradient(432, 0, Math.max(cursorX - letterGap, 1820), 0);
+      divGrad.addColorStop(0, '#38bdf8');
+      divGrad.addColorStop(0.55, '#22c55e');
+      divGrad.addColorStop(1, 'rgba(56, 189, 248, 0.25)');
+      ctx.fillStyle = divGrad;
+      ctx.fillRect(432, 336, 1460, 8);
+
+      // Crisp, high-legibility clinical subtitle
+      ctx.font = '700 50px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      const subText = 'CLINICAL REHAB & SPORTS CARE';
+      let subX = 436;
+      const subY = 414;
+      for (let i = 0; i < subText.length; i++) {
+        const sch = subText[i];
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.5)';
+        ctx.fillText(sch, subX + 2, subY + 2);
+        ctx.fillStyle = '#bae6fd';
+        ctx.fillText(sch, subX, subY);
+        subX += ctx.measureText(sch).width + 3;
+      }
+
+      ctx.restore();
+    };
+
+    drawTherasonWall();
+    const tex = track(finalizeTexture(c, aniso, 1, 1, true, true));
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (disposed) return;
+        drawTherasonWall();
+        tex.needsUpdate = true;
+      });
     }
 
-    // Simple crisp subtitle
-    ctx.fillStyle = '#334155';
-    ctx.font = '700 36px "Plus Jakarta Sans", Arial, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('CLINICAL REHAB & SPORTS CARE', 336, 278);
-
-    const tex = track(finalizeTexture(c, aniso, 1, 1, true, true));
-    tex.generateMipmaps = true;
     return tex;
   })();
 
@@ -1517,32 +1572,82 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 12b. Illuminated Main Entrance Facade Sign ("Therason Clinic", 640x180)
+  // 12b. Illuminated Main Entrance Facade Sign ("THERASON CLINIC", 1536x432 hi-DPI print)
   const therasonFacadeSign = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(640, 180);
-    const grad = ctx.createLinearGradient(0, 0, 640, 180);
-    grad.addColorStop(0, '#1e40af');
-    grad.addColorStop(0.5, '#2563eb');
-    grad.addColorStop(1, '#0284c7');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 640, 180);
+    const W = 1536;
+    const H = 432;
+    const [c, ctx] = makeCanvas(W, H);
 
-    ctx.strokeStyle = '#bae6fd';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(5, 5, 630, 170);
+    const drawFacadeSign = () => {
+      ctx.save();
+      ctx.clearRect(0, 0, W, H);
+      const grad = ctx.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, '#0c2348');
+      grad.addColorStop(0.5, '#13376e');
+      grad.addColorStop(1, '#0b325c');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
 
-    drawTherasonMark(ctx, 118, 92, 2.7, '#ffffff', '#4ade80');
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '800 52px "Plus Jakarta Sans", sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Therason', 186, 68);
-    ctx.font = '700 44px "Plus Jakarta Sans", sans-serif';
-    ctx.fillStyle = '#e0f2fe';
-    ctx.fillText('Clinic', 220, 124);
-    return track(finalizeTexture(c, aniso, 1, 1, true, true));
+      ctx.strokeStyle = '#7dd3fc';
+      ctx.lineWidth = 12;
+      ctx.strokeRect(12, 12, W - 24, H - 24);
+
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      ctx.beginPath();
+      ctx.arc(215, 216, 108, 0, Math.PI * 2);
+      ctx.fill();
+      drawTherasonMark(ctx, 220, 218, 4.5, '#ffffff', '#4ade80');
+
+      ctx.direction = 'ltr';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+
+      ctx.font = '800 140px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      const title = 'THERASON';
+      let tx = 382;
+      for (let i = 0; i < title.length; i++) {
+        const ch = title[i];
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.6)';
+        ctx.fillText(ch, tx + 3, 166);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(ch, tx, 162);
+        tx += ctx.measureText(ch).width + 12;
+      }
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(384, 248, 990, 6);
+
+      ctx.font = '700 72px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      const sub = 'PHYSIOTHERAPY CLINIC';
+      let sx = 388;
+      for (let i = 0; i < sub.length; i++) {
+        const sch = sub[i];
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.5)';
+        ctx.fillText(sch, sx + 2, 322);
+        ctx.fillStyle = '#bae6fd';
+        ctx.fillText(sch, sx, 320);
+        sx += ctx.measureText(sch).width + 5;
+      }
+      ctx.restore();
+    };
+
+    drawFacadeSign();
+    const tex = track(finalizeTexture(c, aniso, 1, 1, true, true));
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (disposed) return;
+        drawFacadeSign();
+        tex.needsUpdate = true;
+      });
+    }
+
+    return tex;
   })();
 
   // 13. Framed Anatomy Poster (576x768 sharp clinical anatomical illustration)

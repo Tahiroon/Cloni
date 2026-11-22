@@ -153,7 +153,7 @@ function getCatalogThumbKey(sprite: SpriteKind, width: number, depth: number): s
 }
 
 export function getMissingCatalogThumbSpecs(specs: CatalogThumbSpec[]): CatalogThumbSpec[] {
-  const glbIsReady = glbRegistry.ready;
+  const glbIsReady = glbRegistry.coreReady;
   const deduped = new Map<string, CatalogThumbSpec>();
   for (const s of specs) {
     const key = getCatalogThumbKey(s.sprite, s.width, s.depth);
@@ -272,7 +272,7 @@ function acquireSharedThumbSession(width: number, height: number): SharedThumbSe
  * offscreen WebGLRenderer, persists them in IndexedDB, and disposes after idle timeout.
  */
 export function renderThumbBatch(specs: CatalogThumbSpec[]): void {
-  const glbIsReady = glbRegistry.ready;
+  const glbIsReady = glbRegistry.coreReady;
   const missing = getMissingCatalogThumbSpecs(specs);
   if (missing.length === 0) return;
 
@@ -431,7 +431,7 @@ export function useCatalogThumb(
     void hydrateThumbCacheFromIdb().then(() => {
       if (!mounted) return;
       update();
-      unsubGlb = glbRegistry.onReady(() => {
+      unsubGlb = glbRegistry.onCoreReady(() => {
         if (!glbRenderedKeys.has(key)) {
           scheduleThumbRender({ sprite, width, depth });
         }

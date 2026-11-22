@@ -639,6 +639,8 @@ export interface ReceptionDeskPose {
   seatHeight: number;
   deskFileWorldX: number;
   deskFileWorldZ: number;
+  deskFrontWorldX: number;
+  deskFrontWorldZ: number;
   approachCandidates: Array<{ x: number; y: number }>;
   placeCandidates: Array<{ x: number; y: number }>;
   checkinCandidates: Array<{ x: number; y: number }>;
@@ -663,6 +665,7 @@ export function getReceptionDeskPose(desk: PlacedItem): ReceptionDeskPose {
     RECEPTION_CHAIR_LOCAL_X - 0.3,
     0.08
   );
+  const deskFrontPt = rotateItemLocalPoint(desk, 2, 1, 0, 1.35);
   const seatFacingRad = (-desk.rotation * Math.PI) / 2;
   const localApproaches: Array<[number, number]> = [
     [-0.23, -0.78],
@@ -680,9 +683,12 @@ export function getReceptionDeskPose(desk: PlacedItem): ReceptionDeskPose {
     [1.12, 0.06],
   ];
   const localCheckins: Array<[number, number]> = [
-    [0.0, 0.86],
-    [-0.48, 0.86],
-    [0.52, 0.86],
+    [0.0, 0.88],
+    [-0.58, 0.88],
+    [0.58, 0.88],
+    [-1.08, 0.56],
+    [1.08, 0.56],
+    [0.0, 1.42],
   ];
 
   return {
@@ -694,6 +700,8 @@ export function getReceptionDeskPose(desk: PlacedItem): ReceptionDeskPose {
     seatHeight: RECEPTION_CHAIR_SEAT_HEIGHT,
     deskFileWorldX: deskFilePt.x,
     deskFileWorldZ: deskFilePt.z,
+    deskFrontWorldX: deskFrontPt.x,
+    deskFrontWorldZ: deskFrontPt.z,
     approachCandidates: localApproaches.map(([lx, lz]) => {
       const p = rotateItemLocalPoint(desk, 2, 1, lx, lz);
       return { x: p.x - 0.5, y: p.z - 0.5 };
