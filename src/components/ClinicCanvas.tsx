@@ -67,6 +67,7 @@ import {
   getFppEquipCarrySpec,
   hasDeviceInteractiveScreen,
   hasDeviceProbes,
+  isContinuousHandheldDevice,
 } from '../engine3d/fppEquipment3d';
 import {
   createFppClinicianHands3D,
@@ -958,10 +959,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       handshakeTargetCamY: -0.145,
       handshakeTargetCamZ: -0.42,
       probePressBlend: 0,
+      probeReleaseBlend: 0,
+      probeAxisCamX: 0,
+      probeAxisCamY: 1,
+      probeAxisCamZ: 0,
       probeActionMode: 'pad',
     };
     const _probeHandWorld = new THREE.Vector3();
     const _probeHandCam = new THREE.Vector3();
+    const _probeAxisWorld = new THREE.Vector3(0, 1, 0);
+    const _probeAxisCam = new THREE.Vector3(0, 1, 0);
     const _hsHandWorld = new THREE.Vector3();
     const _hsHandCam = new THREE.Vector3();
 
@@ -1871,6 +1878,23 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         return;
       }
 
+      const prevRunning = entry.isRunning;
+      const incomingAnchors = next.probeAnchors ?? entry.probeAnchors;
+      const hasAnyProbePlaced = incomingAnchors.some((a) => a.placed);
+
+      if (next.isRunning && isContinuousHandheldDevice(entry.sprite) && !hasAnyProbePlaced) {
+        if (next.probeAnchors) {
+          entry.probeAnchors = cloneProbeAnchors(next.probeAnchors);
+        }
+        entry.isRunning = false;
+        entry.selectedProbeId = entry.probeAnchors[0]?.id ?? 'head';
+        emitAttachedDevicesForActiveFpp();
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildActiveDevicePayload(entry, false)
+        );
+        return;
+      }
+
       if (next.isRunning && (entry.deviceParams.timerRemainingSec ?? 0) <= 0) {
         entry.deviceParams.timerRemainingSec = Math.max(60, (entry.deviceParams.timerMin ?? 15) * 60);
       }
@@ -1887,10 +1911,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fppProbeReticleGroup.visible = false;
       }
 
-      if (next.screenTapped || next.isRunning !== entry.isRunning || next.deviceParams) {
-        if (next.screenTapped) {
-          fppCamRef.current.consoleTapPulse = 1.0;
-        }
+      if (next.screenTapped || prevRunning !== entry.isRunning) {
+        fppCamRef.current.consoleTapPulse = 1.0;
       }
 
       emitAttachedDevicesForActiveFpp();
@@ -3514,7 +3536,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       act.probeId = targetProbeId;
       act.sprite = targetEntry.sprite;
       act.elapsed = 0;
-      act.duration = 0.44;
+      act.duration = 0.56;
       act.bayX = hit.bayX;
       act.bayY = hit.bayY;
       act.bayZ = hit.bayZ;
@@ -6937,8 +6959,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           fpp.focusOrbitPitch = THREE.MathUtils.damp(fpp.focusOrbitPitch, fpp.focusTargetOrbitPitch, 10, dt);
           const theta = (frontSign > 0 ? 0 : Math.PI) + defaultAngle + fpp.focusOrbitYaw;
 
-          // Smooth step/lean-in toward patient while placing probes/electrodes so clinician hands reach the body naturally
+          // Smooth step/lean-in toward patient while placing probes/electrodes or holding an active wand
           const probeActNow = fppProbeActionRef.current;
+          const activeAnchor0 =
+            focusEntry && isContinuousHandheldDevice(focusEntry.sprite)
+              ? focusEntry.probeAnchors[0]
+              : undefined;
+          const isHoldingPlacedWand = Boolean(activeAnchor0?.placed);
           const isPlacingProbeNow =
             probeActNow.active ||
             fppProbeDragRef.current.active ||
@@ -6947,8 +6974,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             probeActNow.active || fppProbeDragRef.current.active
               ? 1
               : probeReticleHoverActive && curActiveForCam.selectedProbeId
-                ? 0.48
-                : 0;
+                ? 0.52
+                : isHoldingPlacedWand
+                  ? 0.82
+                  : 0;
           fpp.probeLeanBlend = THREE.MathUtils.damp(fpp.probeLeanBlend, leanGoal, 7.5, dt);
           if (probeActNow.active) {
             fpp.probeLeanX = THREE.MathUtils.damp(fpp.probeLeanX, probeActNow.bayX, 11, dt);
@@ -6958,6 +6987,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             fpp.probeLeanX = THREE.MathUtils.damp(fpp.probeLeanX, fppProbeReticleGroup.position.x, 11, dt);
             fpp.probeLeanY = THREE.MathUtils.damp(fpp.probeLeanY, fppProbeReticleGroup.position.y, 11, dt);
             fpp.probeLeanZ = THREE.MathUtils.damp(fpp.probeLeanZ, fppProbeReticleGroup.position.z, 11, dt);
+          } else if (isHoldingPlacedWand && activeAnchor0) {
+            fpp.probeLeanX = THREE.MathUtils.damp(fpp.probeLeanX, activeAnchor0.bayX, 7, dt);
+            fpp.probeLeanY = THREE.MathUtils.damp(fpp.probeLeanY, activeAnchor0.bayY, 7, dt);
+            fpp.probeLeanZ = THREE.MathUtils.damp(fpp.probeLeanZ, activeAnchor0.bayZ, 7, dt);
           } else if (!isPlacingProbeNow) {
             fpp.probeLeanX = THREE.MathUtils.damp(fpp.probeLeanX, pBayX, 6, dt);
             fpp.probeLeanY = THREE.MathUtils.damp(fpp.probeLeanY, pBayY, 6, dt);
@@ -7058,8 +7091,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fppBackdrop.group.updateMatrixWorld(true);
         _bayNrmMat.getNormalMatrix(fppBackdrop.group.matrixWorld);
         let heldEntry: FppBayEquipEntry | null = null;
+        let holdingHandheldEntry: FppBayEquipEntry | null = null;
         let postureEjectedAny = false;
         let timerStateChangedAny = false;
+        let handheldHolsteredAny = false;
         let shouldPushActiveTimerUi = false;
         const curActiveDevice = latestRef.current.fppActiveDevice;
         const sync1HzTick = tSec - lastTimerUiSyncAt >= 0.48;
@@ -7083,6 +7118,35 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                   (!curAct.instanceId && curAct.catalogId === eq.catalogId))
               ) {
                 latestRef.current.onFppActiveBedDeviceChange?.(null);
+              }
+            }
+          }
+
+          // Continuous handheld devices require bedside presence; auto-pause & holster if student walks away or switches focus while unstarted
+          if (eq.mode === 'placed_bed' && isContinuousHandheldDevice(eq.sprite)) {
+            const a0 = eq.probeAnchors[0];
+            if (a0?.placed) {
+              const distToTarget = Math.hypot(camBayX - a0.bayX, camBayZ - a0.bayZ);
+              const isCurActiveEq = Boolean(
+                curActiveDevice &&
+                  (curActiveDevice.instanceId === eq.instanceId ||
+                    (!curActiveDevice.instanceId && curActiveDevice.catalogId === eq.catalogId))
+              );
+              if ((!eq.isRunning && !isCurActiveEq) || (!focusActive && distToTarget > 1.24)) {
+                eq.isRunning = false;
+                for (let pi = 0; pi < eq.probeAnchors.length; pi++) {
+                  eq.probeAnchors[pi].placed = false;
+                }
+                handheldHolsteredAny = true;
+                if (isCurActiveEq) {
+                  shouldPushActiveTimerUi = true;
+                }
+              } else if (
+                !holdingHandheldEntry ||
+                isCurActiveEq ||
+                (eq.isRunning && !holdingHandheldEntry.isRunning)
+              ) {
+                holdingHandheldEntry = eq;
               }
             }
           }
@@ -7234,7 +7298,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               t.attachBlend = 1;
               if (actMatchingEquip && actRef.probeId === a.id && !a.placed) {
                 const u = THREE.MathUtils.clamp(actRef.elapsed / Math.max(0.01, actRef.duration), 0, 1);
-                const app = THREE.MathUtils.clamp(u / 0.52, 0, 1);
+                const app = THREE.MathUtils.clamp(u / 0.44, 0, 1);
                 t.holding = true;
                 t.attachBlend = app * app * (3 - 2 * app);
                 _probePosWorld
@@ -7322,7 +7386,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           }
         }
 
-        if (postureEjectedAny || timerStateChangedAny) {
+        if (postureEjectedAny || timerStateChangedAny || handheldHolsteredAny) {
           emitAttachedDevicesForActiveFpp();
         }
 
@@ -7470,22 +7534,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         // Advance clinician probe attach & bedside device mounting timers
         const probeAct = fppProbeActionRef.current;
         let probePressAmt = 0;
+        let probeReleaseAmt = 0;
         if (probeAct.setupTimer > 0) {
           probeAct.setupTimer = Math.max(0, probeAct.setupTimer - dt);
         }
         if (probeAct.active) {
           probeAct.elapsed += dt;
           const u = probeAct.elapsed / Math.max(0.01, probeAct.duration);
-          if (u >= 0.52 && !probeAct.committed) {
+          if (u >= 0.44 && !probeAct.committed) {
             commitActiveProbeAction();
           }
           if (u >= 1) {
             probeAct.active = false;
           } else {
-            // Smooth press peak around contact (u ~ 0.48..0.68)
-            const pOn = THREE.MathUtils.clamp((u - 0.34) / 0.18, 0, 1);
-            const pOff = THREE.MathUtils.clamp((u - 0.70) / 0.26, 0, 1);
-            probePressAmt = (pOn * pOn * (3 - 2 * pOn)) * (1 - pOff * pOff * (3 - 2 * pOff));
+            // Smooth 3-stage gesture: carry -> skin press/smooth (u ~ 0.28..0.68) -> gentle lift-off (pads/wraps only)
+            const pOn = THREE.MathUtils.clamp((u - 0.28) / 0.16, 0, 1);
+            const pOff = THREE.MathUtils.clamp((u - 0.68) / 0.28, 0, 1);
+            const smoothOff = pOff * pOff * (3 - 2 * pOff);
+            const keepHeld = isContinuousHandheldDevice(probeAct.sprite);
+            probePressAmt = (pOn * pOn * (3 - 2 * pOn)) * (keepHeld ? 1 : 1 - smoothOff);
+            probeReleaseAmt = keepHeld ? 0 : smoothOff;
           }
         }
 
@@ -7496,12 +7564,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             curActiveDevice.selectedProbeId
         );
         const setupActiveNow = probeAct.setupTimer > 0 && !heldEntry;
-        const activeProbeInteract =
+        const isPlacingOrAdjusting =
           isDraggingProbeNow ||
           probeAct.active ||
           setupActiveNow ||
           hasSelectedProbeNow ||
           probeReticleHoverActive;
+        const holdingHandheldNow = Boolean(holdingHandheldEntry && !heldEntry);
+        const activeProbeInteract = isPlacingOrAdjusting || holdingHandheldNow;
 
         _fppInteractionScratch.velRight = fpp.velRight;
         _fppInteractionScratch.velForward = fpp.velFwd;
@@ -7511,8 +7581,20 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         _fppInteractionScratch.isDraggingProbe = isDraggingProbeNow;
         _fppInteractionScratch.hasSelectedProbe = activeProbeInteract;
         _fppInteractionScratch.consoleTapPulse = fpp.consoleTapPulse;
-        _fppInteractionScratch.activeDeviceSprite = curActiveDevice?.sprite ?? null;
-        _fppInteractionScratch.probePressBlend = probePressAmt;
+        _fppInteractionScratch.activeDeviceSprite =
+          holdingHandheldNow && !isPlacingOrAdjusting
+            ? holdingHandheldEntry!.sprite
+            : curActiveDevice?.sprite ?? null;
+        _fppInteractionScratch.probePressBlend =
+          probeAct.active
+            ? probePressAmt
+            : holdingHandheldNow && !isPlacingOrAdjusting
+              ? holdingHandheldEntry!.isRunning
+                ? 0.58
+                : 0.25
+              : probePressAmt;
+        _fppInteractionScratch.probeReleaseBlend =
+          probeAct.active && !setupActiveNow ? probeReleaseAmt : 0;
         _fppInteractionScratch.probeActionMode =
           probeAct.active
             ? resolveProbeActionMode(probeAct.sprite)
@@ -7520,24 +7602,113 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               ? resolveProbeActionMode(curActiveDevice.sprite)
               : setupActiveNow
                 ? 'setup'
-                : 'pad';
+                : holdingHandheldNow
+                  ? 'hold_wand'
+                  : 'pad';
 
         if (activeProbeInteract) {
           camera.updateMatrixWorld(false);
           fppBackdrop.group.updateMatrixWorld(false);
-          if (probeAct.active) {
-            _probeHandWorld.set(probeAct.bayX, probeAct.bayY, probeAct.bayZ).applyMatrix4(fppBackdrop.group.matrixWorld);
+          let resolvedGripWorld = false;
+          let resolvedAxisWorld = false;
+          if (holdingHandheldNow && !isPlacingOrAdjusting && holdingHandheldEntry) {
+            const tHold = fppProbeTargetsPool.get(holdingHandheldEntry.instanceId)?.[0];
+            if (
+              tHold &&
+              tHold.gripWorldX !== undefined &&
+              tHold.gripWorldY !== undefined &&
+              tHold.gripWorldZ !== undefined
+            ) {
+              _probeHandWorld.set(tHold.gripWorldX, tHold.gripWorldY, tHold.gripWorldZ);
+              resolvedGripWorld = true;
+              if (
+                tHold.gripAxisX !== undefined &&
+                tHold.gripAxisY !== undefined &&
+                tHold.gripAxisZ !== undefined
+              ) {
+                _probeAxisWorld.set(tHold.gripAxisX, tHold.gripAxisY, tHold.gripAxisZ);
+                resolvedAxisWorld = true;
+              }
+            } else {
+              const a0 = holdingHandheldEntry.probeAnchors[0];
+              if (a0?.placed) {
+                _probeHandWorld.set(a0.bayX, a0.bayY, a0.bayZ).applyMatrix4(fppBackdrop.group.matrixWorld);
+                resolvedGripWorld = true;
+              }
+            }
+          } else if (probeAct.active) {
+            const actPool = fppProbeTargetsPool.get(probeAct.instanceId);
+            const actTarget = actPool?.find((pt) => pt.id === probeAct.probeId);
+            if (
+              actTarget &&
+              actTarget.gripWorldX !== undefined &&
+              actTarget.gripWorldY !== undefined &&
+              actTarget.gripWorldZ !== undefined
+            ) {
+              _probeHandWorld.set(actTarget.gripWorldX, actTarget.gripWorldY, actTarget.gripWorldZ);
+              resolvedGripWorld = true;
+              if (
+                actTarget.gripAxisX !== undefined &&
+                actTarget.gripAxisY !== undefined &&
+                actTarget.gripAxisZ !== undefined
+              ) {
+                _probeAxisWorld.set(actTarget.gripAxisX, actTarget.gripAxisY, actTarget.gripAxisZ);
+                resolvedAxisWorld = true;
+              }
+            } else {
+              _probeHandWorld.set(probeAct.bayX, probeAct.bayY, probeAct.bayZ).applyMatrix4(fppBackdrop.group.matrixWorld);
+              resolvedGripWorld = true;
+            }
           } else if (probeReticleHoverActive) {
-            _probeHandWorld.copy(fppProbeReticleGroup.position).applyMatrix4(fppBackdrop.group.matrixWorld);
+            const selEq =
+              curActiveDevice?.instanceId
+                ? fppEquipBayMap.get(curActiveDevice.instanceId)
+                : curActiveDevice?.catalogId
+                  ? resolveBayEntry(curActiveDevice.catalogId)
+                  : undefined;
+            const selPool = selEq ? fppProbeTargetsPool.get(selEq.instanceId) : undefined;
+            const selTarget = selPool?.find((pt) => pt.id === selEq?.selectedProbeId);
+            if (
+              selTarget &&
+              selTarget.gripWorldX !== undefined &&
+              selTarget.gripWorldY !== undefined &&
+              selTarget.gripWorldZ !== undefined
+            ) {
+              _probeHandWorld.set(selTarget.gripWorldX, selTarget.gripWorldY, selTarget.gripWorldZ);
+              resolvedGripWorld = true;
+              if (
+                selTarget.gripAxisX !== undefined &&
+                selTarget.gripAxisY !== undefined &&
+                selTarget.gripAxisZ !== undefined
+              ) {
+                _probeAxisWorld.set(selTarget.gripAxisX, selTarget.gripAxisY, selTarget.gripAxisZ);
+                resolvedAxisWorld = true;
+              }
+            } else {
+              _probeHandWorld.copy(fppProbeReticleGroup.position).applyMatrix4(fppBackdrop.group.matrixWorld);
+              resolvedGripWorld = true;
+            }
           } else if (setupActiveNow) {
             _probeHandWorld.set(probeAct.setupBayX, probeAct.setupBayY, probeAct.setupBayZ).applyMatrix4(fppBackdrop.group.matrixWorld);
-          } else {
+            resolvedGripWorld = true;
+          }
+          if (!resolvedGripWorld) {
             _probeHandWorld.set(0.14, bedHeight + 0.34, 0.02).applyMatrix4(fppBackdrop.group.matrixWorld);
           }
           _probeHandCam.copy(_probeHandWorld).applyMatrix4(camera.matrixWorldInverse);
           _fppInteractionScratch.probeTargetCamX = _probeHandCam.x;
           _fppInteractionScratch.probeTargetCamY = _probeHandCam.y;
           _fppInteractionScratch.probeTargetCamZ = _probeHandCam.z;
+          if (resolvedAxisWorld) {
+            _probeAxisCam.copy(_probeAxisWorld).transformDirection(camera.matrixWorldInverse);
+            _fppInteractionScratch.probeAxisCamX = _probeAxisCam.x;
+            _fppInteractionScratch.probeAxisCamY = _probeAxisCam.y;
+            _fppInteractionScratch.probeAxisCamZ = _probeAxisCam.z;
+          } else {
+            _fppInteractionScratch.probeAxisCamX = undefined;
+            _fppInteractionScratch.probeAxisCamY = undefined;
+            _fppInteractionScratch.probeAxisCamZ = undefined;
+          }
         }
 
         // Update patient rig first so HandR bone world matrix is current for clinician palm alignment

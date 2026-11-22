@@ -37,6 +37,7 @@ import {
   formatTimerMmSs,
   getDefaultDeviceParams,
   getDefaultProbeAnchors,
+  isContinuousHandheldDevice,
 } from '../engine3d/fppEquipment3d';
 import {
   FppActiveDeviceState,
@@ -1579,6 +1580,13 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 {formatTimerMmSs(activeDevice.deviceParams, 15)}
               </span>
             )}
+            {isContinuousHandheldDevice(activeDevice.sprite) &&
+              activeDevice.probeAnchors?.some((p) => p.placed) && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 border border-emerald-400/35 px-1.5 py-0.5 text-[9px] font-black text-emerald-300">
+                  <Hand className="w-2.5 h-2.5 shrink-0" />
+                  <span>{isAr ? 'ممسك بالرأس' : 'Holding'}</span>
+                </span>
+              )}
           </span>
 
           {activeDevice.hasScreen && (
@@ -1619,7 +1627,19 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               className="h-7 px-2.5 rounded-lg border bg-slate-900 hover:bg-emerald-600 border-emerald-400/50 text-emerald-300 hover:text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
             >
               <Crosshair className="w-3 h-3 shrink-0" />
-              <span>{isAr ? 'الأقطاب' : 'Probes'}</span>
+              <span>
+                {isContinuousHandheldDevice(activeDevice.sprite)
+                  ? activeDevice.probeAnchors?.some((p) => p.placed)
+                    ? isAr
+                      ? 'تغيير الموضع'
+                      : 'Re-aim'
+                    : isAr
+                      ? 'الموضع'
+                      : 'Aim'
+                  : isAr
+                    ? 'الأقطاب'
+                    : 'Probes'}
+              </span>
             </button>
           )}
 
@@ -1647,9 +1667,13 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 ? isAr
                   ? 'إيقاف'
                   : 'Stop'
-                : isAr
-                  ? 'تشغيل'
-                  : 'Start'}
+                : activeDevice.sprite === 'pt_toolkit_cart'
+                  ? isAr
+                    ? 'قياس'
+                    : 'Measure'
+                  : isAr
+                    ? 'تشغيل'
+                    : 'Start'}
             </span>
           </button>
 

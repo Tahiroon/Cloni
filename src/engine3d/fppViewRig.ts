@@ -43,7 +43,11 @@ export interface FppHandInteractionContext {
   handshakeTargetCamY?: number;
   handshakeTargetCamZ?: number;
   probePressBlend?: number;
-  probeActionMode?: 'pad' | 'wand' | 'wrap' | 'aim' | 'setup';
+  probeReleaseBlend?: number;
+  probeAxisCamX?: number;
+  probeAxisCamY?: number;
+  probeAxisCamZ?: number;
+  probeActionMode?: 'pad' | 'wand' | 'wrap' | 'aim' | 'setup' | 'hold_wand';
 }
 
 export interface FppClinicianHandsHandle {
@@ -1800,7 +1804,7 @@ function createAnatomicalForearmGeometry(side: -1 | 1): THREE.BufferGeometry {
 
   for (let iz = 0; iz <= segsZ; iz++) {
     const t = iz / segsZ;
-    const z = THREE.MathUtils.lerp(0.008, 0.34, t);
+    const z = THREE.MathUtils.lerp(0.008, 0.50, t);
     // Nest inside GLB wrist cuff at t=0..0.05 (z=0.008..0.024), then widen smoothly to forearm
     const flareT = THREE.MathUtils.smoothstep(t, 0.02, 0.16);
     const muscleSwell = Math.sin(Math.min(1, t * 1.15) * Math.PI) * 0.0042;
@@ -2003,22 +2007,22 @@ export function createFppClinicianHands3D(
   const rightForearmGeom = trackGeom(createAnatomicalForearmGeometry(1));
   // Long sleeve for lab_coat & shirt_pants: starts at z=+0.056 (behind cuff)
   const longSleeveGeom = trackGeom(
-    createEllipticalSleeveGeometry(0.056, 0.36, 0.032, 0.037, 0.044, 0.048)
+    createEllipticalSleeveGeometry(0.056, 0.58, 0.032, 0.037, 0.048, 0.052)
   );
   // Crisp outer cuff collar: z = +0.034 .. +0.060 (wider by 3mm than inner wrist & ends cleanly before longSleeve)
   const longCuffGeom = trackGeom(
     createEllipticalSleeveGeometry(0.034, 0.060, 0.0285, 0.0335, 0.0335, 0.0385)
   );
-  // Short surgical scrubs sleeve: z = +0.182 .. +0.36 leaving forearm cleanly exposed
+  // Short surgical scrubs sleeve: z = +0.182 .. +0.58 leaving forearm cleanly exposed
   const shortSleeveGeom = trackGeom(
-    createEllipticalSleeveGeometry(0.182, 0.36, 0.036, 0.040, 0.044, 0.048)
+    createEllipticalSleeveGeometry(0.182, 0.58, 0.036, 0.040, 0.048, 0.052)
   );
   const shortHemGeom = trackGeom(
     createEllipticalSleeveGeometry(0.172, 0.184, 0.0365, 0.0405, 0.037, 0.041)
   );
-  // Modest flared Abaya outer sleeve: generous bell drape z = +0.048 .. +0.36
+  // Modest flared Abaya outer sleeve: generous bell drape z = +0.048 .. +0.58
   const abayaSleeveGeom = trackGeom(
-    createEllipticalSleeveGeometry(0.048, 0.36, 0.047, 0.051, 0.052, 0.055)
+    createEllipticalSleeveGeometry(0.048, 0.58, 0.047, 0.051, 0.055, 0.058)
   );
   const abayaTrimGeom = trackGeom(
     createEllipticalSleeveGeometry(0.042, 0.050, 0.0465, 0.0505, 0.048, 0.052)
@@ -2344,6 +2348,7 @@ export function createFppClinicianHands3D(
   const _gripEuler = new THREE.Euler(0, 0, 0, 'YXZ');
   const _gripQuat = new THREE.Quaternion();
   const _gripPocketVec = new THREE.Vector3();
+  const _gripAxisLocal = new THREE.Vector3();
   const _gripOut = { posX: 0, posY: 0, posZ: 0, pitch: 0, yaw: 0, roll: 0 };
 
   const solveArmGripPose = (
@@ -2351,7 +2356,11 @@ export function createFppClinicianHands3D(
     tx: number,
     ty: number,
     tz: number,
-    style: 'pole' | 'bar' | 'crate'
+    style: 'pole' | 'bar' | 'crate' | 'pinch',
+    rollOverride?: number,
+    axisCamX?: number,
+    axisCamY?: number,
+    axisCamZ?: number
   ) => {
     const shX = side * 0.24;
     const shY = -0.24;
@@ -2363,16 +2372,46 @@ export function createFppClinicianHands3D(
     const yaw = Math.atan2(-dx, -dz);
     const pitch = Math.atan2(dy, horiz);
 
-    // Palms face downward onto cart bar (`side * 1.35`), inward onto vertical pole or side crate handles
-    const roll =
-      style === 'bar'
-        ? side * 1.35
-        : style === 'pole'
-          ? side * 0.18
-          : side * 0.26;
+    // Align hand fist bore (+Y in armRoot) coaxially with the wand shaft axis when supplied
+    let roll: number;
+    if (rollOverride !== undefined) {
+      roll = rollOverride;
+    } else if (axisCamX !== undefined && axisCamY !== undefined && axisCamZ !== undefined) {
+      _gripEuler.set(pitch, yaw, 0, 'YXZ');
+      _gripQuat.setFromEuler(_gripEuler).invert();
+      _gripAxisLocal.set(axisCamX, axisCamY, axisCamZ).applyQuaternion(_gripQuat);
+      if (_gripAxisLocal.y < -0.25) {
+        _gripAxisLocal.negate();
+      }
+      const axisLen2D = Math.hypot(_gripAxisLocal.x, _gripAxisLocal.y);
+      const targetRoll = axisLen2D > 0.08 ? Math.atan2(-_gripAxisLocal.x, _gripAxisLocal.y) : side * 0.65;
+      roll = THREE.MathUtils.clamp(
+        targetRoll,
+        side === 1 ? -0.35 : -1.55,
+        side === 1 ? 1.55 : 0.35
+      );
+    } else {
+      roll =
+        style === 'bar'
+          ? side * 1.35
+          : style === 'pinch'
+            ? side * 1.04
+            : style === 'pole'
+              ? side * 0.18
+              : side * 0.26;
+    }
 
-    // Exact grip pocket in handHolder space: between curled thumb + index tip (~ -side*0.045, +0.022, -0.095)
-    _gripPocketVec.set(-side * 0.045, 0.022, -0.095);
+    const isFemaleHand = currentProfile?.gender === 'female';
+    const thickScale = isFemaleHand ? 0.83 : 1.02;
+    const lenScale = isFemaleHand ? 0.98 : 1.02;
+    const widthScale = isFemaleHand ? 0.85 : 1.02;
+
+    // Exact bone-verified pocket inside hand_right/left.glb (handHolder rotated +90deg X -> scale maps X, Z, Y)
+    if (style === 'pinch') {
+      _gripPocketVec.set(-side * 0.064 * thickScale, 0.036 * widthScale, -0.118 * lenScale);
+    } else {
+      _gripPocketVec.set(-side * 0.034 * thickScale, 0.002 * widthScale, -0.106 * lenScale);
+    }
     _gripEuler.set(pitch, yaw, roll, 'YXZ');
     _gripQuat.setFromEuler(_gripEuler);
     _gripPocketVec.applyQuaternion(_gripQuat);
@@ -2462,7 +2501,9 @@ export function createFppClinicianHands3D(
       !gripTarget?.active &&
         (interaction?.hasSelectedProbe || interaction?.isDraggingProbe)
     );
-    probeBlend = THREE.MathUtils.damp(probeBlend, probeActive ? 1 : 0, 11, dt);
+    const fastProbeFollow =
+      interaction?.probeActionMode === 'hold_wand' || interaction?.probeActionMode === 'wand';
+    probeBlend = THREE.MathUtils.damp(probeBlend, probeActive ? 1 : 0, fastProbeFollow ? 18 : 11, dt);
     const tapActive = Boolean(!gripTarget?.active && (interaction?.consoleTapPulse ?? 0) > 0.02);
     tapSmooth = THREE.MathUtils.damp(
       tapSmooth,
@@ -2563,134 +2604,236 @@ export function createFppClinicianHands3D(
       targetRightPose.splay = 0.06;
     }
 
-    // 2. Clinician Hands: Tactile Electrode Placement / Wand / Two-Hand Cuff Wrap / Aim / Device Mounting
+    // 2. Clinician Hands: Tactile Electrode Placement / Continuous Handheld Therapy / Cuff Wrap / Aim / Setup
     if (probeBlend > 0.01 && interaction) {
       const actionMode = interaction.probeActionMode ?? 'pad';
       const pressAmt = THREE.MathUtils.clamp(interaction.probePressBlend ?? 0, 0, 1);
-      const aimX = THREE.MathUtils.clamp(interaction.probeTargetCamX, -0.24, 0.25);
-      const aimY = THREE.MathUtils.clamp(interaction.probeTargetCamY, -0.26, 0.06);
-      const aimZ = THREE.MathUtils.clamp(interaction.probeTargetCamZ, -0.72, -0.30);
+      const releaseAmt = THREE.MathUtils.clamp(interaction.probeReleaseBlend ?? 0, 0, 1);
+      const activeBlend = probeBlend * (1 - releaseAmt * 0.72);
+      const isWandLike = actionMode === 'hold_wand' || actionMode === 'wand';
+      const aimX = THREE.MathUtils.clamp(interaction.probeTargetCamX, isWandLike ? -0.54 : -0.34, isWandLike ? 0.54 : 0.34);
+      const aimY = THREE.MathUtils.clamp(interaction.probeTargetCamY, isWandLike ? -0.48 : -0.34, isWandLike ? 0.22 : 0.14);
+      const aimZ = THREE.MathUtils.clamp(interaction.probeTargetCamZ, isWandLike ? -1.08 : -0.82, -0.22);
 
       if (actionMode === 'wrap' || actionMode === 'setup') {
         // Two-hand placement/wrapping (Cryo-Cuff wrap, Hydro Hot Pack, mounting CPM/Balance/Table)
-        const span = actionMode === 'setup' ? 0.145 : 0.095;
-        const pressZ = (interaction.isDraggingProbe ? 0.018 : pressAmt * 0.024);
+        const span = actionMode === 'setup' ? 0.145 : 0.088;
+        const pressZ = interaction.isDraggingProbe ? 0.016 : pressAmt * 0.024;
+        const liftZ = releaseAmt * 0.068;
+        const liftY = releaseAmt * 0.032;
         const lG = solveArmGripPose(
           -1,
-          THREE.MathUtils.clamp(aimX - span, -0.30, 0.06),
-          aimY - 0.012,
-          aimZ + 0.02 - pressZ,
-          actionMode === 'setup' ? 'bar' : 'crate'
+          THREE.MathUtils.clamp(aimX - span - releaseAmt * 0.02, -0.36, 0.06),
+          aimY - 0.010 + liftY,
+          aimZ + 0.018 - pressZ + liftZ,
+          actionMode === 'setup' ? 'bar' : 'crate',
+          actionMode === 'setup' ? -1.25 : -0.44 - pressAmt * 0.18
         );
         const rG = solveArmGripPose(
           1,
-          THREE.MathUtils.clamp(aimX + span, -0.06, 0.30),
-          aimY - 0.012,
-          aimZ + 0.02 - pressZ,
-          actionMode === 'setup' ? 'bar' : 'crate'
+          THREE.MathUtils.clamp(aimX + span + releaseAmt * 0.02, -0.06, 0.36),
+          aimY - 0.010 + liftY,
+          aimZ + 0.018 - pressZ + liftZ,
+          actionMode === 'setup' ? 'bar' : 'crate',
+          actionMode === 'setup' ? 1.25 : 0.44 + pressAmt * 0.18
         );
-        lPosX = THREE.MathUtils.lerp(lPosX, lG.posX, probeBlend);
-        lPosY = THREE.MathUtils.lerp(lPosY, lG.posY, probeBlend);
-        lPosZ = THREE.MathUtils.lerp(lPosZ, lG.posZ, probeBlend);
-        lPitch = THREE.MathUtils.lerp(lPitch, lG.pitch - pressAmt * 0.08, probeBlend);
-        lYaw = THREE.MathUtils.lerp(lYaw, lG.yaw, probeBlend);
-        lRoll = THREE.MathUtils.lerp(lRoll, lG.roll * 0.85, probeBlend);
+        lPosX = THREE.MathUtils.lerp(lPosX, lG.posX, activeBlend);
+        lPosY = THREE.MathUtils.lerp(lPosY, lG.posY, activeBlend);
+        lPosZ = THREE.MathUtils.lerp(lPosZ, lG.posZ, activeBlend);
+        lPitch = THREE.MathUtils.lerp(lPitch, lG.pitch - pressAmt * 0.08, activeBlend);
+        lYaw = THREE.MathUtils.lerp(lYaw, lG.yaw, activeBlend);
+        lRoll = THREE.MathUtils.lerp(lRoll, lG.roll, activeBlend);
 
-        rPosX = THREE.MathUtils.lerp(rPosX, rG.posX, probeBlend);
-        rPosY = THREE.MathUtils.lerp(rPosY, rG.posY, probeBlend);
-        rPosZ = THREE.MathUtils.lerp(rPosZ, rG.posZ, probeBlend);
-        rPitch = THREE.MathUtils.lerp(rPitch, rG.pitch - pressAmt * 0.08, probeBlend);
-        rYaw = THREE.MathUtils.lerp(rYaw, rG.yaw, probeBlend);
-        rRoll = THREE.MathUtils.lerp(rRoll, rG.roll * 0.85, probeBlend);
+        rPosX = THREE.MathUtils.lerp(rPosX, rG.posX, activeBlend);
+        rPosY = THREE.MathUtils.lerp(rPosY, rG.posY, activeBlend);
+        rPosZ = THREE.MathUtils.lerp(rPosZ, rG.posZ, activeBlend);
+        rPitch = THREE.MathUtils.lerp(rPitch, rG.pitch - pressAmt * 0.08, activeBlend);
+        rYaw = THREE.MathUtils.lerp(rYaw, rG.yaw, activeBlend);
+        rRoll = THREE.MathUtils.lerp(rRoll, rG.roll, activeBlend);
 
-        const wrapCurl = 0.48 + pressAmt * 0.24;
-        targetLeftPose.indexCurl = THREE.MathUtils.lerp(targetLeftPose.indexCurl, wrapCurl, probeBlend);
-        targetLeftPose.middleCurl = THREE.MathUtils.lerp(targetLeftPose.middleCurl, wrapCurl + 0.05, probeBlend);
-        targetLeftPose.ringCurl = THREE.MathUtils.lerp(targetLeftPose.ringCurl, wrapCurl + 0.1, probeBlend);
-        targetLeftPose.pinkyCurl = THREE.MathUtils.lerp(targetLeftPose.pinkyCurl, wrapCurl + 0.14, probeBlend);
-        targetLeftPose.thumbCurl = THREE.MathUtils.lerp(targetLeftPose.thumbCurl, 0.42, probeBlend);
-        targetLeftPose.thumbOpp = THREE.MathUtils.lerp(targetLeftPose.thumbOpp, 0.66, probeBlend);
+        const wrapCurl = Math.max(0.22, 0.46 + pressAmt * 0.14 - releaseAmt * 0.24);
+        targetLeftPose.indexCurl = THREE.MathUtils.lerp(targetLeftPose.indexCurl, wrapCurl, activeBlend);
+        targetLeftPose.middleCurl = THREE.MathUtils.lerp(targetLeftPose.middleCurl, wrapCurl + 0.05, activeBlend);
+        targetLeftPose.ringCurl = THREE.MathUtils.lerp(targetLeftPose.ringCurl, wrapCurl + 0.1, activeBlend);
+        targetLeftPose.pinkyCurl = THREE.MathUtils.lerp(targetLeftPose.pinkyCurl, wrapCurl + 0.14, activeBlend);
+        targetLeftPose.thumbCurl = THREE.MathUtils.lerp(targetLeftPose.thumbCurl, 0.40 - releaseAmt * 0.16, activeBlend);
+        targetLeftPose.thumbOpp = THREE.MathUtils.lerp(targetLeftPose.thumbOpp, 0.64, activeBlend);
 
-        targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, wrapCurl, probeBlend);
-        targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, wrapCurl + 0.05, probeBlend);
-        targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, wrapCurl + 0.1, probeBlend);
-        targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, wrapCurl + 0.14, probeBlend);
-        targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.42, probeBlend);
-        targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.66, probeBlend);
-      } else {
-        // Right hand reaches directly to target spot (pad adherence, handheld US/Laser/ESWT wand, or IR/RF arm)
-        const pressDepth = (interaction.isDraggingProbe ? 0.018 : pressAmt * 0.026);
+        targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, wrapCurl, activeBlend);
+        targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, wrapCurl + 0.05, activeBlend);
+        targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, wrapCurl + 0.1, activeBlend);
+        targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, wrapCurl + 0.14, activeBlend);
+        targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.40 - releaseAmt * 0.16, activeBlend);
+        targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.64, activeBlend);
+      } else if (isWandLike) {
+        // Direct coaxial handle grip during both approach ('wand') and active continuous treatment ('hold_wand')
+        const sp = interaction.activeDeviceSprite;
+        const isEswt = sp === 'shockwave_eswt';
+        const isGoni = sp === 'pt_toolkit_cart';
+        const wandStyle: 'pole' | 'bar' | 'pinch' = isGoni ? 'pinch' : isEswt ? 'pole' : 'bar';
+        const fallbackRoll =
+          interaction.probeAxisCamX === undefined ? (isEswt ? 0.26 : isGoni ? 0.92 : 0.72) : undefined;
         const rG = solveArmGripPose(
           1,
           aimX,
-          aimY - 0.008,
-          aimZ + 0.032 - pressDepth,
-          actionMode === 'aim' ? 'pole' : 'bar'
+          aimY,
+          aimZ,
+          wandStyle,
+          fallbackRoll,
+          interaction.probeAxisCamX,
+          interaction.probeAxisCamY,
+          interaction.probeAxisCamZ
         );
+        // Zero drift offsets or wrist tilt: curled finger pocket locks 1:1 onto handle center every frame
         rPosX = THREE.MathUtils.lerp(rPosX, rG.posX, probeBlend);
         rPosY = THREE.MathUtils.lerp(rPosY, rG.posY, probeBlend);
         rPosZ = THREE.MathUtils.lerp(rPosZ, rG.posZ, probeBlend);
-        rPitch = THREE.MathUtils.lerp(rPitch, rG.pitch - pressDepth * 2.2, probeBlend);
+        rPitch = THREE.MathUtils.lerp(rPitch, rG.pitch, probeBlend);
         rYaw = THREE.MathUtils.lerp(rYaw, rG.yaw, probeBlend);
-        const tgtRoll = actionMode === 'pad' ? 1.12 : actionMode === 'aim' ? 0.58 : 0.88;
-        rRoll = THREE.MathUtils.lerp(rRoll, tgtRoll, probeBlend);
-        rWristPitch = THREE.MathUtils.lerp(rWristPitch, -0.06 - pressAmt * 0.12, probeBlend);
+        rRoll = THREE.MathUtils.lerp(rRoll, rG.roll, probeBlend);
+        rWristPitch = THREE.MathUtils.lerp(rWristPitch, 0, probeBlend);
+        rWristYaw = THREE.MathUtils.lerp(rWristYaw, 0, probeBlend);
+        rWristRoll = THREE.MathUtils.lerp(rWristRoll, 0, probeBlend);
 
-        if (actionMode === 'pad') {
-          // Left hand steps in slightly to steady lead wire while right fingers press electrode onto skin
-          lPosX = THREE.MathUtils.lerp(lPosX, THREE.MathUtils.clamp(aimX - 0.17, -0.25, -0.11), probeBlend);
-          lPosY = THREE.MathUtils.lerp(lPosY, THREE.MathUtils.clamp(aimY - 0.05, -0.23, -0.08), probeBlend);
-          lPosZ = THREE.MathUtils.lerp(lPosZ, THREE.MathUtils.clamp(aimZ + 0.16, -0.56, -0.34), probeBlend);
-          lYaw = THREE.MathUtils.lerp(lYaw, -0.26, probeBlend);
-          targetLeftPose.indexCurl = THREE.MathUtils.lerp(targetLeftPose.indexCurl, 0.52, probeBlend);
-          targetLeftPose.middleCurl = THREE.MathUtils.lerp(targetLeftPose.middleCurl, 0.58, probeBlend);
-          targetLeftPose.thumbCurl = THREE.MathUtils.lerp(targetLeftPose.thumbCurl, 0.44, probeBlend);
-          targetLeftPose.thumbOpp = THREE.MathUtils.lerp(targetLeftPose.thumbOpp, 0.64, probeBlend);
+        if (isEswt && actionMode === 'hold_wand') {
+          // Left hand gently braces patient limb beside radial shockwave applicator
+          const lBrace = solveArmGripPose(
+            -1,
+            THREE.MathUtils.clamp(aimX - 0.115, -0.34, 0.04),
+            THREE.MathUtils.clamp(aimY + 0.01, -0.30, 0.08),
+            THREE.MathUtils.clamp(aimZ + 0.05, -0.78, -0.30),
+            'crate',
+            -0.38
+          );
+          lPosX = THREE.MathUtils.lerp(lPosX, lBrace.posX, probeBlend);
+          lPosY = THREE.MathUtils.lerp(lPosY, lBrace.posY, probeBlend);
+          lPosZ = THREE.MathUtils.lerp(lPosZ, lBrace.posZ, probeBlend);
+          lPitch = THREE.MathUtils.lerp(lPitch, lBrace.pitch, probeBlend);
+          lYaw = THREE.MathUtils.lerp(lYaw, lBrace.yaw, probeBlend);
+          lRoll = THREE.MathUtils.lerp(lRoll, lBrace.roll, probeBlend);
+          targetLeftPose.indexCurl = THREE.MathUtils.lerp(targetLeftPose.indexCurl, 0.46, probeBlend);
+          targetLeftPose.middleCurl = THREE.MathUtils.lerp(targetLeftPose.middleCurl, 0.52, probeBlend);
+          targetLeftPose.ringCurl = THREE.MathUtils.lerp(targetLeftPose.ringCurl, 0.58, probeBlend);
+          targetLeftPose.pinkyCurl = THREE.MathUtils.lerp(targetLeftPose.pinkyCurl, 0.62, probeBlend);
+          targetLeftPose.thumbCurl = THREE.MathUtils.lerp(targetLeftPose.thumbCurl, 0.36, probeBlend);
+          targetLeftPose.thumbOpp = THREE.MathUtils.lerp(targetLeftPose.thumbOpp, 0.58, probeBlend);
         } else {
-          // Left hand clears cleanly out to lower-left
-          lPosX = THREE.MathUtils.lerp(lPosX, -Math.max(armX + 0.02, 0.17), probeBlend);
-          lPosY = THREE.MathUtils.lerp(lPosY, -0.19, probeBlend);
+          // Left hand stays poised naturally at bedside ready to adjust console
+          lPosX = THREE.MathUtils.lerp(lPosX, -Math.max(armX + 0.015, 0.172), probeBlend);
+          lPosY = THREE.MathUtils.lerp(lPosY, -0.176 + breath, probeBlend);
         }
 
-        if (actionMode === 'pad') {
-          // Pinch-then-press posture for TENS / EMG electrode placement
-          const padPressCurl = 0.42 - pressAmt * 0.12;
-          targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, padPressCurl, probeBlend);
-          targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, padPressCurl + 0.06, probeBlend);
+        if (isGoni) {
+          targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.46, probeBlend);
+          targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.52, probeBlend);
           targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.72, probeBlend);
-          targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.80, probeBlend);
-          targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.46, probeBlend);
-          targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.74, probeBlend);
-          targetRightPose.splay = 0.08;
+          targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.78, probeBlend);
+          targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.42, probeBlend);
+          targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.78, probeBlend);
         } else {
-          // Firm ergonomic probe/wand/rim grip
-          targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.58, probeBlend);
-          targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.64, probeBlend);
-          targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.78, probeBlend);
-          targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.84, probeBlend);
-          targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.48, probeBlend);
-          targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.76, probeBlend);
+          // Snug palmar wrap matched to the ~3.2cm diameter of US / Laser / ESWT handles
+          targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.86, probeBlend);
+          targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.90, probeBlend);
+          targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.94, probeBlend);
+          targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.96, probeBlend);
+          targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.68, probeBlend);
+          targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.84, probeBlend);
+        }
+        targetRightPose.splay = 0.04;
+      } else {
+        // Right hand places pad (pinch -> smooth press -> gentle lift) or positions IR/RF arm
+        const isPad = actionMode === 'pad';
+        const pressDepth = interaction.isDraggingProbe ? 0.010 : pressAmt * 0.014;
+        const releasePullZ = releaseAmt * 0.072;
+        const releaseLiftY = releaseAmt * 0.034;
+        const tgtRoll = isPad ? 1.06 + pressAmt * 0.14 : 0.54;
+        const rG = solveArmGripPose(
+          1,
+          aimX + releaseAmt * 0.018,
+          aimY + releaseLiftY,
+          aimZ + (isPad ? 0.002 : 0.014) - pressDepth + releasePullZ,
+          isPad ? 'pinch' : 'pole',
+          tgtRoll
+        );
+        rPosX = THREE.MathUtils.lerp(rPosX, rG.posX, activeBlend);
+        rPosY = THREE.MathUtils.lerp(rPosY, rG.posY, activeBlend);
+        rPosZ = THREE.MathUtils.lerp(rPosZ, rG.posZ, activeBlend);
+        rPitch = THREE.MathUtils.lerp(rPitch, rG.pitch, activeBlend);
+        rYaw = THREE.MathUtils.lerp(rYaw, rG.yaw, activeBlend);
+        rRoll = THREE.MathUtils.lerp(rRoll, rG.roll, activeBlend);
+        rWristPitch = THREE.MathUtils.lerp(rWristPitch, -pressAmt * 0.06 + releaseAmt * 0.08, activeBlend);
+
+        if (isPad) {
+          // Left hand gently steadies lead wire beside placement zone, relaxes during release
+          lPosX = THREE.MathUtils.lerp(lPosX, THREE.MathUtils.clamp(aimX - 0.155, -0.25, -0.10), activeBlend);
+          lPosY = THREE.MathUtils.lerp(lPosY, THREE.MathUtils.clamp(aimY - 0.055 + releaseLiftY * 0.5, -0.23, -0.08), activeBlend);
+          lPosZ = THREE.MathUtils.lerp(lPosZ, THREE.MathUtils.clamp(aimZ + 0.14 + releasePullZ * 0.5, -0.58, -0.34), activeBlend);
+          lYaw = THREE.MathUtils.lerp(lYaw, -0.24, activeBlend);
+          lRoll = THREE.MathUtils.lerp(lRoll, -0.68, activeBlend);
+          targetLeftPose.indexCurl = THREE.MathUtils.lerp(targetLeftPose.indexCurl, 0.48 - releaseAmt * 0.22, activeBlend);
+          targetLeftPose.middleCurl = THREE.MathUtils.lerp(targetLeftPose.middleCurl, 0.54 - releaseAmt * 0.22, activeBlend);
+          targetLeftPose.thumbCurl = THREE.MathUtils.lerp(targetLeftPose.thumbCurl, 0.40 - releaseAmt * 0.18, activeBlend);
+          targetLeftPose.thumbOpp = THREE.MathUtils.lerp(targetLeftPose.thumbOpp, 0.62, activeBlend);
+
+          // 3-stage TENS/EMG kinematics: pinch pad stud -> flatten fingertips to smooth adhesive -> gentle open lift
+          const smoothPress = pressAmt * pressAmt;
+          const idxCurl = THREE.MathUtils.lerp(0.42, 0.17, smoothPress);
+          const midCurl = THREE.MathUtils.lerp(0.48, 0.21, smoothPress);
+          targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, Math.max(0.16, idxCurl - releaseAmt * 0.12), activeBlend);
+          targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, Math.max(0.20, midCurl - releaseAmt * 0.12), activeBlend);
+          targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.68 - releaseAmt * 0.30, activeBlend);
+          targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.76 - releaseAmt * 0.32, activeBlend);
+          targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.36 - smoothPress * 0.14 - releaseAmt * 0.12, activeBlend);
+          targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.78 - smoothPress * 0.18, activeBlend);
+          targetRightPose.splay = 0.08 + releaseAmt * 0.08;
+        } else {
+          lPosX = THREE.MathUtils.lerp(lPosX, -Math.max(armX + 0.02, 0.17), activeBlend);
+          lPosY = THREE.MathUtils.lerp(lPosY, -0.19, activeBlend);
+
+          targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.62 - releaseAmt * 0.15, activeBlend);
+          targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.68 - releaseAmt * 0.15, activeBlend);
+          targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.78 - releaseAmt * 0.15, activeBlend);
+          targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.84 - releaseAmt * 0.15, activeBlend);
+          targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.50, activeBlend);
+          targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.76, activeBlend);
           targetRightPose.splay = 0.06;
         }
       }
     }
 
-    // 3. Console Parameter / Start Screen Tap (Crisp extended right index press)
+    // 3. Console Parameter / Start Screen Tap (If right hand holds an active wand, left hand dials/taps console!)
     if (tapSmooth > 0.01) {
-      rPosX = THREE.MathUtils.lerp(rPosX, 0.115, tapSmooth);
-      rPosY = THREE.MathUtils.lerp(rPosY, -0.105, tapSmooth);
-      rPosZ = THREE.MathUtils.lerp(rPosZ, -0.455, tapSmooth);
-      rPitch = THREE.MathUtils.lerp(rPitch, -0.04, tapSmooth);
-      rYaw = THREE.MathUtils.lerp(rYaw, 0.24, tapSmooth);
-      rRoll = THREE.MathUtils.lerp(rRoll, 1.05, tapSmooth);
-      rWristPitch = THREE.MathUtils.lerp(rWristPitch, -0.09, tapSmooth);
+      if (interaction?.probeActionMode === 'hold_wand' && probeBlend > 0.25) {
+        lPosX = THREE.MathUtils.lerp(lPosX, -0.105, tapSmooth);
+        lPosY = THREE.MathUtils.lerp(lPosY, -0.105, tapSmooth);
+        lPosZ = THREE.MathUtils.lerp(lPosZ, -0.455, tapSmooth);
+        lPitch = THREE.MathUtils.lerp(lPitch, -0.04, tapSmooth);
+        lYaw = THREE.MathUtils.lerp(lYaw, -0.24, tapSmooth);
+        lRoll = THREE.MathUtils.lerp(lRoll, -1.05, tapSmooth);
+        lWristPitch = THREE.MathUtils.lerp(lWristPitch, -0.09, tapSmooth);
 
-      targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.08, tapSmooth);
-      targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.78, tapSmooth);
-      targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.84, tapSmooth);
-      targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.88, tapSmooth);
-      targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.52, tapSmooth);
-      targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.64, tapSmooth);
+        targetLeftPose.indexCurl = THREE.MathUtils.lerp(targetLeftPose.indexCurl, 0.08, tapSmooth);
+        targetLeftPose.middleCurl = THREE.MathUtils.lerp(targetLeftPose.middleCurl, 0.78, tapSmooth);
+        targetLeftPose.ringCurl = THREE.MathUtils.lerp(targetLeftPose.ringCurl, 0.84, tapSmooth);
+        targetLeftPose.pinkyCurl = THREE.MathUtils.lerp(targetLeftPose.pinkyCurl, 0.88, tapSmooth);
+        targetLeftPose.thumbCurl = THREE.MathUtils.lerp(targetLeftPose.thumbCurl, 0.52, tapSmooth);
+        targetLeftPose.thumbOpp = THREE.MathUtils.lerp(targetLeftPose.thumbOpp, 0.64, tapSmooth);
+      } else {
+        rPosX = THREE.MathUtils.lerp(rPosX, 0.115, tapSmooth);
+        rPosY = THREE.MathUtils.lerp(rPosY, -0.105, tapSmooth);
+        rPosZ = THREE.MathUtils.lerp(rPosZ, -0.455, tapSmooth);
+        rPitch = THREE.MathUtils.lerp(rPitch, -0.04, tapSmooth);
+        rYaw = THREE.MathUtils.lerp(rYaw, 0.24, tapSmooth);
+        rRoll = THREE.MathUtils.lerp(rRoll, 1.05, tapSmooth);
+        rWristPitch = THREE.MathUtils.lerp(rWristPitch, -0.09, tapSmooth);
+
+        targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.08, tapSmooth);
+        targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.78, tapSmooth);
+        targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.84, tapSmooth);
+        targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.88, tapSmooth);
+        targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.52, tapSmooth);
+        targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.64, tapSmooth);
+      }
     }
 
     // 4. Warm Clinician-Patient Handshake (Right hand extends forward, thumb upright, palm inward to clasp patient hand)

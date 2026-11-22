@@ -14,6 +14,12 @@ export interface FppProbeWorldTarget {
   selected?: boolean;
   holding?: boolean;
   attachBlend?: number;
+  gripWorldX?: number;
+  gripWorldY?: number;
+  gripWorldZ?: number;
+  gripAxisX?: number;
+  gripAxisY?: number;
+  gripAxisZ?: number;
 }
 
 export interface FppEquipMotionInput {
@@ -68,6 +74,14 @@ const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
   'swd_unit',
   'infrared_lamp',
   'hydro_sink',
+  'pt_toolkit_cart',
+]);
+
+const CONTINUOUS_HANDHELD_SPRITES = new Set<SpriteKind>([
+  'ultrasound_unit',
+  'laser_hilt',
+  'shockwave_eswt',
+  'pt_toolkit_cart',
 ]);
 
 export function hasDeviceInteractiveScreen(sprite: SpriteKind): boolean {
@@ -76,6 +90,10 @@ export function hasDeviceInteractiveScreen(sprite: SpriteKind): boolean {
 
 export function hasDeviceProbes(sprite: SpriteKind): boolean {
   return DEVICE_PROBE_SPRITES.has(sprite);
+}
+
+export function isContinuousHandheldDevice(sprite: SpriteKind): boolean {
+  return CONTINUOUS_HANDHELD_SPRITES.has(sprite);
 }
 
 export function getDefaultProbeAnchors(sprite: SpriteKind): FppProbeAnchor[] {
@@ -665,6 +683,8 @@ const _portPosScratch = new THREE.Vector3();
 const _endPosScratch = new THREE.Vector3();
 const _exitDirScratch = new THREE.Vector3();
 
+const _rotMatScratch = new THREE.Matrix4();
+
 function shortestAngleDiff(current: number, target: number): number {
   let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
@@ -680,6 +700,29 @@ function findProbeTarget(
     if (targets[i].id === id) return targets[i];
   }
   return undefined;
+}
+
+const _worldDirScratch = new THREE.Vector3();
+
+function writeGripWorld(
+  obj: THREE.Object3D,
+  lx: number,
+  ly: number,
+  lz: number,
+  target: FppProbeWorldTarget,
+  ax = 0,
+  ay = 1,
+  az = 0
+) {
+  obj.updateMatrixWorld(true);
+  _worldPosScratch.set(lx, ly, lz).applyMatrix4(obj.matrixWorld);
+  target.gripWorldX = _worldPosScratch.x;
+  target.gripWorldY = _worldPosScratch.y;
+  target.gripWorldZ = _worldPosScratch.z;
+  _worldDirScratch.set(ax, ay, az).transformDirection(obj.matrixWorld);
+  target.gripAxisX = _worldDirScratch.x;
+  target.gripAxisY = _worldDirScratch.y;
+  target.gripAxisZ = _worldDirScratch.z;
 }
 
 function applyPlacedProbeTransform(
@@ -700,16 +743,20 @@ function applyPlacedProbeTransform(
   else _probeLocalNormScratch.normalize();
 
   _probeLocalPosScratch.addScaledVector(_probeLocalNormScratch, surfaceOffset);
+  const ref = Math.abs(_probeLocalNormScratch.y) > 0.9 ? _fwdAxisZ : _upAxisY;
+  _tangentU.crossVectors(ref, _probeLocalNormScratch);
+  if (_tangentU.lengthSq() < 1e-5) _tangentU.set(1, 0, 0);
+  else _tangentU.normalize();
+  _tangentV.crossVectors(_tangentU, _probeLocalNormScratch).normalize();
+
   if (tangentOffsetX !== 0 || tangentOffsetZ !== 0) {
-    const ref = Math.abs(_probeLocalNormScratch.y) > 0.9 ? _fwdAxisZ : _upAxisY;
-    _tangentU.crossVectors(_probeLocalNormScratch, ref).normalize();
-    _tangentV.crossVectors(_probeLocalNormScratch, _tangentU).normalize();
     _probeLocalPosScratch.addScaledVector(_tangentU, tangentOffsetX).addScaledVector(_tangentV, tangentOffsetZ);
   }
 
   probeObj.position.copy(_probeLocalPosScratch);
   if (alignAxis === 'Y') {
-    probeObj.quaternion.setFromUnitVectors(_upAxisY, _probeLocalNormScratch);
+    _rotMatScratch.makeBasis(_tangentU, _probeLocalNormScratch, _tangentV);
+    probeObj.quaternion.setFromRotationMatrix(_rotMatScratch);
   } else {
     // Orient local -Z toward surface normal so wand tip (+Z) points into skin
     _aimDirScratch.copy(_probeLocalNormScratch).negate();
@@ -1516,8 +1563,9 @@ export function createFppEquipment3D(
           target?.placed && running ? 0.45 + Math.sin(input.timeSec * 5) * 0.25 : target?.selected ? 0.35 : 0;
 
         if (target && (target.placed || target.holding) && onBed > 0.05) {
-          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.036;
-          applyPlacedProbeTransform(pe.pGroup, group, target, 0.006 + lift, 'Y');
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.052;
+          applyPlacedProbeTransform(pe.pGroup, group, target, 0.005 + lift, 'Y');
+          writeGripWorld(pe.pGroup, 0, 0.015, 0, target);
         } else {
           pe.pGroup.position.set(...pe.dockPos);
           pe.pGroup.rotation.set(...pe.dockRot);
@@ -1633,7 +1681,20 @@ export function createFppEquipment3D(
     const headDisc = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.03, 0.034, 0.026, 16)), tipMat);
     headDisc.rotation.x = Math.PI / 2;
     headDisc.position.z = -0.005;
-    wandGroup.add(wandHandle, headDisc);
+    const gelMat = trackMat(
+      new THREE.MeshPhysicalMaterial({
+        color: 0x7dd3fc,
+        transparent: true,
+        opacity: 0.44,
+        roughness: 0.14,
+        depthWrite: false,
+      })
+    );
+    const gelDisc = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.037, 0.039, 0.005, 16)), gelMat);
+    gelDisc.rotation.x = Math.PI / 2;
+    gelDisc.position.z = 0.008;
+    gelDisc.visible = false;
+    wandGroup.add(wandHandle, headDisc, gelDisc);
     markDraggableProbe(wandGroup, 'head');
     group.add(wandGroup);
 
@@ -1655,13 +1716,16 @@ export function createFppEquipment3D(
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
-        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.04;
-        const sweepX = target.placed && running ? Math.cos(input.timeSec * 3.2) * 0.032 : 0;
-        const sweepZ = target.placed && running ? Math.sin(input.timeSec * 3.2) * 0.032 : 0;
-        applyPlacedProbeTransform(wandGroup, group, target, 0.015 + lift, 'Z', sweepX, sweepZ);
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.048;
+        const sweepX = target.placed && running ? Math.cos(input.timeSec * 2.5) * 0.028 + Math.sin(input.timeSec * 1.15) * 0.010 : 0;
+        const sweepZ = target.placed && running ? Math.sin(input.timeSec * 2.5) * 0.028 : 0;
+        applyPlacedProbeTransform(wandGroup, group, target, 0.014 + lift, 'Z', sweepX, sweepZ);
+        gelDisc.visible = Boolean(target.placed);
+        writeGripWorld(wandGroup, 0, 0, -0.085, target, 0, 0, -1);
       } else {
         wandGroup.position.set(-0.19, 0.72, 0.02);
         wandGroup.rotation.set(Math.PI / 2, 0, 0);
+        gelDisc.visible = false;
       }
       wandGroup.updateMatrix();
       _portPosScratch.set(-0.18, 0.70, 0.06);
@@ -1760,9 +1824,12 @@ export function createFppEquipment3D(
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
-        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.038;
-        applyPlacedProbeTransform(wandGroup, group, target, 0.075 + lift, 'Z');
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.046;
+        const scanX = target.placed && running ? Math.sin(input.timeSec * 1.9) * 0.013 : 0;
+        const scanZ = target.placed && running ? Math.cos(input.timeSec * 1.3) * 0.010 : 0;
+        applyPlacedProbeTransform(wandGroup, group, target, 0.075 + lift, 'Z', scanX, scanZ);
         beamRay.visible = Boolean(target.placed && a > 0.05);
+        writeGripWorld(wandGroup, 0, 0, -0.100, target, 0, 0, -1);
       } else {
         wandGroup.position.set(-0.18, 0.72, 0.0);
         wandGroup.rotation.set(Math.PI / 2, 0, 0);
@@ -1867,9 +1934,10 @@ export function createFppEquipment3D(
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
-        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.04;
-        const pulseOff = target.placed && running ? Math.abs(Math.sin(input.timeSec * 22)) * 0.008 : 0;
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.048;
+        const pulseOff = target.placed && running ? Math.abs(Math.sin(input.timeSec * 20)) * 0.0055 : 0;
         applyPlacedProbeTransform(pistolGroup, group, target, 0.014 + lift + pulseOff, 'Z');
+        writeGripWorld(pistolGroup, 0, -0.060, -0.140, target, 0, 1, 0);
       } else {
         pistolGroup.position.set(0.185, 0.68, 0.02);
         pistolGroup.rotation.set(Math.PI / 2, 0, 0);
@@ -1975,8 +2043,9 @@ export function createFppEquipment3D(
       for (const ee of emgEntries) {
         const target = findProbeTarget(input.probeWorldTargets, ee.id);
         if (target && (target.placed || target.holding) && onBed > 0.05) {
-          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.036;
-          applyPlacedProbeTransform(ee.pGroup, group, target, 0.006 + lift, 'Y');
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.052;
+          applyPlacedProbeTransform(ee.pGroup, group, target, 0.005 + lift, 'Y');
+          writeGripWorld(ee.pGroup, 0, 0.014, 0, target);
         } else {
           ee.pGroup.position.set(...ee.dockPos);
           ee.pGroup.rotation.set(0, 0, 0);
@@ -2076,10 +2145,11 @@ export function createFppEquipment3D(
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
-        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.042;
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.056;
         applyPlacedProbeTransform(cuffGroup, group, target, 0.008 + lift, 'Y');
         const puff = target.placed && running ? 1 + Math.sin(input.timeSec * 2.2) * 0.06 : 1;
         cuffGroup.scale.set(1, puff, 1);
+        writeGripWorld(cuffGroup, 0, 0.034, 0, target);
       } else {
         cuffGroup.position.set(0.21, 0.50, 0);
         cuffGroup.rotation.set(0, 0, -Math.PI / 2);
@@ -2332,8 +2402,9 @@ export function createFppEquipment3D(
 
         const target = findProbeTarget(input.probeWorldTargets, 'head');
         if (target && (target.placed || target.holding) && onBed > 0.05) {
-          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.042;
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.056;
           applyPlacedProbeTransform(packGroup, group, target, 0.008 + lift, 'Y');
+          writeGripWorld(packGroup, 0, 0.032, 0, target);
         } else {
           packGroup.position.set(0, 0.77, -0.04);
           packGroup.rotation.set(0, 0, 0);
@@ -2441,9 +2512,21 @@ export function createFppEquipment3D(
 
     const activeToolGroup = new THREE.Group();
     activeToolGroup.position.set(-0.08, 0.764, 0.04);
-    const tape1 = new THREE.Mesh(trackGeom(new THREE.TorusGeometry(0.028, 0.012, 8, 16)), cyanAccentMat);
-    tape1.rotation.x = Math.PI / 2;
-    activeToolGroup.add(tape1);
+    const dialMat = trackMat(
+      new THREE.MeshPhysicalMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.78, roughness: 0.2 })
+    );
+    const dialFace = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.032, 0.032, 0.006, 18)), dialMat);
+    dialFace.position.y = 0.005;
+    const armFixed = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.016, 0.005, 0.14)), chromeMat);
+    armFixed.position.set(0, 0.006, 0.068);
+    const armSwingPivot = new THREE.Group();
+    armSwingPivot.position.set(0, 0.011, 0);
+    const armMoving = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.015, 0.005, 0.14)), cyanAccentMat);
+    armMoving.position.set(0, 0, -0.068);
+    const toolGripHub = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.013, 0.015, 0.046, 12)), darkRubberMat);
+    toolGripHub.position.set(0, 0.025, 0);
+    armSwingPivot.add(armMoving);
+    activeToolGroup.add(dialFace, armFixed, armSwingPivot, toolGripHub);
     markDraggableProbe(activeToolGroup, 'head');
 
     const hammerHandle = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.005, 0.005, 0.16, 8)), chromeMat);
@@ -2466,13 +2549,17 @@ export function createFppEquipment3D(
     updateMotion = (input) => {
       const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
       const onBed = THREE.MathUtils.clamp(input.onBedBlend ?? a, 0, 1);
+      const running = Boolean(input.isRunning ?? a > 0.25);
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
-        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.036;
-        applyPlacedProbeTransform(activeToolGroup, group, target, 0.01 + lift, 'Y');
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.048;
+        applyPlacedProbeTransform(activeToolGroup, group, target, 0.008 + lift, 'Y');
+        armSwingPivot.rotation.y = target.placed && running ? 0.35 + Math.sin(input.timeSec * 1.4) * 0.32 : 0.45;
+        writeGripWorld(activeToolGroup, 0, 0.025, 0, target, 0, 1, 0);
       } else {
         activeToolGroup.position.set(-0.08, 0.764, 0.04);
         activeToolGroup.rotation.set(0, 0, 0);
+        armSwingPivot.rotation.y = 0.2;
       }
     };
   } else if (sprite === 'ball_rack') {
