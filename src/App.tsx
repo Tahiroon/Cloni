@@ -212,6 +212,8 @@ export default function App() {
   const [fppNearbyDevice, setFppNearbyDevice] = useState<FppNearbyDeviceInfo | null>(null);
   const [fppHeldDevice, setFppHeldDevice] = useState<FppHeldDeviceInfo | null>(null);
   const [fppActiveDevice, setFppActiveDevice] = useState<FppActiveDeviceState | null>(null);
+  const [fppHandshakeReady, setFppHandshakeReady] = useState(false);
+  const [fppHoverBodyZone, setFppHoverBodyZone] = useState<{ ar: string; en: string } | null>(null);
   const fppDeviceCmdRef = useRef<FppDeviceCommandApi | null>(null);
   const [fppBlinkPhase, setFppBlinkPhase] = useState<'idle' | 'closing' | 'hold' | 'opening'>('idle');
   const [fppRecenterNonce, setFppRecenterNonce] = useState(0);
@@ -499,14 +501,38 @@ export default function App() {
     };
   }, []);
 
-  // Persist to IndexedDB + trigger silent background sync on changes
+  // Debounced persist to IndexedDB/LocalStorage + flush on page exit + silent cloud sync
+  const latestClinicRef = useRef(clinic);
+  latestClinicRef.current = clinic;
+  const pendingLocalSaveRef = useRef(false);
+
   useEffect(() => {
     if (!hydrated) return;
-    saveClinicLocal(clinic);
+    pendingLocalSaveRef.current = true;
+    const saveTimer = setTimeout(() => {
+      pendingLocalSaveRef.current = false;
+      void saveClinicLocal(clinic);
+    }, 600);
     scheduleSilentCloudSync(clinic, (iso) => {
       setLastSyncedAt(iso);
     });
+    return () => clearTimeout(saveTimer);
   }, [clinic, hydrated]);
+
+  useEffect(() => {
+    const flushLocalSave = () => {
+      if (pendingLocalSaveRef.current) {
+        pendingLocalSaveRef.current = false;
+        void saveClinicLocal(latestClinicRef.current);
+      }
+    };
+    window.addEventListener('pagehide', flushLocalSave);
+    window.addEventListener('beforeunload', flushLocalSave);
+    return () => {
+      window.removeEventListener('pagehide', flushLocalSave);
+      window.removeEventListener('beforeunload', flushLocalSave);
+    };
+  }, []);
 
   const addFloatingFeedback = useCallback((gridX: number, gridY: number, text: string, color: string) => {
     const id = 'fb_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
@@ -1106,9 +1132,22 @@ export default function App() {
     [getFreeReceptionWaitSeats, buildPathToWaitSeat]
   );
 
-  // Immediately re-route & re-validate seats/stations whenever the student places, moves, rotates, or sells furniture
+  const walkableLayoutSig = useMemo(() => {
+    const rmSig = clinic.rooms.map((r) => (r.unlocked ? r.id : '')).join(',');
+    const itemSig = clinic.placedItems
+      .map((i) => `${i.instanceId}@${i.gridX},${i.gridY},${i.rotation}`)
+      .join(';');
+    const treeSig = (clinic.removedTreeIds || EMPTY_REMOVED_TREES).join(',');
+    return `${rmSig}|${itemSig}|${treeSig}`;
+  }, [clinic.rooms, clinic.placedItems, clinic.removedTreeIds]);
+  const lastRerouteLayoutSigRef = useRef<string>('');
+
+  // Immediately re-route & re-validate seats/stations ONLY when walkable geometry actually changes
   useEffect(() => {
     if (!hydrated || visitingFriend || isFppSessionActive) return;
+    if (lastRerouteLayoutSigRef.current === walkableLayoutSig) return;
+    lastRerouteLayoutSigRef.current = walkableLayoutSig;
+
     setPatients((prev) => {
       if (prev.length === 0) return prev;
       const receptionSeats = getReceptionWaitSeatSlots();
@@ -1118,10 +1157,10 @@ export default function App() {
 
       for (let i = 0; i < prev.length; i++) {
         const p = prev[i];
-        const up = { ...p };
-        const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
 
-        if (up.state === 'arriving') {
+        if (p.state === 'arriving') {
+          const up = { ...p };
+          const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
           const spot = getReceptionCheckinSpot(claimedSoFar);
           const safePos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
           if (Math.hypot(safePos.x - up.gridX, safePos.y - up.gridY) > 0.02) {
@@ -1133,7 +1172,10 @@ export default function App() {
           up.blockedTicks = 0;
           up.path = buildPatientPath(up, spot.x, spot.y);
           anyChanged = true;
-        } else if (up.state === 'walking_to_water') {
+          updatedList.push(up);
+        } else if (p.state === 'walking_to_water') {
+          const up = { ...p };
+          const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
           const cooler = up.waterCoolerId
             ? clinic.placedItems.find((it) => it.instanceId === up.waterCoolerId)
             : undefined;
@@ -1190,24 +1232,27 @@ export default function App() {
           }
           up.blockedTicks = 0;
           anyChanged = true;
+          updatedList.push(up);
         } else if (
-          (up.state === 'walking_to_wait' || up.state === 'waiting_checkin') &&
-          up.isSeatedWait !== false
+          (p.state === 'walking_to_wait' || p.state === 'waiting_checkin') &&
+          p.isSeatedWait !== false
         ) {
-          const matchedSeat = up.waitingSeatKey ? seatByKey.get(up.waitingSeatKey) : undefined;
+          const matchedSeat = p.waitingSeatKey ? seatByKey.get(p.waitingSeatKey) : undefined;
           const stillSameSpot =
             matchedSeat &&
-            Math.hypot(matchedSeat.seatTileX - up.targetX, matchedSeat.seatTileY - up.targetY) < 0.08 &&
-            up.gridX < 21.3;
+            Math.hypot(matchedSeat.seatTileX - p.targetX, matchedSeat.seatTileY - p.targetY) < 0.08 &&
+            p.gridX < 21.3;
 
           if (stillSameSpot && matchedSeat) {
-            if (up.state === 'walking_to_wait') {
+            if (p.state === 'walking_to_wait') {
+              const up = { ...p };
               const nextSeatPath = buildPathToWaitSeat(up, matchedSeat);
               if (nextSeatPath.length > 0) {
                 up.path = nextSeatPath;
                 up.blockedTicks = 0;
                 anyChanged = true;
               } else {
+                const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
                 const alt = pickReachableFreeWaitingSeat(
                   up,
                   up.gridX,
@@ -1244,8 +1289,13 @@ export default function App() {
                 up.blockedTicks = 0;
                 anyChanged = true;
               }
+              updatedList.push(up);
+            } else {
+              updatedList.push(p);
             }
           } else {
+            const up = { ...p };
+            const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
             // Chair was moved/sold/blocked or outside Reception: stand up smoothly and pick nearest Reception seat/spot
             const clearPos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
             up.gridX = clearPos.x;
@@ -1286,11 +1336,14 @@ export default function App() {
               up.path = buildPatientPath(up, stand.x, stand.y);
             }
             anyChanged = true;
+            updatedList.push(up);
           }
         } else if (
-          (up.state === 'walking_to_wait' || up.state === 'waiting_checkin') &&
-          up.isSeatedWait === false
+          (p.state === 'walking_to_wait' || p.state === 'waiting_checkin') &&
+          p.isSeatedWait === false
         ) {
+          const up = { ...p };
+          const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
           const safePos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
           up.gridX = safePos.x;
           up.gridY = safePos.y;
@@ -1316,6 +1369,7 @@ export default function App() {
             up.path = reachable.path;
             up.blockedTicks = 0;
             anyChanged = true;
+            updatedList.push(up);
           } else if (
             !isTileWalkable(up.targetX, up.targetY, 0.22, obstacleBoxes) ||
             up.targetX >= 20.5 ||
@@ -1328,15 +1382,19 @@ export default function App() {
             up.path = buildPatientPath(up, stand.x, stand.y);
             up.blockedTicks = 0;
             anyChanged = true;
+            updatedList.push(up);
+          } else {
+            updatedList.push(p);
           }
-        } else if (up.state === 'walking_to_station' || up.state === 'ready_for_exam') {
-          const station = up.assignedStationId
-            ? clinic.placedItems.find((it) => it.instanceId === up.assignedStationId)
+        } else if (p.state === 'walking_to_station' || p.state === 'ready_for_exam') {
+          const station = p.assignedStationId
+            ? clinic.placedItems.find((it) => it.instanceId === p.assignedStationId)
             : undefined;
           if (station) {
-            const stTarget = getStationTargetPos(station, up.gridX, up.gridY);
-            const targetMoved = Math.hypot(stTarget.x - up.targetX, stTarget.y - up.targetY) > 0.28;
-            if (targetMoved || up.state === 'walking_to_station') {
+            const stTarget = getStationTargetPos(station, p.gridX, p.gridY);
+            const targetMoved = Math.hypot(stTarget.x - p.targetX, stTarget.y - p.targetY) > 0.28;
+            if (targetMoved || p.state === 'walking_to_station') {
+              const up = { ...p };
               if (up.state === 'ready_for_exam') {
                 const safePos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
                 up.gridX = safePos.x;
@@ -1348,8 +1406,13 @@ export default function App() {
               up.path = buildPatientPath(up, stTarget.x, stTarget.y, station.instanceId);
               up.blockedTicks = 0;
               anyChanged = true;
+              updatedList.push(up);
+            } else {
+              updatedList.push(p);
             }
           } else {
+            const up = { ...p };
+            const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
             // Assigned station was sold: re-assign to another free station or walk back to Reception waiting lounge
             const altStation = findFreeStation(claimedSoFar, up.clinicalCase.specialty);
             const clearPos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
@@ -1395,14 +1458,17 @@ export default function App() {
             }
             up.blockedTicks = 0;
             anyChanged = true;
+            updatedList.push(up);
           }
-        } else if (up.state === 'treated_leaving') {
+        } else if (p.state === 'treated_leaving') {
+          const up = { ...p };
           up.path = buildPatientPath(up, 32, 15, up.leavingItemId);
           up.blockedTicks = 0;
           anyChanged = true;
+          updatedList.push(up);
+        } else {
+          updatedList.push(p);
         }
-
-        updatedList.push(up);
       }
 
       return anyChanged ? updatedList : prev;
@@ -1411,6 +1477,7 @@ export default function App() {
     hydrated,
     visitingFriend,
     isFppSessionActive,
+    walkableLayoutSig,
     obstacleBoxes,
     clinic.placedItems,
     clinic.rooms,
@@ -1489,21 +1556,42 @@ export default function App() {
     const hasFileCabinet = clinic.placedItems.some((it) => it.catalogId === 'file_cabinet');
 
     const standingIdleMap = new Map<string, number>();
+    const seatedWaitAccumMap = new Map<string, number>();
 
     const tick = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       const nowMs = performance.now();
       const dtSec = Math.min(0.26, Math.max(0.016, (nowMs - lastTickMs) / 1000));
       const dtMs = dtSec * 1000;
       lastTickMs = nowMs;
 
       setPatients((prev) => {
+        if (prev.length === 0) return prev;
         let changed = false;
         const nextList: PatientEntity[] = [];
 
         for (let idx = 0; idx < prev.length; idx++) {
           const p = prev[idx];
-          if (p.path.length === 0 && p.state === 'ready_for_exam') {
+          if (p.path.length === 0 && (p.state === 'ready_for_exam' || p.state === 'in_exam')) {
             nextList.push(p);
+            continue;
+          }
+          if (
+            p.path.length === 0 &&
+            p.state === 'waiting_checkin' &&
+            p.isSeatedWait !== false &&
+            p.gridX < 20.8 &&
+            p.targetX < 20.8
+          ) {
+            const accum = (seatedWaitAccumMap.get(p.id) ?? 0) + dtMs;
+            if (accum < 1000) {
+              seatedWaitAccumMap.set(p.id, accum);
+              nextList.push(p);
+              continue;
+            }
+            seatedWaitAccumMap.set(p.id, 0);
+            changed = true;
+            nextList.push({ ...p, waitTimer: p.waitTimer + accum });
             continue;
           }
           const updated = { ...p };
@@ -1858,7 +1946,7 @@ export default function App() {
               if (updated.isSeatedWait === false) {
                 if (
                   updated.waitTimer <= dtMs + 5 ||
-                  Math.floor(prevWaitTimer / 450) !== Math.floor(updated.waitTimer / 450)
+                  Math.floor(prevWaitTimer / 1800) !== Math.floor(updated.waitTimer / 1800)
                 ) {
                   const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
                   const reachable = pickReachableFreeWaitingSeat(
@@ -2217,6 +2305,8 @@ export default function App() {
         setFppNearbyDevice(null);
         setFppHeldDevice(null);
         setFppActiveDevice(null);
+        setFppHandshakeReady(false);
+        setFppHoverBodyZone(null);
       });
     },
     [patients, clinic.placedItems, catalogById, triggerFppBlinkTransition]
@@ -3185,6 +3275,8 @@ export default function App() {
         fppMoveInputRef={fppMoveInputRef}
         onFppNearbyDeviceChange={setFppNearbyDevice}
         onFppHeldDeviceChange={setFppHeldDevice}
+        onFppHandshakeReadyChange={setFppHandshakeReady}
+        onFppHoverBodyZoneChange={setFppHoverBodyZone}
         onFppActiveBedDeviceChange={(next) => {
           setFppActiveDevice((prev) => {
             if (next && (prev?.instanceId ?? prev?.catalogId) !== (next.instanceId ?? next.catalogId)) {
@@ -3233,7 +3325,6 @@ export default function App() {
             hoverY: item.gridY,
           });
         }}
-        onLongPressPlacedItem={undefined}
         onStartDragPlacedItem={(item) => {
           if (visitingFriend || !editMode) return;
           const cat = catalogById.get(item.catalogId);
@@ -3448,6 +3539,12 @@ export default function App() {
             soundFx.tap();
             setFppActiveDevice(null);
           }}
+          handshakeReady={fppHandshakeReady}
+          onHandshake={() => {
+            soundFx.tap();
+            fppDeviceCmdRef.current?.triggerHandshake?.();
+          }}
+          hoverBodyZone={fppHoverBodyZone}
           language={clinic.language}
           lightingMode={lightingMode}
           moveInputRef={fppMoveInputRef}
@@ -3463,6 +3560,8 @@ export default function App() {
               setFppNearbyDevice(null);
               setFppHeldDevice(null);
               setFppActiveDevice(null);
+              setFppHandshakeReady(false);
+              setFppHoverBodyZone(null);
               setSpeakingPatientId(null);
               if (speakingTimerRef.current) {
                 clearTimeout(speakingTimerRef.current);

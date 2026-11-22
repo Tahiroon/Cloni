@@ -14,6 +14,7 @@ import {
   EyeOff,
   Flame,
   Hand,
+  Handshake,
   Lock,
   LogOut,
   Maximize2,
@@ -73,6 +74,9 @@ interface FirstPersonSessionHudProps {
   onReturnDevice?: (catalogId: string) => void;
   onUpdateActiveDevice?: (next: FppActiveDeviceState) => void;
   onCloseActiveDevice?: () => void;
+  handshakeReady?: boolean;
+  onHandshake?: () => void;
+  hoverBodyZone?: { ar: string; en: string } | null;
   language: Language;
   lightingMode?: LightingMode;
   moveInputRef: React.MutableRefObject<{ x: number; y: number }>;
@@ -504,6 +508,111 @@ const IrHardwareFader: React.FC<{
   );
 };
 
+function getProbePromptCopy(
+  sprite: SpriteKind,
+  probeId: string,
+  probeLabel: string,
+  hoverZone: { ar: string; en: string } | null,
+  isAr: boolean
+): string {
+  if (hoverZone) {
+    const z = isAr ? hoverZone.ar : hoverZone.en;
+    switch (sprite) {
+      case 'tens_unit':
+        return isAr
+          ? `تثبيت القطب (${probeLabel}) على: ${z}`
+          : `Place pad (${probeLabel}) on: ${z}`;
+      case 'emg_biofeedback':
+        return probeId === 'emg_ref'
+          ? isAr
+            ? `تثبيت القطب المرجعي (${probeLabel}) على: ${z}`
+            : `Place reference (${probeLabel}) on: ${z}`
+          : isAr
+            ? `تثبيت مستشعر (${probeLabel}) على: ${z}`
+            : `Place sensor (${probeLabel}) on: ${z}`;
+      case 'ultrasound_unit':
+        return isAr
+          ? `وضع رأس الموجات فوق الصوتية على: ${z}`
+          : `Place US transducer on: ${z}`;
+      case 'laser_hilt':
+        return isAr
+          ? `توجيه شعاع الليزر نحو: ${z}`
+          : `Aim laser wand at: ${z}`;
+      case 'shockwave_eswt':
+        return isAr
+          ? `تثبيت رأس الصدمات على: ${z}`
+          : `Position ESWT applicator on: ${z}`;
+      case 'cryo_unit':
+        return isAr
+          ? `لف كمادة التبريد على: ${z}`
+          : `Wrap Cryo-Cuff around: ${z}`;
+      case 'hydro_sink':
+        return isAr
+          ? `وضع الكمادة الساخنة على: ${z}`
+          : `Place Hot Pack on: ${z}`;
+      case 'swd_unit':
+        return isAr
+          ? `توجيه قرص التردد الحراري فوق: ${z}`
+          : `Position RF drum over: ${z}`;
+      case 'pt_toolkit_cart':
+        return isAr
+          ? `وضع (${probeLabel}) على: ${z}`
+          : `Place (${probeLabel}) on: ${z}`;
+      default:
+        return isAr
+          ? `وضع (${probeLabel}) على: ${z}`
+          : `Place (${probeLabel}) on: ${z}`;
+    }
+  }
+
+  switch (sprite) {
+    case 'tens_unit':
+      return isAr
+        ? `اختر الجزء المستهدف على جسم المريض لتثبيت القطب (${probeLabel})`
+        : `Choose target muscle/joint to place electrode (${probeLabel})`;
+    case 'emg_biofeedback':
+      return probeId === 'emg_ref'
+        ? isAr
+          ? `اختر منطقة عظمية محايدة لوضع القطب المرجعي (${probeLabel})`
+          : `Select neutral bony landmark for (${probeLabel})`
+        : isAr
+          ? `اختر العضلة المستهدفة لوضع مستشعر (${probeLabel})`
+          : `Choose target muscle belly for sensor (${probeLabel})`;
+    case 'ultrasound_unit':
+      return isAr
+        ? 'اختر المفصل أو الوتر لوضع رأس الموجات فوق الصوتية'
+        : 'Choose target joint or tendon for US transducer';
+    case 'laser_hilt':
+      return isAr
+        ? 'اختر نقطة الألم أو الوتر لتوجيه شعاع الليزر'
+        : 'Select pain point or tendon to aim laser wand';
+    case 'shockwave_eswt':
+      return isAr
+        ? 'حدد بؤرة الألم لتثبيت رأس الموجات التصادمية'
+        : 'Select focal trigger point for ESWT applicator';
+    case 'cryo_unit':
+      return isAr
+        ? 'اختر المفصل أو الطرف المتورم للف كمادة التبريد'
+        : 'Choose swollen joint/limb to wrap Cryo-Cuff';
+    case 'hydro_sink':
+      return isAr
+        ? 'اختر العضلة المتشنجة لوضع الكمادة الساخنة'
+        : 'Choose tense muscle to place Hot Pack';
+    case 'swd_unit':
+      return isAr
+        ? 'حدد المنطقة العلاجية لتوجيه قرص التردد الحراري'
+        : 'Choose treatment region for RF drum';
+    case 'pt_toolkit_cart':
+      return isAr
+        ? `اختر المفصل أو الطرف لوضع (${probeLabel})`
+        : `Choose target joint/limb to place (${probeLabel})`;
+    default:
+      return isAr
+        ? `اختر الجزء المستهدف على المريض لوضع (${probeLabel})`
+        : `Choose target body part to place (${probeLabel})`;
+  }
+}
+
 export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   patient,
   stationSprite,
@@ -518,6 +627,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   onReturnDevice,
   onUpdateActiveDevice,
   onCloseActiveDevice,
+  handshakeReady = false,
+  onHandshake,
+  hoverBodyZone = null,
   language,
   lightingMode = 'day',
   moveInputRef,
@@ -1000,13 +1112,13 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-black text-emerald-300">
                 <Crosshair className="w-3.5 h-3.5 shrink-0" />
                 <span>
-                  {multiProbe
-                    ? isAr
-                      ? `اضغط على المريض لوضع (${curProbe?.label ?? 'القطب'})`
-                      : `Tap patient to place (${curProbe?.label ?? 'Pad'})`
-                    : isAr
-                      ? 'اضغط على المريض لوضع الأداة'
-                      : 'Tap patient to place probe'}
+                  {getProbePromptCopy(
+                    activeDevice.sprite,
+                    activeDevice.selectedProbeId,
+                    curProbe?.label ?? (isAr ? 'القطب' : 'Pad'),
+                    hoverBodyZone,
+                    isAr
+                  )}
                 </span>
               </div>
 
@@ -1073,23 +1185,35 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           );
         })()}
 
-      {/* Direct Single "Use" Button on Proximity + "Place" Bar While Carrying + Tapped Device Controls */}
-      {!heldDevice && !activeDevice && nearbyDevice && nearbyDevice.canDeploy && (
+      {/* Direct Single "Use" & Close-Proximity "Handshake" Buttons */}
+      {!heldDevice && !activeDevice && ((nearbyDevice && nearbyDevice.canDeploy) || (handshakeReady && onHandshake)) && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40"
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 flex items-center gap-2"
         >
-          <button
-            type="button"
-            onClick={() => onGrabDevice?.(nearbyDevice.instanceId || nearbyDevice.catalogId)}
-            className="h-10 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 border border-sky-300 text-slate-950 shadow-2xl flex items-center gap-2 text-xs font-black transition-colors cursor-pointer"
-          >
-            <Play className="w-3.5 h-3.5 fill-current shrink-0" />
-            <span>{isAr ? 'استخدام' : 'Use'}</span>
-            <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
-              {nearbyDevice.nameEn}
-            </span>
-          </button>
+          {handshakeReady && onHandshake && (
+            <button
+              type="button"
+              onClick={onHandshake}
+              className="h-9 px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 border border-emerald-300 text-slate-950 shadow-2xl flex items-center gap-1.5 text-xs font-black transition-colors cursor-pointer"
+            >
+              <Handshake className="w-4 h-4 shrink-0" />
+              <span>{isAr ? 'مصافحة' : 'Handshake'}</span>
+            </button>
+          )}
+          {nearbyDevice && nearbyDevice.canDeploy && (
+            <button
+              type="button"
+              onClick={() => onGrabDevice?.(nearbyDevice.instanceId || nearbyDevice.catalogId)}
+              className="h-10 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 border border-sky-300 text-slate-950 shadow-2xl flex items-center gap-2 text-xs font-black transition-colors cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+              <span>{isAr ? 'استخدام' : 'Use'}</span>
+              <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
+                {nearbyDevice.nameEn}
+              </span>
+            </button>
+          )}
         </div>
       )}
 
@@ -1370,7 +1494,13 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 <div className="flex items-center justify-between gap-2 text-[9px] font-bold px-1">
                   <span className={zoneColor}>{zoneBadge}</span>
                   <span className="text-slate-400">
-                    {isAr ? 'اضغط على المريض للتوجيه' : 'Tap patient to aim'}
+                    {hoverBodyZone
+                      ? isAr
+                        ? `توجيه الأشعة نحو: ${hoverBodyZone.ar}`
+                        : `Aim beam at: ${hoverBodyZone.en}`
+                      : isAr
+                        ? 'حدد العضلة أو المفصل لتوجيه الأشعة'
+                        : 'Select muscle/joint to aim IR beam'}
                   </span>
                 </div>
               </>

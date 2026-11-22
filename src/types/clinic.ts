@@ -345,6 +345,7 @@ export interface FppDeviceCommandApi {
   placeHeldDevice: () => void;
   returnDevice: (deviceId: string) => void;
   updateActiveBedDevice: (next: FppActiveDeviceState) => void;
+  triggerHandshake?: () => void;
 }
 
 export interface PatientEntity {

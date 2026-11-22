@@ -74,7 +74,7 @@ export interface ObstacleBox {
   itemId?: string;
 }
 
-export const WALL_DECOR_IDS = new Set([
+const WALL_DECOR_IDS = new Set([
   'wall_sconce_lamp',
   'anatomy_poster',
   'ac_nesma',
@@ -291,7 +291,7 @@ export function isValidWallMount(
   return false;
 }
 
-export function getWallMountEdgeCenter(
+function getWallMountEdgeCenter(
   gx: number,
   gy: number,
   rotation: 0 | 1 | 2 | 3
@@ -559,7 +559,7 @@ export function isTileWalkable(
 /**
  * Finds the nearest unobstructed world point when a character is displaced by newly placed/moved furniture.
  */
-export function findNearestWalkableWorld(
+function findNearestWalkableWorld(
   wx: number,
   wz: number,
   radius: number,
@@ -608,7 +608,7 @@ export interface WaitSeatSlot {
   isOutdoor: boolean;
 }
 
-export function rotateItemLocalPoint(
+function rotateItemLocalPoint(
   item: Pick<PlacedItem, 'gridX' | 'gridY' | 'rotation'>,
   baseWidth: number,
   baseDepth: number,
@@ -628,7 +628,7 @@ export function rotateItemLocalPoint(
 
 export const RECEPTION_CHAIR_LOCAL_X = -0.23;
 export const RECEPTION_CHAIR_LOCAL_Z = -0.34;
-export const RECEPTION_CHAIR_SEAT_HEIGHT = 0.37;
+const RECEPTION_CHAIR_SEAT_HEIGHT = 0.37;
 
 export interface ReceptionDeskPose {
   seatWorldX: number;
@@ -907,7 +907,7 @@ export function buildWaitSeatSlots(
   return seats;
 }
 
-export const LYING_STATION_SPRITES = new Set([
+const LYING_STATION_SPRITES = new Set([
   'treatment_bed',
   'traction_table',
   'magnetotherapy',

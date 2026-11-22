@@ -8,15 +8,12 @@ import {
 import {
   CatalogThumbSpec,
   getMissingCatalogThumbSpecs,
-  hasPlayerOutfitThumb,
   hydrateThumbCacheFromIdb,
-  PlayerThumbSpec,
-  renderPlayerOutfitBatch,
   renderThumbBatch,
 } from '../engine3d/thumbRenderer';
 import { Language } from '../types/clinic';
 
-export interface SmartLoadingTip {
+interface SmartLoadingTip {
   id: string;
   categoryAr: string;
   categoryEn: string;
@@ -275,9 +272,8 @@ async function cacheWebFontsBestEffort(): Promise<void> {
 let idlePrewarmStarted = false;
 
 /**
- * Quietly warms remaining catalog thumbnails, character outfit previews, and font files
- * in browser storage during idle slices after entering the clinic so gameplay stays at 60 FPS
- * and subsequent visits load cleanly from local storage.
+ * Quietly hydrates persisted thumbnails and warms web font cache during idle slices
+ * without running heavy offscreen WebGL rendering behind active clinic gameplay.
  */
 export function scheduleIdleBrowserPrewarm(): () => void {
   if (idlePrewarmStarted || typeof window === 'undefined') return () => {};
@@ -285,54 +281,13 @@ export function scheduleIdleBrowserPrewarm(): () => void {
   let cancelled = false;
 
   void (async () => {
-    await waitForIdleSlice(2800);
+    await waitForIdleSlice(2600);
     if (cancelled) return;
 
     await hydrateThumbCacheFromIdb();
     if (cancelled) return;
 
-    // 1. Best-effort offline cache for Google Fonts CSS & woff2 faces
     void cacheWebFontsBestEffort();
-
-    if (isSoftwareRenderer() || !glbRegistry.ready) return;
-
-    // 2. Incrementally cache remaining store thumbnails in IndexedDB (10 per slice on shared session)
-    const allSpecs: CatalogThumbSpec[] = CATALOG_ITEMS.map((c) => ({
-      sprite: c.sprite,
-      width: c.width,
-      depth: c.depth,
-    }));
-    const missingCatalog = getMissingCatalogThumbSpecs(allSpecs);
-
-    for (let i = 0; i < missingCatalog.length; i += 10) {
-      if (cancelled) return;
-      await waitForIdleSlice(240);
-      if (cancelled) return;
-      renderThumbBatch(missingCatalog.slice(i, i + 10));
-    }
-
-    // 3. Incrementally cache male & female clinician outfit thumbnails in IndexedDB
-    const outfitSpecs: PlayerThumbSpec[] = [
-      { gender: 'male', outfitId: 'lab_coat', hasTarha: false },
-      { gender: 'male', outfitId: 'scrubs', hasTarha: false },
-      { gender: 'male', outfitId: 'shirt_pants', hasTarha: false },
-      { gender: 'female', outfitId: 'scrubs', hasTarha: true },
-      { gender: 'female', outfitId: 'lab_coat', hasTarha: true },
-      { gender: 'female', outfitId: 'shirt_pants', hasTarha: true },
-      { gender: 'female', outfitId: 'female_abaya_closed', hasTarha: true },
-      { gender: 'female', outfitId: 'female_abaya_light', hasTarha: true },
-      { gender: 'female', outfitId: 'female_abaya_niqab', hasTarha: true },
-    ];
-    const missingOutfits = outfitSpecs.filter(
-      (s) => !hasPlayerOutfitThumb(s.gender, s.outfitId, s.hasTarha)
-    );
-
-    for (let i = 0; i < missingOutfits.length; i += 4) {
-      if (cancelled) return;
-      await waitForIdleSlice(260);
-      if (cancelled) return;
-      renderPlayerOutfitBatch(missingOutfits.slice(i, i + 4));
-    }
   })();
 
   return () => {

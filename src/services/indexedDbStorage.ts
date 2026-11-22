@@ -6,8 +6,11 @@ const STORE_NAME = 'clinic_state';
 const RECORD_KEY = 'active_clinic';
 const LS_BACKUP_KEY = 'therason_clinic_backup_v1';
 
+let cachedDbPromise: Promise<IDBDatabase | null> | null = null;
+
 function openDatabase(): Promise<IDBDatabase | null> {
-  return new Promise((resolve) => {
+  if (cachedDbPromise) return cachedDbPromise;
+  cachedDbPromise = new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') {
       resolve(null);
       return;
@@ -21,11 +24,16 @@ function openDatabase(): Promise<IDBDatabase | null> {
         }
       };
       request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
+      request.onerror = () => {
+        cachedDbPromise = null;
+        resolve(null);
+      };
     } catch {
+      cachedDbPromise = null;
       resolve(null);
     }
   });
+  return cachedDbPromise;
 }
 
 export async function loadClinicLocal(): Promise<ClinicSaveState | null> {
@@ -81,7 +89,7 @@ export async function saveClinicLocal(state: ClinicSaveState): Promise<void> {
  * Lightweight Supabase-compatible JSON payload for background sync.
  * In Next.js + Supabase, point this to `supabase.from('clinic_saves').upsert(payload)`.
  */
-export function buildLightweightSyncPayload(state: ClinicSaveState) {
+function buildLightweightSyncPayload(state: ClinicSaveState) {
   return {
     studentId: state.studentId,
     coins: state.coins,

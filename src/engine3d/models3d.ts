@@ -1365,21 +1365,18 @@ export function buildClinicWorld3D(
     const roughTex = cloneTileTex(textures.tileBlueRough, repX, repY);
     const normalTex = cloneTileTex(textures.tileNormal, repX, repY);
 
-    let mat: THREE.MeshPhysicalMaterial;
+    let mat: THREE.MeshStandardMaterial;
     if (!room.unlocked) {
       const lockedTex = cloneTileTex(textures.tileBlue, repX, repY);
       mat = trackMat(
-        new THREE.MeshPhysicalMaterial({
+        new THREE.MeshStandardMaterial({
           color: 0x7f8e9e,
           map: lockedTex,
           roughnessMap: roughTex,
           normalMap: normalTex,
           normalScale: new THREE.Vector2(0.75, 0.75),
-          roughness: 0.92,
+          roughness: 0.88,
           metalness: 0.02,
-          clearcoat: 0.12,
-          clearcoatRoughness: 0.36,
-          reflectivity: 0.5,
           envMapIntensity: 0.38,
         })
       );
@@ -1387,16 +1384,13 @@ export function buildClinicWorld3D(
     } else if (room.floorTheme === 'gym_royal') {
       const gymTex = cloneTileTex(textures.gymRoyal, repX, repY);
       mat = trackMat(
-        new THREE.MeshPhysicalMaterial({
+        new THREE.MeshStandardMaterial({
           map: gymTex,
           roughnessMap: roughTex,
           normalMap: normalTex,
           normalScale: new THREE.Vector2(0.95, 0.95),
-          roughness: 0.88,
+          roughness: 0.80,
           metalness: 0.02,
-          clearcoat: 0.22,
-          clearcoatRoughness: 0.25,
-          reflectivity: 0.65,
           envMapIntensity: 0.54,
         })
       );
@@ -1404,16 +1398,13 @@ export function buildClinicWorld3D(
     } else if (room.floorTheme === 'tile_mint') {
       const mintTex = cloneTileTex(textures.tileMint, repX, repY);
       mat = trackMat(
-        new THREE.MeshPhysicalMaterial({
+        new THREE.MeshStandardMaterial({
           map: mintTex,
           roughnessMap: roughTex,
           normalMap: normalTex,
           normalScale: new THREE.Vector2(0.95, 0.95),
-          roughness: 0.88,
+          roughness: 0.80,
           metalness: 0.02,
-          clearcoat: 0.22,
-          clearcoatRoughness: 0.24,
-          reflectivity: 0.65,
           envMapIntensity: 0.54,
         })
       );
@@ -1421,16 +1412,13 @@ export function buildClinicWorld3D(
     } else {
       const blueTex = cloneTileTex(textures.tileBlue, repX, repY);
       mat = trackMat(
-        new THREE.MeshPhysicalMaterial({
+        new THREE.MeshStandardMaterial({
           map: blueTex,
           roughnessMap: roughTex,
           normalMap: normalTex,
           normalScale: new THREE.Vector2(0.98, 0.98),
-          roughness: 0.86,
+          roughness: 0.78,
           metalness: 0.02,
-          clearcoat: 0.24,
-          clearcoatRoughness: 0.23,
-          reflectivity: 0.68,
           envMapIntensity: 0.54,
         })
       );
@@ -1446,7 +1434,7 @@ export function buildClinicWorld3D(
       const cover = new THREE.Mesh(
         trackGeom(new THREE.BoxGeometry(w - 0.14, 0.08, d - 0.14)),
         trackMat(
-          new THREE.MeshPhysicalMaterial({
+          new THREE.MeshStandardMaterial({
             color: 0x1e293b,
             transparent: true,
             opacity: 0.62,
@@ -2745,14 +2733,12 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
   const windTime = { value: 0 };
 
   const pool: SharedCatalogMats = {
-    whiteBody: new THREE.MeshPhysicalMaterial({
+    whiteBody: new THREE.MeshStandardMaterial({
       color: 0xdadfe6,
       bumpMap: textures.brushedMetalBump,
       bumpScale: 0.0014,
-      roughness: 0.44,
+      roughness: 0.40,
       metalness: 0.04,
-      clearcoat: 0.34,
-      clearcoatRoughness: 0.36,
       envMapIntensity: 0.64,
     }),
     silverMetal: makeMat({
@@ -2770,25 +2756,19 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       roughness: 0.46,
       metalness: 0.28,
     }),
-    blueUpholstery: new THREE.MeshPhysicalMaterial({
+    blueUpholstery: new THREE.MeshStandardMaterial({
       color: 0x225d8a,
       bumpMap: textures.leatherBump,
       bumpScale: 0.0075,
-      roughness: 0.48,
+      roughness: 0.46,
       metalness: 0.03,
-      clearcoat: 0.14,
-      clearcoatRoughness: 0.48,
-      sheen: 0.3,
-      sheenRoughness: 0.58,
     }),
-    cyanAccent: new THREE.MeshPhysicalMaterial({
+    cyanAccent: new THREE.MeshStandardMaterial({
       color: 0x2e7fa8,
       bumpMap: textures.fabricWeaveBump,
       bumpScale: 0.006,
       roughness: 0.48,
       metalness: 0.06,
-      sheen: 0.35,
-      sheenRoughness: 0.6,
     }),
     woodMat: makeMat({
       map: textures.wood,
@@ -2798,11 +2778,9 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       metalness: 0.02,
     }),
     leafGreen: makeMat({ color: 0x3b6e2d, roughness: 0.84 }),
-    ceramicPot: new THREE.MeshPhysicalMaterial({
+    ceramicPot: new THREE.MeshStandardMaterial({
       color: 0xc5bdb0,
-      roughness: 0.44,
-      clearcoat: 0.25,
-      clearcoatRoughness: 0.35,
+      roughness: 0.38,
     }),
     blackRubber: makeMat({ color: 0x141a24, roughness: 0.82, metalness: 0.06 }),
     warmTimber: makeMat({
@@ -3199,27 +3177,21 @@ export function createCatalogMesh3D(
     case 'treatment_bed': {
       // Authentic hospital & physiotherapy electric hi-lo examination/treatment bed
       // Head end at -X (-0.86), foot end at +X (+0.86), sitting/lying deck top strictly at y = 0.52
-      const medicalSteel = new THREE.MeshPhysicalMaterial({
+      const medicalSteel = new THREE.MeshStandardMaterial({
         color: 0xe6ecf2,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.0025,
-        roughness: 0.32,
+        roughness: 0.28,
         metalness: 0.24,
-        clearcoat: 0.24,
-        clearcoatRoughness: 0.36,
       });
-      const plinthVinyl = new THREE.MeshPhysicalMaterial({
+      const plinthVinyl = new THREE.MeshStandardMaterial({
         color: 0x166982,
         bumpMap: textures.leatherBump,
         bumpScale: 0.0085,
-        roughness: 0.44,
+        roughness: 0.42,
         metalness: 0.03,
-        clearcoat: 0.14,
-        clearcoatRoughness: 0.48,
-        sheen: 0.28,
-        sheenRoughness: 0.56,
       });
-      const plinthBorder = new THREE.MeshPhysicalMaterial({
+      const plinthBorder = new THREE.MeshStandardMaterial({
         color: 0x0f4c5c,
         bumpMap: textures.leatherBump,
         bumpScale: 0.006,
@@ -3227,40 +3199,33 @@ export function createCatalogMesh3D(
         metalness: 0.05,
       });
       const plinthSeam = makeMat({ color: 0x0c3d4a, roughness: 0.58, metalness: 0.06 });
-      const pillowMat = new THREE.MeshPhysicalMaterial({
+      const pillowMat = new THREE.MeshStandardMaterial({
         color: 0xeaf4f8,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.008,
         roughness: 0.62,
         metalness: 0.01,
-        sheen: 0.42,
-        sheenRoughness: 0.7,
       });
-      const paperMat = new THREE.MeshPhysicalMaterial({
+      const paperMat = new THREE.MeshStandardMaterial({
         color: 0xfbfdff,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.003,
         roughness: 0.76,
         metalness: 0.0,
-        sheen: 0.14,
-        sheenRoughness: 0.85,
       });
-      const panelSlate = new THREE.MeshPhysicalMaterial({
+      const panelSlate = new THREE.MeshStandardMaterial({
         color: 0x2b3b4e,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.003,
-        roughness: 0.4,
+        roughness: 0.38,
         metalness: 0.22,
-        clearcoat: 0.14,
-        clearcoatRoughness: 0.42,
       });
-      const chromeMat = new THREE.MeshPhysicalMaterial({
+      const chromeMat = new THREE.MeshStandardMaterial({
         color: 0xd4dde8,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.002,
-        roughness: 0.18,
+        roughness: 0.16,
         metalness: 0.88,
-        clearcoat: 0.2,
         envMapIntensity: 0.96,
       });
 
@@ -3565,26 +3530,20 @@ export function createCatalogMesh3D(
       // Plush tufted luxury executive lounge chair ("كرسي جلوس") facing +Z at rot=0
       const brassMat = makeMat({ color: 0xd4a94f, roughness: 0.26, metalness: 0.85 });
       const walnutMat = makeMat({ color: 0x4e3222, roughness: 0.48, metalness: 0.05 });
-      const velvetMat = new THREE.MeshPhysicalMaterial({
+      const velvetMat = new THREE.MeshStandardMaterial({
         color: 0x1d405f,
         roughness: 0.62,
         metalness: 0.04,
-        sheen: 0.78,
-        sheenRoughness: 0.5,
-        sheenColor: new THREE.Color(0x6fa8d6),
       });
-      const velvetDarkMat = new THREE.MeshPhysicalMaterial({
+      const velvetDarkMat = new THREE.MeshStandardMaterial({
         color: 0x152f47,
         roughness: 0.66,
         metalness: 0.04,
-        sheen: 0.65,
-        sheenColor: new THREE.Color(0x4b80ad),
       });
-      const camelPillowMat = new THREE.MeshPhysicalMaterial({
+      const camelPillowMat = new THREE.MeshStandardMaterial({
         color: 0xc2854c,
         roughness: 0.56,
-        sheen: 0.55,
-        sheenColor: new THREE.Color(0xf1c28e),
+        metalness: 0.02,
       });
 
       // Tapered walnut legs with brushed brass ferrules
@@ -3692,12 +3651,10 @@ export function createCatalogMesh3D(
 
     case 'ac_lg': {
       // Modern LG Dual Inverter Gas Split AC ("مكيف LG") flush-mounted high at local x = -0.40, y = 1.62
-      const glossyWhite = new THREE.MeshPhysicalMaterial({
+      const glossyWhite = new THREE.MeshStandardMaterial({
         color: 0xf4f7fb,
-        roughness: 0.24,
+        roughness: 0.20,
         metalness: 0.04,
-        clearcoat: 0.72,
-        clearcoatRoughness: 0.16,
       });
       const fasciaMat = makeMat({
         map: textures.lgAcFront,
@@ -4307,57 +4264,47 @@ export function createCatalogMesh3D(
 
     case 'traction_table': {
       // Split-Section Spinal Decompression Plinth + Motorized Head/Lumbar Traction Tower (top strictly y = 0.520)
-      const trSteel = new THREE.MeshPhysicalMaterial({
+      const trSteel = new THREE.MeshStandardMaterial({
         color: 0xe6ecf2,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.0025,
-        roughness: 0.32,
+        roughness: 0.28,
         metalness: 0.24,
-        clearcoat: 0.24,
-        clearcoatRoughness: 0.36,
       });
-      const trSlate = new THREE.MeshPhysicalMaterial({
+      const trSlate = new THREE.MeshStandardMaterial({
         color: 0x263547,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.003,
-        roughness: 0.4,
+        roughness: 0.38,
         metalness: 0.24,
-        clearcoat: 0.16,
       });
-      const trChrome = new THREE.MeshPhysicalMaterial({
+      const trChrome = new THREE.MeshStandardMaterial({
         color: 0xd4dde8,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.002,
-        roughness: 0.18,
+        roughness: 0.16,
         metalness: 0.88,
-        clearcoat: 0.22,
         envMapIntensity: 0.96,
       });
-      const trVinyl = new THREE.MeshPhysicalMaterial({
+      const trVinyl = new THREE.MeshStandardMaterial({
         color: 0x165e7a,
         bumpMap: textures.leatherBump,
         bumpScale: 0.0085,
-        roughness: 0.42,
+        roughness: 0.40,
         metalness: 0.03,
-        clearcoat: 0.16,
-        clearcoatRoughness: 0.46,
-        sheen: 0.3,
-        sheenRoughness: 0.54,
       });
-      const trBorder = new THREE.MeshPhysicalMaterial({
+      const trBorder = new THREE.MeshStandardMaterial({
         color: 0x0e4459,
         bumpMap: textures.leatherBump,
         bumpScale: 0.006,
         roughness: 0.52,
         metalness: 0.05,
       });
-      const trPillow = new THREE.MeshPhysicalMaterial({
+      const trPillow = new THREE.MeshStandardMaterial({
         color: 0xeaf4f8,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.007,
         roughness: 0.62,
-        sheen: 0.42,
-        sheenRoughness: 0.7,
       });
 
       // 1. Heavy steel H-frame base + 4 locking clinical casters
@@ -4868,57 +4815,47 @@ export function createCatalogMesh3D(
 
     case 'magnetotherapy': {
       // Clinical PEMF Magnetotherapy Couch (top strictly y = 0.520) + Animated Sliding Solenoid Drum + Foot-Rear Console
-      const magShell = new THREE.MeshPhysicalMaterial({
+      const magShell = new THREE.MeshStandardMaterial({
         color: 0xf4f7fa,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.002,
-        roughness: 0.28,
+        roughness: 0.24,
         metalness: 0.08,
-        clearcoat: 0.36,
-        clearcoatRoughness: 0.24,
       });
-      const magSlate = new THREE.MeshPhysicalMaterial({
+      const magSlate = new THREE.MeshStandardMaterial({
         color: 0x243244,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.003,
-        roughness: 0.4,
+        roughness: 0.38,
         metalness: 0.22,
-        clearcoat: 0.16,
       });
-      const magChrome = new THREE.MeshPhysicalMaterial({
+      const magChrome = new THREE.MeshStandardMaterial({
         color: 0xd4dde8,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.002,
-        roughness: 0.16,
+        roughness: 0.14,
         metalness: 0.9,
-        clearcoat: 0.22,
         envMapIntensity: 0.98,
       });
-      const magVinyl = new THREE.MeshPhysicalMaterial({
+      const magVinyl = new THREE.MeshStandardMaterial({
         color: 0x155b78,
         bumpMap: textures.leatherBump,
         bumpScale: 0.0085,
-        roughness: 0.42,
+        roughness: 0.40,
         metalness: 0.03,
-        clearcoat: 0.16,
-        clearcoatRoughness: 0.46,
-        sheen: 0.3,
-        sheenRoughness: 0.54,
       });
-      const magBorder = new THREE.MeshPhysicalMaterial({
+      const magBorder = new THREE.MeshStandardMaterial({
         color: 0x0e4157,
         bumpMap: textures.leatherBump,
         bumpScale: 0.006,
         roughness: 0.52,
         metalness: 0.05,
       });
-      const magPillow = new THREE.MeshPhysicalMaterial({
+      const magPillow = new THREE.MeshStandardMaterial({
         color: 0xeef6fa,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.007,
         roughness: 0.62,
-        sheen: 0.4,
-        sheenRoughness: 0.7,
       });
       const pemfCoilMat = makeMat({
         color: 0x38bdf8,
@@ -5065,57 +5002,47 @@ export function createCatalogMesh3D(
 
     case 'tilt_table': {
       // Neurorehabilitation Electric Standing Tilt Table (top strictly y = 0.520 when flat horizontal for seating)
-      const ttSteel = new THREE.MeshPhysicalMaterial({
+      const ttSteel = new THREE.MeshStandardMaterial({
         color: 0xe6ecf2,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.0025,
-        roughness: 0.32,
+        roughness: 0.28,
         metalness: 0.24,
-        clearcoat: 0.24,
-        clearcoatRoughness: 0.36,
       });
-      const ttSlate = new THREE.MeshPhysicalMaterial({
+      const ttSlate = new THREE.MeshStandardMaterial({
         color: 0x263445,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.003,
-        roughness: 0.4,
+        roughness: 0.38,
         metalness: 0.24,
-        clearcoat: 0.16,
       });
-      const ttChrome = new THREE.MeshPhysicalMaterial({
+      const ttChrome = new THREE.MeshStandardMaterial({
         color: 0xd4dde8,
         bumpMap: textures.brushedMetalBump,
         bumpScale: 0.002,
-        roughness: 0.18,
+        roughness: 0.16,
         metalness: 0.88,
-        clearcoat: 0.22,
         envMapIntensity: 0.96,
       });
-      const ttVinyl = new THREE.MeshPhysicalMaterial({
+      const ttVinyl = new THREE.MeshStandardMaterial({
         color: 0x166982,
         bumpMap: textures.leatherBump,
         bumpScale: 0.0085,
-        roughness: 0.42,
+        roughness: 0.40,
         metalness: 0.03,
-        clearcoat: 0.14,
-        clearcoatRoughness: 0.46,
-        sheen: 0.3,
-        sheenRoughness: 0.54,
       });
-      const ttBorder = new THREE.MeshPhysicalMaterial({
+      const ttBorder = new THREE.MeshStandardMaterial({
         color: 0x0f4c5c,
         bumpMap: textures.leatherBump,
         bumpScale: 0.006,
         roughness: 0.52,
         metalness: 0.05,
       });
-      const ttPillow = new THREE.MeshPhysicalMaterial({
+      const ttPillow = new THREE.MeshStandardMaterial({
         color: 0xeaf4f8,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.007,
         roughness: 0.62,
-        sheen: 0.42,
-        sheenRoughness: 0.7,
       });
 
       // 1. Heavy steel H-base + 4 locking medical casters
@@ -5342,14 +5269,11 @@ export function createCatalogMesh3D(
 
     case 'privacy_screen': {
       // 3-panel folding chrome medical privacy curtain screen on swivel feet with woven curtain fabric
-      const screenClothMat = new THREE.MeshPhysicalMaterial({
+      const screenClothMat = new THREE.MeshStandardMaterial({
         color: 0x3882a6,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.01,
         roughness: 0.86,
-        sheen: 0.58,
-        sheenRoughness: 0.65,
-        sheenColor: new THREE.Color(0x9bd6f0),
       });
       for (const lz of [-0.36, 0, 0.36]) {
         box(0.16, 0.032, 0.055, silverMetal, 0, 0.034, lz);
@@ -6793,14 +6717,11 @@ export function createCatalogMesh3D(
 
     case 'floor_rug': {
       // High-detail woven acoustic clinical reception rug with tapestry pattern & fringed edges (walkable)
-      const rugMat = new THREE.MeshPhysicalMaterial({
+      const rugMat = new THREE.MeshStandardMaterial({
         map: textures.rugPattern,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.012,
         roughness: 0.92,
-        sheen: 0.38,
-        sheenRoughness: 0.78,
-        sheenColor: new THREE.Color(0xcbd5e1),
       });
       const rugPile = box(1.82, 0.022, 0.92, rugMat, 0, 0.014, 0);
       rugPile.userData.noCastShadow = true;

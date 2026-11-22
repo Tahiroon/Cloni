@@ -12,6 +12,8 @@ export interface FppProbeWorldTarget {
   wny: number;
   wnz: number;
   selected?: boolean;
+  holding?: boolean;
+  attachBlend?: number;
 }
 
 export interface FppEquipMotionInput {
@@ -42,7 +44,7 @@ export interface FppEquipCarrySpec {
   rightLocal: [number, number, number];
 }
 
-export const DEVICE_SCREEN_SPRITES = new Set<SpriteKind>([
+const DEVICE_SCREEN_SPRITES = new Set<SpriteKind>([
   'tens_unit',
   'ultrasound_unit',
   'laser_hilt',
@@ -56,7 +58,7 @@ export const DEVICE_SCREEN_SPRITES = new Set<SpriteKind>([
   'balance_trainer',
 ]);
 
-export const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
+const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
   'tens_unit',
   'emg_biofeedback',
   'ultrasound_unit',
@@ -171,21 +173,21 @@ export function getFppEquipCarrySpec(sprite: SpriteKind): FppEquipCarrySpec {
       return {
         carryMode: 'roll',
         gripStyle: 'pole',
-        holdDist: 0.68,
+        holdDist: 0.70,
         holdY: 0,
         holdRotOffset: Math.PI,
-        leftLocal: [0.032, 0.90, -0.015],
-        rightLocal: [-0.032, 0.82, -0.015],
+        leftLocal: [0.022, 0.90, -0.055],
+        rightLocal: [-0.022, 0.81, -0.055],
       };
     case 'swd_unit':
       return {
         carryMode: 'roll',
         gripStyle: 'bar',
-        holdDist: 0.82,
+        holdDist: 0.86,
         holdY: 0,
         holdRotOffset: Math.PI,
-        leftLocal: [0.165, 0.80, -0.06],
-        rightLocal: [-0.165, 0.80, -0.06],
+        leftLocal: [0.11, 0.82, -0.255],
+        rightLocal: [-0.11, 0.82, -0.255],
       };
     case 'tens_unit':
     case 'ultrasound_unit':
@@ -196,21 +198,21 @@ export function getFppEquipCarrySpec(sprite: SpriteKind): FppEquipCarrySpec {
       return {
         carryMode: 'roll',
         gripStyle: 'bar',
-        holdDist: 0.84,
+        holdDist: 0.86,
         holdY: 0,
         holdRotOffset: Math.PI,
-        leftLocal: [0.145, 0.77, -0.15],
-        rightLocal: [-0.145, 0.77, -0.15],
+        leftLocal: [0.11, 0.78, -0.21],
+        rightLocal: [-0.11, 0.78, -0.21],
       };
     case 'hand_rehab_table':
       return {
         carryMode: 'roll',
         gripStyle: 'bar',
-        holdDist: 0.84,
+        holdDist: 0.86,
         holdY: 0,
         holdRotOffset: Math.PI,
-        leftLocal: [0.22, 0.78, -0.12],
-        rightLocal: [-0.22, 0.78, -0.12],
+        leftLocal: [0.16, 0.81, -0.25],
+        rightLocal: [-0.16, 0.81, -0.25],
       };
     case 'paraffin_bath':
     case 'hydro_sink':
@@ -218,11 +220,11 @@ export function getFppEquipCarrySpec(sprite: SpriteKind): FppEquipCarrySpec {
       return {
         carryMode: 'roll',
         gripStyle: 'bar',
-        holdDist: 0.84,
+        holdDist: 0.86,
         holdY: 0,
         holdRotOffset: Math.PI,
-        leftLocal: [0.18, 0.76, -0.11],
-        rightLocal: [-0.18, 0.76, -0.11],
+        leftLocal: [0.13, 0.78, -0.23],
+        rightLocal: [-0.13, 0.78, -0.23],
       };
     case 'cpm_device':
       return {
@@ -231,8 +233,8 @@ export function getFppEquipCarrySpec(sprite: SpriteKind): FppEquipCarrySpec {
         holdDist: 0.58,
         holdY: 0.88,
         holdRotOffset: 0,
-        leftLocal: [-0.21, 0.06, 0.08],
-        rightLocal: [0.21, 0.06, 0.08],
+        leftLocal: [-0.165, 0.056, 0.125],
+        rightLocal: [0.165, 0.056, 0.125],
       };
     case 'balance_trainer':
       return {
@@ -241,8 +243,8 @@ export function getFppEquipCarrySpec(sprite: SpriteKind): FppEquipCarrySpec {
         holdDist: 0.62,
         holdY: 0.42,
         holdRotOffset: Math.PI,
-        leftLocal: [0.20, 0.58, -0.17],
-        rightLocal: [-0.20, 0.58, -0.17],
+        leftLocal: [0.21, 0.58, -0.17],
+        rightLocal: [-0.21, 0.58, -0.17],
       };
     case 'ball_rack':
     default:
@@ -252,8 +254,8 @@ export function getFppEquipCarrySpec(sprite: SpriteKind): FppEquipCarrySpec {
         holdDist: 0.66,
         holdY: 0.22,
         holdRotOffset: Math.PI,
-        leftLocal: [0.18, 0.82, 0.02],
-        rightLocal: [-0.18, 0.82, 0.02],
+        leftLocal: [0.18, 0.84, 0.02],
+        rightLocal: [-0.18, 0.84, 0.02],
       };
   }
 }
@@ -747,16 +749,14 @@ export function createFppEquipment3D(
   };
 
   const bodyWhiteMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0xf4f7fb,
-      roughness: 0.34,
+      roughness: 0.30,
       metalness: 0.04,
-      clearcoat: 0.36,
-      clearcoatRoughness: 0.25,
     })
   );
   const slateFrameMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0x263447,
       bumpMap: textures.brushedMetalBump,
       bumpScale: 0.004,
@@ -765,13 +765,12 @@ export function createFppEquipment3D(
     })
   );
   const chromeMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0xdbe4ef,
       bumpMap: textures.brushedMetalBump,
       bumpScale: 0.003,
       roughness: 0.18,
       metalness: 0.88,
-      clearcoat: 0.2,
     })
   );
   const darkRubberMat = trackMat(
@@ -782,7 +781,7 @@ export function createFppEquipment3D(
     })
   );
   const aluminumMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0xcbd5e1,
       bumpMap: textures.brushedMetalBump,
       bumpScale: 0.0035,
@@ -791,21 +790,19 @@ export function createFppEquipment3D(
     })
   );
   const woodOakMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       map: textures.wood,
       bumpMap: textures.woodBump,
       bumpScale: 0.01,
-      roughness: 0.54,
+      roughness: 0.50,
       metalness: 0.02,
-      clearcoat: 0.2,
     })
   );
   const blueUpholsteryMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0x0284c7,
-      roughness: 0.48,
+      roughness: 0.46,
       metalness: 0.04,
-      clearcoat: 0.15,
     })
   );
   const cyanAccentMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x0ea5e9, roughness: 0.35 }));
@@ -813,7 +810,7 @@ export function createFppEquipment3D(
   const redAccentMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.35 }));
   const emeraldAccentMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.35 }));
   const braidedHoseMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0x475569,
       bumpMap: textures.brushedMetalBump,
       bumpScale: 0.008,
@@ -833,6 +830,48 @@ export function createFppEquipment3D(
       wheel.position.set(cx, 0.024, cz);
       parent.add(fork, wheel);
     }
+  };
+
+  // Lightweight contoured ergonomic push-bar assembly matching clinician grip anchor coords
+  const addRearPushHandle = (
+    parent: THREE.Group,
+    xHalf: number,
+    zAttach: number,
+    zHandle: number,
+    yAttach: number,
+    yHandle: number,
+    gripX: number
+  ) => {
+    const dy = yHandle - yAttach;
+    const dz = zHandle - zAttach;
+    const armLen = Math.max(0.04, Math.hypot(dy, dz));
+    const armTiltX = Math.atan2(dz, dy);
+    const armGeom = trackGeom(new THREE.CylinderGeometry(0.010, 0.011, armLen, 8));
+    const mountGeom = trackGeom(new THREE.CylinderGeometry(0.015, 0.016, 0.022, 8));
+    mountGeom.rotateX(Math.PI / 2);
+
+    for (const sx of [-xHalf, xHalf]) {
+      const mount = new THREE.Mesh(mountGeom, slateFrameMat);
+      mount.position.set(sx, yAttach, zAttach);
+      const arm = new THREE.Mesh(armGeom, chromeMat);
+      arm.position.set(sx, (yAttach + yHandle) * 0.5, (zAttach + zHandle) * 0.5);
+      arm.rotation.x = armTiltX;
+      parent.add(mount, arm);
+    }
+
+    const crossLen = xHalf * 2 + 0.024;
+    const barGeom = trackGeom(new THREE.CylinderGeometry(0.011, 0.011, crossLen, 10));
+    barGeom.rotateZ(Math.PI / 2);
+    const crossBar = new THREE.Mesh(barGeom, chromeMat);
+    crossBar.position.set(0, yHandle, zHandle);
+
+    const gripGeom = trackGeom(new THREE.CylinderGeometry(0.0165, 0.0165, 0.105, 10));
+    gripGeom.rotateZ(Math.PI / 2);
+    const gripL = new THREE.Mesh(gripGeom, darkRubberMat);
+    gripL.position.set(-gripX, yHandle, zHandle);
+    const gripR = new THREE.Mesh(gripGeom, darkRubberMat);
+    gripR.position.set(gripX, yHandle, zHandle);
+    parent.add(crossBar, gripL, gripR);
   };
 
   let colliderHalfW = 0.24;
@@ -872,7 +911,22 @@ export function createFppEquipment3D(
     const collarKnob = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.014, 0.014, 0.024, 10)), darkRubberMat);
     collarKnob.rotation.z = Math.PI / 2;
     collarKnob.position.set(0.036, 0.82, 0);
-    group.add(lowerPole, collar, collarKnob);
+
+    // Rear vertical push handle anchored behind main stand column (clear of telescopic mast)
+    const irPushBar = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.011, 0.011, 0.24, 10)), chromeMat);
+    irPushBar.position.set(0, 0.84, -0.055);
+    const irStrutGeom = trackGeom(new THREE.CylinderGeometry(0.009, 0.009, 0.056, 8));
+    irStrutGeom.rotateX(Math.PI / 2);
+    const irStrutBot = new THREE.Mesh(irStrutGeom, slateFrameMat);
+    irStrutBot.position.set(0, 0.73, -0.028);
+    const irStrutTop = new THREE.Mesh(irStrutGeom, slateFrameMat);
+    irStrutTop.position.set(0, 0.82, -0.028);
+    const irGripGeom = trackGeom(new THREE.CylinderGeometry(0.0175, 0.0175, 0.088, 10));
+    const irGripTop = new THREE.Mesh(irGripGeom, darkRubberMat);
+    irGripTop.position.set(0, 0.90, -0.055);
+    const irGripBot = new THREE.Mesh(irGripGeom, darkRubberMat);
+    irGripBot.position.set(0, 0.81, -0.055);
+    group.add(lowerPole, collar, collarKnob, irPushBar, irStrutBot, irStrutTop, irGripTop, irGripBot);
 
     const dimmerBox = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.105, 0.16, 0.056)), bodyWhiteMat);
     dimmerBox.position.set(0, 0.69, 0.036);
@@ -953,11 +1007,10 @@ export function createFppEquipment3D(
 
     const headYoke = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.02, 0.02, 0.052, 12)), slateFrameMat);
     const shadeHousingMat = trackMat(
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         color: 0xe2e8f0,
-        roughness: 0.24,
+        roughness: 0.22,
         metalness: 0.52,
-        clearcoat: 0.48,
         side: THREE.DoubleSide,
       })
     );
@@ -1203,6 +1256,7 @@ export function createFppEquipment3D(
       lv.position.set(0, 0.18 + li * 0.042, 0);
       chassis.add(lv);
     }
+    addRearPushHandle(chassis, 0.145, -0.17, -0.255, 0.74, 0.82, 0.11);
 
     const armTurret = new THREE.Group();
     armTurret.position.set(0, 0.80, -0.05);
@@ -1333,9 +1387,7 @@ export function createFppEquipment3D(
     basketFrame.position.set(0, 0.35, 0.02);
     const padPack = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.24, 0.048, 0.17)), blueUpholsteryMat);
     padPack.position.set(0, 0.39, 0.02);
-    const pushHandle = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.011, 0.011, 0.31, 10)), slateFrameMat);
-    pushHandle.rotation.z = Math.PI / 2;
-    pushHandle.position.set(0, 0.72, -0.17);
+    addRearPushHandle(group, 0.145, -0.13, -0.21, 0.71, 0.78, 0.11);
 
     const deck = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.36, 0.042, 0.32)), bodyWhiteMat);
     deck.position.set(0, 0.71, 0);
@@ -1388,7 +1440,7 @@ export function createFppEquipment3D(
     markDeviceScreen(body);
     markDeviceScreen(scrBezel);
     markDeviceScreen(screenFace);
-    group.add(basePlate, basketFrame, padPack, pushHandle, deck, body, scrBezel, screenFace, holsterL, holsterR);
+    group.add(basePlate, basketFrame, padPack, deck, body, scrBezel, screenFace, holsterL, holsterR);
 
     // 4 Real Hydrogel Electrode Pads + 4 Flexible Red/Black Curved Lead Wires
     const padSpecs: Array<{
@@ -1463,8 +1515,9 @@ export function createFppEquipment3D(
         pe.padMat.emissiveIntensity =
           target?.placed && running ? 0.45 + Math.sin(input.timeSec * 5) * 0.25 : target?.selected ? 0.35 : 0;
 
-        if (target && target.placed && onBed > 0.05) {
-          applyPlacedProbeTransform(pe.pGroup, group, target, 0.006, 'Y');
+        if (target && (target.placed || target.holding) && onBed > 0.05) {
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.036;
+          applyPlacedProbeTransform(pe.pGroup, group, target, 0.006 + lift, 'Y');
         } else {
           pe.pGroup.position.set(...pe.dockPos);
           pe.pGroup.rotation.set(...pe.dockRot);
@@ -1565,6 +1618,7 @@ export function createFppEquipment3D(
       gelCap,
       wandPort
     );
+    addRearPushHandle(group, 0.15, -0.14, -0.21, 0.67, 0.78, 0.11);
 
     // Ergonomic 5cm2 Ultrasound Transducer Wand + flexible coiled black cable
     const wandGroup = new THREE.Group();
@@ -1600,10 +1654,11 @@ export function createFppEquipment3D(
       tipMat.emissiveIntensity = a * (1.4 + Math.sin(input.timeSec * 4) * 0.3);
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
-      if (target && target.placed && onBed > 0.05) {
-        const sweepX = running ? Math.cos(input.timeSec * 3.2) * 0.032 : 0;
-        const sweepZ = running ? Math.sin(input.timeSec * 3.2) * 0.032 : 0;
-        applyPlacedProbeTransform(wandGroup, group, target, 0.015, 'Z', sweepX, sweepZ);
+      if (target && (target.placed || target.holding) && onBed > 0.05) {
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.04;
+        const sweepX = target.placed && running ? Math.cos(input.timeSec * 3.2) * 0.032 : 0;
+        const sweepZ = target.placed && running ? Math.sin(input.timeSec * 3.2) * 0.032 : 0;
+        applyPlacedProbeTransform(wandGroup, group, target, 0.015 + lift, 'Z', sweepX, sweepZ);
       } else {
         wandGroup.position.set(-0.19, 0.72, 0.02);
         wandGroup.rotation.set(Math.PI / 2, 0, 0);
@@ -1662,6 +1717,7 @@ export function createFppEquipment3D(
     markDeviceScreen(panel);
     markDeviceScreen(screenFace);
     group.add(base, tower, collar, cyanStripe, panel, screenFace, eStop, keyLock, goggles);
+    addRearPushHandle(group, 0.15, -0.14, -0.21, 0.65, 0.78, 0.11);
 
     // Fiber optical wand + crimson laser aiming dot + curved armored fiber conduit
     const wandGroup = new THREE.Group();
@@ -1703,9 +1759,10 @@ export function createFppEquipment3D(
       tipMat.emissiveIntensity = a * (2.1 + Math.sin(input.timeSec * 6) * 0.45);
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
-      if (target && target.placed && onBed > 0.05) {
-        applyPlacedProbeTransform(wandGroup, group, target, 0.075, 'Z');
-        beamRay.visible = a > 0.05;
+      if (target && (target.placed || target.holding) && onBed > 0.05) {
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.038;
+        applyPlacedProbeTransform(wandGroup, group, target, 0.075 + lift, 'Z');
+        beamRay.visible = Boolean(target.placed && a > 0.05);
       } else {
         wandGroup.position.set(-0.18, 0.72, 0.0);
         wandGroup.rotation.set(Math.PI / 2, 0, 0);
@@ -1772,6 +1829,7 @@ export function createFppEquipment3D(
     markDeviceScreen(scrFrame);
     markDeviceScreen(screenFace);
     group.add(base, tower, pGauge, scrFrame, screenFace, tipRack);
+    addRearPushHandle(group, 0.15, -0.14, -0.21, 0.66, 0.78, 0.11);
 
     const pistolGroup = new THREE.Group();
     pistolGroup.position.set(0.185, 0.68, 0.02);
@@ -1808,9 +1866,10 @@ export function createFppEquipment3D(
       tipMat.emissiveIntensity = a * (1.3 + Math.sin(input.timeSec * 8) * 0.35);
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
-      if (target && target.placed && onBed > 0.05) {
-        const pulseOff = running ? Math.abs(Math.sin(input.timeSec * 22)) * 0.008 : 0;
-        applyPlacedProbeTransform(pistolGroup, group, target, 0.014 + pulseOff, 'Z');
+      if (target && (target.placed || target.holding) && onBed > 0.05) {
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.04;
+        const pulseOff = target.placed && running ? Math.abs(Math.sin(input.timeSec * 22)) * 0.008 : 0;
+        applyPlacedProbeTransform(pistolGroup, group, target, 0.014 + lift + pulseOff, 'Z');
       } else {
         pistolGroup.position.set(0.185, 0.68, 0.02);
         pistolGroup.rotation.set(Math.PI / 2, 0, 0);
@@ -1873,6 +1932,7 @@ export function createFppEquipment3D(
     markDeviceScreen(monFrame);
     markDeviceScreen(screenFace);
     group.add(col, tray, preAmp, jackR, jackG, jackY, monFrame, screenFace);
+    addRearPushHandle(group, 0.15, -0.13, -0.21, 0.62, 0.78, 0.11);
 
     const emgSpecs: Array<{
       id: string;
@@ -1914,8 +1974,9 @@ export function createFppEquipment3D(
 
       for (const ee of emgEntries) {
         const target = findProbeTarget(input.probeWorldTargets, ee.id);
-        if (target && target.placed && onBed > 0.05) {
-          applyPlacedProbeTransform(ee.pGroup, group, target, 0.006, 'Y');
+        if (target && (target.placed || target.holding) && onBed > 0.05) {
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.036;
+          applyPlacedProbeTransform(ee.pGroup, group, target, 0.006 + lift, 'Y');
         } else {
           ee.pGroup.position.set(...ee.dockPos);
           ee.pGroup.rotation.set(0, 0, 0);
@@ -1971,6 +2032,7 @@ export function createFppEquipment3D(
     markDeviceScreen(scrBezel);
     markDeviceScreen(screenFace);
     group.add(compBox, scrBezel, screenFace, iceTank, tankLid, lidHandle);
+    addRearPushHandle(group, 0.155, -0.16, -0.21, 0.42, 0.78, 0.11);
 
     // Pneumatic Cryo-Cuff Wrap + insulated silver coolant hose
     const cuffGroup = new THREE.Group();
@@ -2013,9 +2075,10 @@ export function createFppEquipment3D(
       cuffMat.emissiveIntensity = a * (0.45 + Math.sin(input.timeSec * 3.5) * 0.2);
 
       const target = findProbeTarget(input.probeWorldTargets, 'head');
-      if (target && target.placed && onBed > 0.05) {
-        applyPlacedProbeTransform(cuffGroup, group, target, 0.008, 'Y');
-        const puff = running ? 1 + Math.sin(input.timeSec * 2.2) * 0.06 : 1;
+      if (target && (target.placed || target.holding) && onBed > 0.05) {
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.042;
+        applyPlacedProbeTransform(cuffGroup, group, target, 0.008 + lift, 'Y');
+        const puff = target.placed && running ? 1 + Math.sin(input.timeSec * 2.2) * 0.06 : 1;
         cuffGroup.scale.set(1, puff, 1);
       } else {
         cuffGroup.position.set(0.21, 0.50, 0);
@@ -2101,6 +2164,26 @@ export function createFppEquipment3D(
     footBoot.position.set(0.27, 0.08, 0);
     kneeJoint.add(shinBar, shinCushion, footBoot);
 
+    const cpmGripBarGeom = trackGeom(new THREE.CylinderGeometry(0.012, 0.012, 0.095, 10));
+    cpmGripBarGeom.rotateZ(Math.PI / 2);
+    const cpmGripSleeveGeom = trackGeom(new THREE.CylinderGeometry(0.017, 0.017, 0.078, 10));
+    cpmGripSleeveGeom.rotateZ(Math.PI / 2);
+    const cpmStubGeom = trackGeom(new THREE.CylinderGeometry(0.0085, 0.0085, 0.044, 8));
+    cpmStubGeom.rotateX(Math.PI / 2);
+    for (const gx of [-0.165, 0.165]) {
+      const gBar = new THREE.Mesh(cpmGripBarGeom, chromeMat);
+      gBar.position.set(gx, 0.056, 0.125);
+      const gSleeve = new THREE.Mesh(cpmGripSleeveGeom, darkRubberMat);
+      gSleeve.position.set(gx, 0.056, 0.125);
+      const stL = new THREE.Mesh(cpmStubGeom, slateFrameMat);
+      stL.position.set(gx - 0.042, 0.044, 0.11);
+      stL.rotation.x = -0.45;
+      const stR = new THREE.Mesh(cpmStubGeom, slateFrameMat);
+      stR.position.set(gx + 0.042, 0.044, 0.11);
+      stR.rotation.x = -0.45;
+      cradle.add(gBar, gSleeve, stL, stR);
+    }
+
     cradle.add(motorHousing, screenHousing, screenTop, pendant, pendantScr, hipRest, thighArm);
 
     updateMotion = (input) => {
@@ -2172,6 +2255,7 @@ export function createFppEquipment3D(
     dynaGauge.position.set(0.12, 0.86, -0.07);
 
     group.add(cFootL, cFootR, cBack, col, topDeck, edgeBand, pegBase, puttyTub1, puttyTub2, dynaBody, dynaGauge);
+    addRearPushHandle(group, 0.22, -0.17, -0.25, 0.75, 0.81, 0.16);
   } else if (sprite === 'paraffin_bath' || sprite === 'hydro_sink') {
     colliderHalfW = 0.23;
     colliderHalfD = 0.21;
@@ -2232,6 +2316,7 @@ export function createFppEquipment3D(
       markDeviceScreen(scrBezel);
       markDeviceScreen(scrFace);
       group.add(tank, lid, lidHandle, scrBezel, scrFace, packGroup, sideRack);
+      addRearPushHandle(group, 0.16, -0.16, -0.23, 0.68, 0.78, 0.13);
 
       updateMotion = (input) => {
         const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
@@ -2246,8 +2331,9 @@ export function createFppEquipment3D(
         packMat.emissiveIntensity = a * (0.28 + Math.sin(input.timeSec * 2) * 0.08);
 
         const target = findProbeTarget(input.probeWorldTargets, 'head');
-        if (target && target.placed && onBed > 0.05) {
-          applyPlacedProbeTransform(packGroup, group, target, 0.008, 'Y');
+        if (target && (target.placed || target.holding) && onBed > 0.05) {
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.042;
+          applyPlacedProbeTransform(packGroup, group, target, 0.008 + lift, 'Y');
         } else {
           packGroup.position.set(0, 0.77, -0.04);
           packGroup.rotation.set(0, 0, 0);
@@ -2311,6 +2397,7 @@ export function createFppEquipment3D(
       markDeviceScreen(scrBezel);
       markDeviceScreen(scrFace);
       group.add(shelfBot, shelfMid, mittBlue, mittWhite, shelfTop, tub, tubRim, waxPool, scrBezel, scrFace);
+      addRearPushHandle(group, 0.17, -0.14, -0.23, 0.56, 0.78, 0.13);
 
       updateMotion = (input) => {
         const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
@@ -2374,13 +2461,15 @@ export function createFppEquipment3D(
     goni.rotation.x = -Math.PI / 2;
     goni.position.set(-0.1, 0.756, -0.06);
     group.add(activeToolGroup, hammerHandle, hammerHead, iastm, goni);
+    addRearPushHandle(group, 0.20, -0.13, -0.23, 0.74, 0.78, 0.13);
 
     updateMotion = (input) => {
       const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
       const onBed = THREE.MathUtils.clamp(input.onBedBlend ?? a, 0, 1);
       const target = findProbeTarget(input.probeWorldTargets, 'head');
-      if (target && target.placed && onBed > 0.05) {
-        applyPlacedProbeTransform(activeToolGroup, group, target, 0.01, 'Y');
+      if (target && (target.placed || target.holding) && onBed > 0.05) {
+        const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.036;
+        applyPlacedProbeTransform(activeToolGroup, group, target, 0.01 + lift, 'Y');
       } else {
         activeToolGroup.position.set(-0.08, 0.764, 0.04);
         activeToolGroup.rotation.set(0, 0, 0);
@@ -2405,15 +2494,21 @@ export function createFppEquipment3D(
 
     const ball1 = new THREE.Mesh(
       trackGeom(new THREE.SphereGeometry(0.24, 20, 16)),
-      trackMat(new THREE.MeshPhysicalMaterial({ color: 0x0ea5e9, roughness: 0.42, clearcoat: 0.2 }))
+      trackMat(new THREE.MeshStandardMaterial({ color: 0x0ea5e9, roughness: 0.38 }))
     );
     ball1.position.set(0, 0.34, 0.02);
     const ball2 = new THREE.Mesh(
       trackGeom(new THREE.SphereGeometry(0.21, 20, 16)),
-      trackMat(new THREE.MeshPhysicalMaterial({ color: 0x14b8a6, roughness: 0.42, clearcoat: 0.2 }))
+      trackMat(new THREE.MeshStandardMaterial({ color: 0x14b8a6, roughness: 0.38 }))
     );
     ball2.position.set(0, 0.94, 0.02);
-    group.add(baseRing, upright, rLow, rHigh, ball1, ball2);
+    const rackGripGeom = trackGeom(new THREE.CylinderGeometry(0.017, 0.017, 0.11, 10));
+    rackGripGeom.rotateX(Math.PI / 2);
+    const rackGripL = new THREE.Mesh(rackGripGeom, darkRubberMat);
+    rackGripL.position.set(-0.18, 0.84, 0.02);
+    const rackGripR = new THREE.Mesh(rackGripGeom, darkRubberMat);
+    rackGripR.position.set(0.18, 0.84, 0.02);
+    group.add(baseRing, upright, rLow, rHigh, rackGripL, rackGripR, ball1, ball2);
   } else if (sprite === 'balance_trainer') {
     colliderHalfW = 0.26;
     colliderHalfD = 0.24;
@@ -2432,6 +2527,11 @@ export function createFppEquipment3D(
     railPostL.position.set(-0.21, 0.46, -0.17);
     const railPostR = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.014, 0.014, 0.86, 10)), chromeMat);
     railPostR.position.set(0.21, 0.46, -0.17);
+    const balGripGeom = trackGeom(new THREE.CylinderGeometry(0.019, 0.019, 0.13, 10));
+    const balGripL = new THREE.Mesh(balGripGeom, darkRubberMat);
+    balGripL.position.set(-0.21, 0.58, -0.17);
+    const balGripR = new THREE.Mesh(balGripGeom, darkRubberMat);
+    balGripR.position.set(0.21, 0.58, -0.17);
     const railTop = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.014, 0.014, 0.44, 10)), chromeMat);
     railTop.rotation.z = Math.PI / 2;
     railTop.position.set(0, 0.89, -0.17);
@@ -2457,7 +2557,7 @@ export function createFppEquipment3D(
     markDeviceScreen(tablet);
     markDeviceScreen(tabletFace);
 
-    group.add(plate, forcePad, ledRing, railPostL, railPostR, railTop, tablet, tabletFace);
+    group.add(plate, forcePad, ledRing, railPostL, railPostR, balGripL, balGripR, railTop, tablet, tabletFace);
 
     updateMotion = (input) => {
       const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);

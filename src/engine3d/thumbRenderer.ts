@@ -14,7 +14,7 @@ export interface CatalogThumbSpec {
   depth: number;
 }
 
-export interface PlayerThumbSpec {
+interface PlayerThumbSpec {
   gender: PlayerGender;
   outfitId: PlayerOutfitId;
   hasTarha: boolean;
@@ -148,7 +148,7 @@ function notifySubscribers() {
   subscribers.forEach((cb) => cb());
 }
 
-export function getCatalogThumbKey(sprite: SpriteKind, width: number, depth: number): string {
+function getCatalogThumbKey(sprite: SpriteKind, width: number, depth: number): string {
   return `${sprite}_${width}x${depth}`;
 }
 
@@ -200,7 +200,7 @@ function scheduleSharedThumbCleanup() {
   if (sharedDisposeTimer) clearTimeout(sharedDisposeTimer);
   sharedDisposeTimer = setTimeout(() => {
     disposeSharedThumbSession();
-  }, 1800);
+  }, 8000);
 }
 
 function acquireSharedThumbSession(width: number, height: number): SharedThumbSession | null {
@@ -449,7 +449,7 @@ export function useCatalogThumb(
   return url;
 }
 
-export function getPlayerOutfitThumbKey(
+function getPlayerOutfitThumbKey(
   gender: PlayerGender,
   outfitId: PlayerOutfitId,
   hasTarha: boolean
@@ -459,15 +459,7 @@ export function getPlayerOutfitThumbKey(
   return `pchar_${gender}_${outfit.id}_${effectiveTarha ? 1 : 0}`;
 }
 
-export function hasPlayerOutfitThumb(
-  gender: PlayerGender,
-  outfitId: PlayerOutfitId,
-  hasTarha: boolean
-): boolean {
-  return thumbCache.has(getPlayerOutfitThumbKey(gender, outfitId, hasTarha));
-}
-
-export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
+function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
   if (!glbRegistry.ready) return;
 
   const deduped = new Map<string, PlayerThumbSpec>();

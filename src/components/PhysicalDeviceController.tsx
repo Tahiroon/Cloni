@@ -192,10 +192,14 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     if (!device.isRunning) return;
     let raf = 0;
     let last = performance.now();
+    let lastEmit = last;
     const step = (now: number) => {
-      const dt = Math.min(0.06, (now - last) / 1000);
-      last = now;
-      setTickPhase((p) => (p + dt * 2.8) % (Math.PI * 20));
+      if (now - lastEmit >= 65) {
+        const dt = Math.min(0.15, (now - last) / 1000);
+        last = now;
+        lastEmit = now;
+        setTickPhase((p) => (p + dt * 2.8) % (Math.PI * 20));
+      }
       raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);

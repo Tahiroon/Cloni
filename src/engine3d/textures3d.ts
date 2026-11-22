@@ -533,16 +533,22 @@ export function createTextureBundle(
         ctx.fillRect(((x * cw + offset) % 512) + 3, y * ch + 3, cw - 6, ch - 6);
       }
     }
-    for (let i = 0; i < 2400; i++) {
-      const px = (Math.sin(i * 41.3) * 0.5 + 0.5) * 512;
-      const py = (Math.cos(i * 19.7) * 0.5 + 0.5) * 512;
-      ctx.fillStyle = i % 2 === 0 ? '#bcbcbc' : '#f2f2f2';
-      ctx.fillRect(px, py, 1.3, 1.0);
+    const img = ctx.getImageData(0, 0, 512, 512);
+    const pd = img.data;
+    for (let i = 0; i < 1600; i++) {
+      const px = ((Math.sin(i * 41.3) * 0.5 + 0.5) * 511) | 0;
+      const py = ((Math.cos(i * 19.7) * 0.5 + 0.5) * 511) | 0;
+      const tone = i % 2 === 0 ? 188 : 242;
+      const p = (py * 512 + px) * 4;
+      pd[p] = tone;
+      pd[p + 1] = tone;
+      pd[p + 2] = tone;
     }
+    ctx.putImageData(img, 0, 0);
     return track(finalizeTexture(c, aniso, 1, 1, false));
   })();
 
-  // 5. Realistic organic uneven botanical meadow grass (1024x1024 high-res blades, varied growth heights, clover patches)
+  // 5. Realistic organic uneven botanical meadow grass
   const grass = catalogOnly
     ? dummyTex
     : (() => {
@@ -567,8 +573,7 @@ export function createTextureBundle(
       }
     };
 
-    // Organic uneven soil/thatch & lush meadow moisture variation
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 90; i++) {
       const px = (Math.sin(i * 19.7 + 1.2) * 0.5 + 0.5) * 512;
       const py = (Math.cos(i * 31.3 + 0.5) * 0.5 + 0.5) * 512;
       const r = 24 + (i % 7) * 14;
@@ -585,36 +590,34 @@ export function createTextureBundle(
       drawWrappedRadial(px, py, r, tone, 'rgba(63, 99, 46, 0)');
     }
 
-    // Dense criss-crossing fine grass blades & dry straw accents wrapped seamlessly
-    for (let i = 0; i < 9600; i++) {
-      const gx = (Math.sin(i * 91.3 + 0.7) * 0.5 + 0.5) * 512;
-      const gy = (Math.cos(i * 47.9 + 1.4) * 0.5 + 0.5) * 512;
-      const len = 3.5 + (i % 6) * 1.9;
-      const lean = ((i % 7) - 3) * 1.15;
-      ctx.strokeStyle =
-        i % 7 === 0
-          ? 'rgba(134, 168, 78, 0.52)'
-          : i % 7 === 1
-            ? 'rgba(36, 62, 24, 0.5)'
-            : i % 7 === 2
-              ? 'rgba(162, 158, 86, 0.34)'
-              : i % 7 === 3
-                ? 'rgba(84, 126, 54, 0.46)'
-                : i % 7 === 4
-                  ? 'rgba(54, 90, 38, 0.46)'
-                  : i % 7 === 5
-                    ? 'rgba(114, 148, 66, 0.42)'
-                    : 'rgba(44, 72, 28, 0.44)';
-      ctx.lineWidth = i % 3 === 0 ? 1.05 : 0.75;
+    // Batch grass blades into 7 path calls instead of 9600 individual beginPath+stroke calls
+    const bladeCols = [
+      'rgba(134, 168, 78, 0.52)',
+      'rgba(36, 62, 24, 0.5)',
+      'rgba(162, 158, 86, 0.34)',
+      'rgba(84, 126, 54, 0.46)',
+      'rgba(54, 90, 38, 0.46)',
+      'rgba(114, 148, 66, 0.42)',
+      'rgba(44, 72, 28, 0.44)',
+    ];
+    ctx.lineWidth = 0.95;
+    for (let bucket = 0; bucket < bladeCols.length; bucket++) {
+      ctx.strokeStyle = bladeCols[bucket];
       ctx.beginPath();
-      ctx.moveTo(gx, gy);
-      ctx.lineTo(gx + lean, gy - len);
+      for (let i = bucket; i < 4200; i += 7) {
+        const gx = (Math.sin(i * 91.3 + 0.7) * 0.5 + 0.5) * 512;
+        const gy = (Math.cos(i * 47.9 + 1.4) * 0.5 + 0.5) * 512;
+        const len = 3.5 + (i % 6) * 1.9;
+        const lean = ((i % 7) - 3) * 1.15;
+        ctx.moveTo(gx, gy);
+        ctx.lineTo(gx + lean, gy - len);
+      }
       ctx.stroke();
     }
     return track(finalizeTexture(c, aniso, 40, 40, true));
   })();
 
-  // 6. Natural Imperfect Garden Street / Sandy Earth & Fine Gravel Park Lane (1024x1024, zero asphalt!)
+  // 6. Natural Imperfect Garden Street / Sandy Earth & Fine Gravel Park Lane
   const asphalt = catalogOnly
     ? dummyTex
     : (() => {
@@ -622,8 +625,7 @@ export function createTextureBundle(
     ctx.fillStyle = '#9b876a';
     ctx.fillRect(0, 0, 512, 512);
 
-    // Organic damp soil, sandy loam, and mossy moisture variation (wrapped seamlessly)
-    for (let i = 0; i < 95; i++) {
+    for (let i = 0; i < 72; i++) {
       const x = (Math.sin(i * 43.1 + 0.3) * 0.5 + 0.5) * 512;
       const y = (Math.cos(i * 29.7 + 1.1) * 0.5 + 0.5) * 512;
       const r = 24 + (i % 6) * 16;
@@ -645,7 +647,6 @@ export function createTextureBundle(
       ctx.fill();
     }
 
-    // Gentle meandering compacted footpath / worn earth tracks down the garden lane
     for (const baseX of [172, 338]) {
       const g = ctx.createLinearGradient(baseX - 42, 0, baseX + 42, 0);
       g.addColorStop(0, 'rgba(155, 135, 106, 0)');
@@ -655,7 +656,6 @@ export function createTextureBundle(
       ctx.fillRect(baseX - 42, 0, 84, 512);
     }
 
-    // Organic grass/moss encroachment creeping in softly from left & right garden verges
     const leftEdge = ctx.createLinearGradient(0, 0, 62, 0);
     leftEdge.addColorStop(0, 'rgba(72, 104, 52, 0.72)');
     leftEdge.addColorStop(0.45, 'rgba(96, 122, 64, 0.32)');
@@ -670,38 +670,33 @@ export function createTextureBundle(
     ctx.fillStyle = rightEdge;
     ctx.fillRect(450, 0, 62, 512);
 
-    // Subtle grass & clover tufts along irregular shoulders
-    for (let i = 0; i < 480; i++) {
-      const side = i % 2 === 0 ? 0 : 1;
-      const gx = side === 0 ? (Math.sin(i * 19.3) * 0.5 + 0.5) * 44 : 468 + (Math.cos(i * 23.7) * 0.5 + 0.5) * 44;
-      const gy = (Math.sin(i * 67.1) * 0.5 + 0.5) * 512;
-      ctx.strokeStyle = i % 3 === 0 ? 'rgba(66, 102, 42, 0.65)' : 'rgba(104, 138, 60, 0.52)';
-      ctx.lineWidth = 1.05;
+    ctx.lineWidth = 1.05;
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.strokeStyle = pass === 0 ? 'rgba(66, 102, 42, 0.65)' : 'rgba(104, 138, 60, 0.52)';
       ctx.beginPath();
-      ctx.moveTo(gx, gy);
-      ctx.lineTo(gx + ((i % 5) - 2) * 1.4, gy - 5 - (i % 4));
+      for (let i = pass; i < 360; i += 2) {
+        const side = i % 2 === 0 ? 0 : 1;
+        const gx = side === 0 ? (Math.sin(i * 19.3) * 0.5 + 0.5) * 44 : 468 + (Math.cos(i * 23.7) * 0.5 + 0.5) * 44;
+        const gy = (Math.sin(i * 67.1) * 0.5 + 0.5) * 512;
+        ctx.moveTo(gx, gy);
+        ctx.lineTo(gx + ((i % 5) - 2) * 1.4, gy - 5 - (i % 4));
+      }
       ctx.stroke();
     }
 
-    // Scattered fine pebbles, sand grains, and fallen dry garden leaves
-    for (let i = 0; i < 9500; i++) {
-      const x = (Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 512;
-      const y = (Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 512;
-      if (i % 23 === 0) {
-        ctx.fillStyle = i % 46 === 0 ? 'rgba(158, 118, 64, 0.55)' : 'rgba(198, 188, 170, 0.45)';
-        ctx.beginPath();
-        ctx.ellipse(x, y, 2.2, 1.3, i * 0.7, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillStyle =
-          i % 4 === 0
-            ? 'rgba(220, 206, 182, 0.22)'
-            : i % 3 === 0
-              ? 'rgba(84, 68, 48, 0.20)'
-              : 'rgba(176, 158, 130, 0.16)';
-        ctx.fillRect(x, y, 1.1, 1.1);
-      }
+    // Fast ImageData pebble & sand grain pass + sparse pebbles
+    const imgA = ctx.getImageData(0, 0, 512, 512);
+    const ad = imgA.data;
+    for (let i = 0; i < 4200; i++) {
+      const px = ((Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 510) | 0;
+      const py = ((Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 510) | 0;
+      const idx = (py * 512 + px) * 4;
+      const delta = i % 4 === 0 ? 22 : i % 3 === 0 ? -24 : 12;
+      ad[idx] = Math.max(0, Math.min(255, ad[idx] + delta));
+      ad[idx + 1] = Math.max(0, Math.min(255, ad[idx + 1] + delta));
+      ad[idx + 2] = Math.max(0, Math.min(255, ad[idx + 2] + delta));
     }
+    ctx.putImageData(imgA, 0, 0);
     return track(finalizeTexture(c, aniso, 1, 7, true));
   })();
 
@@ -709,23 +704,34 @@ export function createTextureBundle(
     ? dummyTex
     : (() => {
     const [c, ctx] = makeCanvas(512, 512);
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 9500; i++) {
-      const x = (Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 512;
-      const y = (Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 512;
-      ctx.fillStyle = i % 2 === 0 ? '#a8a8a8' : '#585858';
-      ctx.fillRect(x, y, i % 11 === 0 ? 1.8 : 1.0, i % 11 === 0 ? 1.8 : 1.0);
+    const img = ctx.createImageData(512, 512);
+    const d = img.data;
+    d.fill(255);
+    for (let i = 0; i < 512 * 512; i++) {
+      const p = i * 4;
+      d[p] = 128;
+      d[p + 1] = 128;
+      d[p + 2] = 128;
     }
+    for (let i = 0; i < 5500; i++) {
+      const px = ((Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 510) | 0;
+      const py = ((Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 510) | 0;
+      const v = i % 2 === 0 ? 168 : 88;
+      const p = (py * 512 + px) * 4;
+      d[p] = v;
+      d[p + 1] = v;
+      d[p + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
     return track(finalizeTexture(c, aniso, 1, 7, false));
   })();
 
-  // 7. Natural Weathered Garden Flagstone Walkway (512x512 warm irregular garden stones + earthy soil/moss joints)
+  // 7. Natural Weathered Garden Flagstone Walkway
   const sidewalk = catalogOnly
     ? dummyTex
     : (() => {
     const [c, ctx] = makeCanvas(512, 512);
-    ctx.fillStyle = '#7c7564'; // Warm soil & moss joint base
+    ctx.fillStyle = '#7c7564';
     ctx.fillRect(0, 0, 512, 512);
 
     const rows = 5;
@@ -749,7 +755,6 @@ export function createTextureBundle(
         ctx.roundRect(sx, sy, sw, sh, 10);
         ctx.fill();
 
-        // Subtle moss tint on stone edges
         if (Math.abs(seed) % 3 === 0) {
           ctx.strokeStyle = 'rgba(84, 114, 58, 0.35)';
           ctx.lineWidth = 2.5;
@@ -758,12 +763,18 @@ export function createTextureBundle(
       }
     }
 
-    for (let i = 0; i < 4200; i++) {
-      const x = (Math.sin(i * 23.4) * 0.5 + 0.5) * 512;
-      const y = (Math.cos(i * 51.8) * 0.5 + 0.5) * 512;
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,250,240,0.08)' : 'rgba(62,56,42,0.12)';
-      ctx.fillRect(x, y, 1.2, 1.2);
+    const imgS = ctx.getImageData(0, 0, 512, 512);
+    const sd = imgS.data;
+    for (let i = 0; i < 2400; i++) {
+      const px = ((Math.sin(i * 23.4) * 0.5 + 0.5) * 511) | 0;
+      const py = ((Math.cos(i * 51.8) * 0.5 + 0.5) * 511) | 0;
+      const p = (py * 512 + px) * 4;
+      const dVal = i % 2 === 0 ? 12 : -14;
+      sd[p] = Math.max(0, Math.min(255, sd[p] + dVal));
+      sd[p + 1] = Math.max(0, Math.min(255, sd[p + 1] + dVal));
+      sd[p + 2] = Math.max(0, Math.min(255, sd[p + 2] + dVal));
     }
+    ctx.putImageData(imgS, 0, 0);
     return track(finalizeTexture(c, aniso, 1, 12, true));
   })();
 
@@ -1052,7 +1063,7 @@ export function createTextureBundle(
     const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#dcd6cb';
     ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 180; i++) {
+    for (let i = 0; i < 120; i++) {
       const px = (Math.sin(i * 29.7 + 0.3) * 0.5 + 0.5) * 512;
       const py = (Math.cos(i * 41.3 + 0.9) * 0.5 + 0.5) * 512;
       const r = 24 + (i % 6) * 16;
@@ -1064,12 +1075,18 @@ export function createTextureBundle(
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (let i = 0; i < 5400; i++) {
-      const x = (Math.sin(i * 17.1) * 0.5 + 0.5) * 512;
-      const y = (Math.cos(i * 53.7) * 0.5 + 0.5) * 512;
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,252,245,0.08)' : 'rgba(130,122,110,0.08)';
-      ctx.fillRect(x, y, 0.9, 0.9);
+    const imgP = ctx.getImageData(0, 0, 512, 512);
+    const pd = imgP.data;
+    for (let i = 0; i < 3600; i++) {
+      const px = ((Math.sin(i * 17.1) * 0.5 + 0.5) * 511) | 0;
+      const py = ((Math.cos(i * 53.7) * 0.5 + 0.5) * 511) | 0;
+      const p = (py * 512 + px) * 4;
+      const d = i % 2 === 0 ? 10 : -10;
+      pd[p] = Math.max(0, Math.min(255, pd[p] + d));
+      pd[p + 1] = Math.max(0, Math.min(255, pd[p + 1] + d));
+      pd[p + 2] = Math.max(0, Math.min(255, pd[p + 2] + d));
     }
+    ctx.putImageData(imgP, 0, 0);
     return track(finalizeTexture(c, aniso, 3, 2, true));
   })();
 
@@ -1079,7 +1096,7 @@ export function createTextureBundle(
     const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 72; i++) {
       const px = (Math.sin(i * 23.1) * 0.5 + 0.5) * 512;
       const py = (Math.cos(i * 37.9) * 0.5 + 0.5) * 512;
       const r = 20 + (i % 5) * 14;
@@ -1091,12 +1108,18 @@ export function createTextureBundle(
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (let i = 0; i < 9000; i++) {
-      const x = (Math.sin(i * 17.1) * 0.5 + 0.5) * 512;
-      const y = (Math.cos(i * 53.7) * 0.5 + 0.5) * 512;
-      ctx.fillStyle = i % 2 === 0 ? '#989898' : '#686868';
-      ctx.fillRect(x, y, 0.9, 0.9);
+    const imgB = ctx.getImageData(0, 0, 512, 512);
+    const bd = imgB.data;
+    for (let i = 0; i < 5400; i++) {
+      const px = ((Math.sin(i * 17.1) * 0.5 + 0.5) * 511) | 0;
+      const py = ((Math.cos(i * 53.7) * 0.5 + 0.5) * 511) | 0;
+      const p = (py * 512 + px) * 4;
+      const v = i % 2 === 0 ? 152 : 104;
+      bd[p] = v;
+      bd[p + 1] = v;
+      bd[p + 2] = v;
     }
+    ctx.putImageData(imgB, 0, 0);
     return track(finalizeTexture(c, aniso, 3, 2, false));
   })();
 
@@ -1196,16 +1219,30 @@ export function createTextureBundle(
   // 9e. Pebbled medical vinyl / upholstery leather bump (256x256)
   const leatherBump = (() => {
     const [c, ctx] = makeCanvas(256, 256);
-    ctx.fillStyle = '#7c7c7c';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 2400; i++) {
-      const x = (Math.sin(i * 31.3 + 0.2) * 0.5 + 0.5) * 256;
-      const y = (Math.cos(i * 47.7 + 0.8) * 0.5 + 0.5) * 256;
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(202,202,202,0.22)' : 'rgba(62,62,62,0.22)';
-      ctx.beginPath();
-      ctx.arc(x, y, 1.4 + (i % 2) * 0.7, 0, Math.PI * 2);
-      ctx.fill();
+    const imgL = ctx.createImageData(256, 256);
+    const ld = imgL.data;
+    ld.fill(255);
+    for (let i = 0; i < 256 * 256; i++) {
+      const p = i * 4;
+      ld[p] = 124;
+      ld[p + 1] = 124;
+      ld[p + 2] = 124;
     }
+    for (let i = 0; i < 1800; i++) {
+      const cx = ((Math.sin(i * 31.3 + 0.2) * 0.5 + 0.5) * 254) | 0;
+      const cy = ((Math.cos(i * 47.7 + 0.8) * 0.5 + 0.5) * 254) | 0;
+      const delta = i % 2 === 0 ? 18 : -16;
+      for (let oy = 0; oy < 2; oy++) {
+        for (let ox = 0; ox < 2; ox++) {
+          const p = ((cy + oy) * 256 + (cx + ox)) * 4;
+          const v = Math.max(0, Math.min(255, ld[p] + delta));
+          ld[p] = v;
+          ld[p + 1] = v;
+          ld[p + 2] = v;
+        }
+      }
+    }
+    ctx.putImageData(imgL, 0, 0);
     return track(finalizeTexture(c, aniso, 4, 4, false));
   })();
 
@@ -1405,17 +1442,13 @@ export function createTextureBundle(
       const startX = (W - totalW) * 0.5;
       const centerY = H * 0.46;
 
-      // Subtle architectural relief shadow so lettering reads like laser-cut wall typography on light plaster
-      ctx.shadowColor = 'rgba(11, 34, 62, 0.20)';
-      ctx.shadowBlur = 7;
-      ctx.shadowOffsetX = 3;
-      ctx.shadowOffsetY = 5;
-
-      // 1) "Powered by" on the left in crisp medical sky-blue
+      // Lightweight crisp offset relief shadow (zero software canvas blur cost)
       ctx.direction = 'ltr';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.font = '700 80px "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif';
+      ctx.fillStyle = 'rgba(11, 34, 62, 0.16)';
+      ctx.fillText(prefixText, startX + 3, centerY + 14);
       ctx.fillStyle = '#0369a1';
       ctx.fillText(prefixText, startX, centerY + 10);
 
@@ -1424,14 +1457,10 @@ export function createTextureBundle(
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
       ctx.font = '800 142px "Cairo", "Tahoma", Arial, sans-serif';
+      ctx.fillStyle = 'rgba(11, 34, 62, 0.16)';
+      ctx.fillText(nameText, startX + totalW + 3, centerY + 2);
       ctx.fillStyle = '#0b223e';
       ctx.fillText(nameText, startX + totalW, centerY - 2);
-
-      // Minimal architectural hairline underline directly on the wall (no box, no frame)
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
       const ruleW = Math.min(totalW + 80, W - 260);
       const ruleX = (W - ruleW) * 0.5;
       const ruleY = H - 72;
@@ -2460,7 +2489,7 @@ export function createTextureBundle(
   receptionScreen.magFilter = THREE.LinearFilter;
   let lastScreenBucket = -1;
   const updateReceptionScreen = (tSec: number) => {
-    const bucket = Math.floor(tSec * 3);
+    const bucket = Math.floor(tSec);
     if (bucket === lastScreenBucket) return;
     lastScreenBucket = bucket;
     drawReceptionScreenFrame(tSec);
