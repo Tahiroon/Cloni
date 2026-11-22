@@ -1489,7 +1489,7 @@ export function createFppEquipment3D(
     markDeviceScreen(screenFace);
     group.add(basePlate, basketFrame, padPack, deck, body, scrBezel, screenFace, holsterL, holsterR);
 
-    // 4 Real Hydrogel Electrode Pads + 4 Flexible Red/Black Curved Lead Wires
+    // 4 Contoured Skin-Adhering Hydrogel Electrode Pads + Flexible Red/Black Lead Wires + Live Skin Pulse Rings
     const padSpecs: Array<{
       id: string;
       wireMat: THREE.Material;
@@ -1504,11 +1504,27 @@ export function createFppEquipment3D(
       { id: 'ch2_b', wireMat: darkRubberMat, padColor: 0xe0f2fe, dockPos: [0.20, 0.60, -0.03], dockRot: [0, 0, -Math.PI / 2], portIdx: 3 },
     ];
 
-    const padGeom = trackGeom(new THREE.BoxGeometry(0.058, 0.011, 0.058));
-    const gelEdgeGeom = trackGeom(new THREE.BoxGeometry(0.062, 0.004, 0.062));
-    const studGeom = trackGeom(new THREE.CylinderGeometry(0.008, 0.008, 0.009, 10));
-    const haloGeom = trackGeom(new THREE.RingGeometry(0.038, 0.048, 18));
+    // Slim, contoured circular hydrogel pad with beveled backing so edges hug curved limbs without gaps
+    const padFoamGeom = trackGeom(new THREE.CylinderGeometry(0.021, 0.025, 0.0052, 20));
+    const gelSkirtGeom = trackGeom(new THREE.CylinderGeometry(0.025, 0.0285, 0.0032, 20));
+    const contactShadowGeom = trackGeom(new THREE.RingGeometry(0.020, 0.030, 22));
+    contactShadowGeom.rotateX(-Math.PI / 2);
+    const studGeom = trackGeom(new THREE.CylinderGeometry(0.0065, 0.007, 0.007, 10));
+    const haloGeom = trackGeom(new THREE.RingGeometry(0.031, 0.040, 22));
     haloGeom.rotateX(-Math.PI / 2);
+    const pulseWaveGeom = trackGeom(new THREE.RingGeometry(0.022, 0.032, 24));
+    pulseWaveGeom.rotateX(-Math.PI / 2);
+
+    const contactShadowMat = trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x0f172a,
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+      })
+    );
 
     const padEntries = padSpecs.map((ps) => {
       const pGroup = new THREE.Group();
@@ -1519,29 +1535,77 @@ export function createFppEquipment3D(
           color: ps.padColor,
           emissive: 0x0ea5e9,
           emissiveIntensity: 0,
-          roughness: 0.45,
+          roughness: 0.42,
         })
       );
-      const foam = new THREE.Mesh(padGeom, padMat);
-      foam.position.y = 0.006;
-      const gel = new THREE.Mesh(gelEdgeGeom, cyanAccentMat);
-      gel.position.y = 0.001;
+      const gelMat = trackMat(
+        new THREE.MeshPhysicalMaterial({
+          color: 0x38bdf8,
+          emissive: 0x0284c7,
+          emissiveIntensity: 0.08,
+          roughness: 0.2,
+          transparent: true,
+          opacity: 0.88,
+        })
+      );
+      const contactRing = new THREE.Mesh(contactShadowGeom, contactShadowMat);
+      contactRing.position.y = 0.0004;
+      contactRing.visible = false;
+
+      const gel = new THREE.Mesh(gelSkirtGeom, gelMat);
+      gel.position.y = 0.0014;
+      const foam = new THREE.Mesh(padFoamGeom, padMat);
+      foam.position.y = 0.0052;
       const stud = new THREE.Mesh(studGeom, chromeMat);
-      stud.position.y = 0.014;
+      stud.position.y = 0.0102;
+
       const selMat = trackMat(
         new THREE.MeshBasicMaterial({ color: 0x10b981, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
       );
       const selRing = new THREE.Mesh(haloGeom, selMat);
-      selRing.position.y = 0.016;
+      selRing.position.y = 0.009;
       selRing.visible = false;
-      pGroup.add(gel, foam, stud, selRing);
+
+      const pulseMat1 = trackMat(
+        new THREE.MeshBasicMaterial({
+          color: ps.portIdx % 2 === 0 ? 0x38bdf8 : 0x22d3ee,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+        })
+      );
+      const pulseRing1 = new THREE.Mesh(pulseWaveGeom, pulseMat1);
+      pulseRing1.position.y = 0.0022;
+      pulseRing1.visible = false;
+
+      const pulseMat2 = trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x7dd3fc,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+        })
+      );
+      const pulseRing2 = new THREE.Mesh(pulseWaveGeom, pulseMat2);
+      pulseRing2.position.y = 0.0024;
+      pulseRing2.visible = false;
+
+      pGroup.add(contactRing, gel, foam, stud, selRing, pulseRing1, pulseRing2);
       markDraggableProbe(pGroup, ps.id);
       group.add(pGroup);
 
-      const cable = createDynamicCable(0.0042, ps.wireMat, disposables, 14, 7);
+      const cable = createDynamicCable(0.0040, ps.wireMat, disposables, 14, 7);
       group.add(cable.mesh);
 
-      return { ...ps, pGroup, padMat, selRing, cable };
+      return { ...ps, pGroup, padMat, gelMat, contactRing, selRing, pulseRing1, pulseMat1, pulseRing2, pulseMat2, cable };
     });
 
     updateMotion = (input) => {
@@ -1549,32 +1613,83 @@ export function createFppEquipment3D(
       const onBed = THREE.MathUtils.clamp(input.onBedBlend ?? a, 0, 1);
       const running = Boolean(input.isRunning ?? a > 0.25);
       const p = input.deviceParams;
-      const maStr = `${p?.intensity ?? 16} mA`;
-      const hzStr = `${p?.freqHz ?? 80} Hz`;
-      const mStr = p?.mode ?? 'CONV';
+      const maVal = Number(p?.intensity ?? 16);
+      const hzVal = Number(p?.freqHz ?? 80);
+      const usVal = Number(p?.pulseUs ?? 120);
+      const modeVal = p?.mode ?? 'CONV';
+      const maStr = `${maVal} mA`;
+      const hzStr = `${hzVal} Hz`;
+      const mStr = modeVal;
       const tStr = formatTimerMmSs(p, 20);
       tensScreen.updateDisplay(running, `${maStr}|${hzStr}|${mStr}|${tStr}`, [maStr, hzStr, mStr, tStr]);
       screenMat.emissiveIntensity = 0.14 + a * 0.9;
 
+      const maNorm = THREE.MathUtils.clamp((maVal - 2) / 58, 0.06, 1);
+      const usNorm = THREE.MathUtils.clamp((usVal - 50) / 250, 0, 1);
+      // Visual pulse cadence: clear beat-by-beat below 16 Hz, crisp rhythmic surge wave above
+      const visRate =
+        modeVal === 'BURST'
+          ? 2.2
+          : modeVal === 'IFC'
+            ? 3.8
+            : THREE.MathUtils.clamp(hzVal <= 15 ? hzVal * 0.72 : 3.2 + (hzVal - 15) * 0.055, 1.4, 11.5);
+
       for (const pe of padEntries) {
         const target = findProbeTarget(input.probeWorldTargets, pe.id);
         pe.selRing.visible = Boolean(target?.selected);
-        pe.padMat.emissiveIntensity =
-          target?.placed && running ? 0.45 + Math.sin(input.timeSec * 5) * 0.25 : target?.selected ? 0.35 : 0;
+        pe.contactRing.visible = Boolean(target?.placed);
 
-        if (target && (target.placed || target.holding) && onBed > 0.05) {
-          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.052;
-          applyPlacedProbeTransform(pe.pGroup, group, target, 0.005 + lift, 'Y');
-          writeGripWorld(pe.pGroup, 0, 0.015, 0, target);
+        const isActiveSkinPad = Boolean(target?.placed && running && onBed > 0.05);
+        if (isActiveSkinPad) {
+          const chPhaseOff = pe.portIdx * (modeVal === 'IFC' ? 0.25 : 0.06);
+          const rawPhase1 = (input.timeSec * visRate + chPhaseOff) % 1;
+          const rawPhase2 = (input.timeSec * visRate + chPhaseOff + 0.48) % 1;
+          let gate = 1;
+          if (modeVal === 'BURST') {
+            const burstWin = (input.timeSec * 2.0) % 1;
+            gate = burstWin < 0.48 ? 1 : 0.08;
+          } else if (modeVal === 'IFC') {
+            gate = 0.45 + 0.55 * Math.sin(input.timeSec * 7.5 + (pe.portIdx >= 2 ? Math.PI : 0));
+          }
+          const env1 = Math.sin(rawPhase1 * Math.PI);
+          const env2 = Math.sin(rawPhase2 * Math.PI);
+          const ampScale = (0.32 + maNorm * 0.92 + usNorm * 0.18) * gate;
+
+          pe.pulseRing1.visible = true;
+          const s1 = 0.98 + rawPhase1 * (0.28 + maNorm * 0.86 + usNorm * 0.16);
+          pe.pulseRing1.scale.set(s1, 1, s1);
+          pe.pulseMat1.opacity = THREE.MathUtils.clamp((0.24 + maNorm * 0.72) * (1 - rawPhase1) * gate, 0, 0.95);
+
+          pe.pulseRing2.visible = maNorm > 0.22;
+          const s2 = 0.96 + rawPhase2 * (0.22 + maNorm * 0.72);
+          pe.pulseRing2.scale.set(s2, 1, s2);
+          pe.pulseMat2.opacity = THREE.MathUtils.clamp((0.16 + maNorm * 0.58) * (1 - rawPhase2) * gate, 0, 0.85);
+
+          const pulseLift = env1 * (0.0008 + maNorm * 0.0014);
+          pe.padMat.emissiveIntensity = (0.18 + maNorm * 0.85) * (0.45 + 0.55 * env1) * gate;
+          pe.gelMat.emissiveIntensity = (0.35 + maNorm * 1.45) * (0.4 + 0.6 * Math.max(env1, env2)) * ampScale;
+          pe.pGroup.scale.set(1 + maNorm * 0.03 * env1, 1 + maNorm * 0.05 * env1, 1 + maNorm * 0.03 * env1);
+          applyPlacedProbeTransform(pe.pGroup, group, target!, -0.0062 + pulseLift, 'Y');
+          writeGripWorld(pe.pGroup, 0, 0.011, 0, target!);
         } else {
-          pe.pGroup.position.set(...pe.dockPos);
-          pe.pGroup.rotation.set(...pe.dockRot);
+          pe.pulseRing1.visible = false;
+          pe.pulseRing2.visible = false;
+          pe.pGroup.scale.set(1, 1, 1);
+          pe.padMat.emissiveIntensity = target?.selected ? 0.35 : 0;
+          pe.gelMat.emissiveIntensity = target?.selected ? 0.4 : 0.06;
+
+          if (target && (target.placed || target.holding) && onBed > 0.05) {
+            const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.052;
+            applyPlacedProbeTransform(pe.pGroup, group, target, -0.0062 + lift, 'Y');
+            writeGripWorld(pe.pGroup, 0, 0.011, 0, target);
+          } else {
+            pe.pGroup.position.set(...pe.dockPos);
+            pe.pGroup.rotation.set(...pe.dockRot);
+          }
         }
 
-        _endPosScratch.set(0, 0.014, 0).applyMatrix4(pe.pGroup.matrix);
-        // Quick compute end in group-local since pe.pGroup is direct child of group
         pe.pGroup.updateMatrix();
-        _endPosScratch.set(0, 0.014, 0).applyMatrix4(pe.pGroup.matrix);
+        _endPosScratch.set(0, 0.011, 0).applyMatrix4(pe.pGroup.matrix);
         _exitDirScratch.set(0, -0.35, 1).normalize();
         pe.cable.update(jackPorts[pe.portIdx], _endPosScratch, target?.placed ? 0.20 : 0.12, _exitDirScratch, 0.04);
       }
@@ -1719,7 +1834,7 @@ export function createFppEquipment3D(
         const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.048;
         const sweepX = target.placed && running ? Math.cos(input.timeSec * 2.5) * 0.028 + Math.sin(input.timeSec * 1.15) * 0.010 : 0;
         const sweepZ = target.placed && running ? Math.sin(input.timeSec * 2.5) * 0.028 : 0;
-        applyPlacedProbeTransform(wandGroup, group, target, 0.014 + lift, 'Z', sweepX, sweepZ);
+        applyPlacedProbeTransform(wandGroup, group, target, 0.006 + lift, 'Z', sweepX, sweepZ);
         gelDisc.visible = Boolean(target.placed);
         writeGripWorld(wandGroup, 0, 0, -0.085, target, 0, 0, -1);
       } else {
@@ -1935,8 +2050,10 @@ export function createFppEquipment3D(
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
         const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.048;
-        const pulseOff = target.placed && running ? Math.abs(Math.sin(input.timeSec * 20)) * 0.0055 : 0;
-        applyPlacedProbeTransform(pistolGroup, group, target, 0.014 + lift + pulseOff, 'Z');
+        const bar01 = THREE.MathUtils.clamp((Number(p?.intensity ?? 2.4) - 1) / 4, 0.1, 1);
+        const eswtHz = THREE.MathUtils.clamp(Number(p?.freqHz ?? 10), 1, 21);
+        const pulseOff = target.placed && running ? Math.abs(Math.sin(input.timeSec * eswtHz * Math.PI)) * (0.003 + bar01 * 0.005) : 0;
+        applyPlacedProbeTransform(pistolGroup, group, target, 0.007 + lift + pulseOff, 'Z');
         writeGripWorld(pistolGroup, 0, -0.060, -0.140, target, 0, 1, 0);
       } else {
         pistolGroup.position.set(0.185, 0.68, 0.02);
@@ -2012,20 +2129,40 @@ export function createFppEquipment3D(
       { id: 'emg_2', mat: redAccentMat, dockPos: [0.115, 0.642, 0.125], port: new THREE.Vector3(0.115, 0.655, 0.075) },
       { id: 'emg_ref', mat: amberAccentMat, dockPos: [0.15, 0.642, 0.125], port: new THREE.Vector3(0.15, 0.655, 0.075) },
     ];
-    const discGeom = trackGeom(new THREE.CylinderGeometry(0.022, 0.022, 0.012, 14));
+    const discGeom = trackGeom(new THREE.CylinderGeometry(0.019, 0.021, 0.0085, 16));
+    const emgGelGeom = trackGeom(new THREE.CylinderGeometry(0.023, 0.025, 0.0026, 16));
+    const emgPulseGeom = trackGeom(new THREE.RingGeometry(0.021, 0.030, 20));
+    emgPulseGeom.rotateX(-Math.PI / 2);
     const emgEntries = emgSpecs.map((es) => {
       const pGroup = new THREE.Group();
       pGroup.position.set(...es.dockPos);
+      const emgGel = new THREE.Mesh(emgGelGeom, bodyWhiteMat);
+      emgGel.position.y = 0.0012;
       const pod = new THREE.Mesh(discGeom, es.mat);
-      pod.position.y = 0.006;
-      const cap = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.014, 0.014, 0.008, 12)), bodyWhiteMat);
-      cap.position.y = 0.013;
-      pGroup.add(pod, cap);
+      pod.position.y = 0.005;
+      const cap = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.012, 0.012, 0.006, 12)), bodyWhiteMat);
+      cap.position.y = 0.010;
+      const pulseMat = trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x10b981,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+        })
+      );
+      const pulseRing = new THREE.Mesh(emgPulseGeom, pulseMat);
+      pulseRing.position.y = 0.002;
+      pulseRing.visible = false;
+      pGroup.add(emgGel, pod, cap, pulseRing);
       markDraggableProbe(pGroup, es.id);
       group.add(pGroup);
       const cable = createDynamicCable(0.004, es.mat, disposables, 14, 7);
       group.add(cable.mesh);
-      return { ...es, pGroup, cable };
+      return { ...es, pGroup, pulseRing, pulseMat, cable };
     });
 
     updateMotion = (input) => {
@@ -2040,18 +2177,29 @@ export function createFppEquipment3D(
       emgScreen.updateDisplay(running, `${thr}|${gain}|${mStr}|${tStr}`, [thr, gain, mStr, tStr]);
       screenMat.emissiveIntensity = 0.14 + a * 0.9;
 
+      const emgWave = Math.max(0, Math.sin(input.timeSec * 1.4));
       for (const ee of emgEntries) {
         const target = findProbeTarget(input.probeWorldTargets, ee.id);
         if (target && (target.placed || target.holding) && onBed > 0.05) {
           const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.052;
-          applyPlacedProbeTransform(ee.pGroup, group, target, 0.005 + lift, 'Y');
-          writeGripWorld(ee.pGroup, 0, 0.014, 0, target);
+          applyPlacedProbeTransform(ee.pGroup, group, target, -0.0058 + lift, 'Y');
+          if (target.placed && running) {
+            ee.pulseRing.visible = true;
+            const ph = (input.timeSec * 2.2) % 1;
+            const s = 1.0 + ph * 0.52 * (0.4 + emgWave * 0.6);
+            ee.pulseRing.scale.set(s, 1, s);
+            ee.pulseMat.opacity = (1 - ph) * (0.25 + emgWave * 0.55);
+          } else {
+            ee.pulseRing.visible = false;
+          }
+          writeGripWorld(ee.pGroup, 0, 0.011, 0, target);
         } else {
           ee.pGroup.position.set(...ee.dockPos);
           ee.pGroup.rotation.set(0, 0, 0);
+          ee.pulseRing.visible = false;
         }
         ee.pGroup.updateMatrix();
-        _endPosScratch.set(0, 0.012, 0).applyMatrix4(ee.pGroup.matrix);
+        _endPosScratch.set(0, 0.010, 0).applyMatrix4(ee.pGroup.matrix);
         _exitDirScratch.set(0, 0.25, 1).normalize();
         ee.cable.update(ee.port, _endPosScratch, target?.placed ? 0.18 : 0.06, _exitDirScratch, 0.05);
       }
@@ -2146,8 +2294,9 @@ export function createFppEquipment3D(
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
         const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.056;
-        applyPlacedProbeTransform(cuffGroup, group, target, 0.008 + lift, 'Y');
-        const puff = target.placed && running ? 1 + Math.sin(input.timeSec * 2.2) * 0.06 : 1;
+        applyPlacedProbeTransform(cuffGroup, group, target, -0.003 + lift, 'Y');
+        const mm01 = THREE.MathUtils.clamp((Number(p?.pressureMmHg ?? 45) - 20) / 55, 0.2, 1);
+        const puff = target.placed && running ? 1 + Math.sin(input.timeSec * (2.2 + mm01 * 1.4)) * (0.04 + mm01 * 0.06) : 1;
         cuffGroup.scale.set(1, puff, 1);
         writeGripWorld(cuffGroup, 0, 0.034, 0, target);
       } else {
@@ -2403,7 +2552,7 @@ export function createFppEquipment3D(
         const target = findProbeTarget(input.probeWorldTargets, 'head');
         if (target && (target.placed || target.holding) && onBed > 0.05) {
           const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.056;
-          applyPlacedProbeTransform(packGroup, group, target, 0.008 + lift, 'Y');
+          applyPlacedProbeTransform(packGroup, group, target, -0.004 + lift, 'Y');
           writeGripWorld(packGroup, 0, 0.032, 0, target);
         } else {
           packGroup.position.set(0, 0.77, -0.04);
@@ -2433,10 +2582,10 @@ export function createFppEquipment3D(
         group.add(post);
       }
 
-      const tub = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.32, 0.18, 0.26)), bodyWhiteMat);
-      tub.position.set(0, 0.66, 0);
+      const tub = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.32, 0.16, 0.26)), bodyWhiteMat);
+      tub.position.set(0, 0.65, 0);
       const tubRim = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.335, 0.024, 0.275)), slateFrameMat);
-      tubRim.position.set(0, 0.755, 0);
+      tubRim.position.set(0, 0.744, 0);
       const waxMat = trackMat(
         new THREE.MeshPhysicalMaterial({
           color: 0xfde68a,
@@ -2446,8 +2595,8 @@ export function createFppEquipment3D(
           clearcoat: 0.6,
         })
       );
-      const waxPool = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.26, 0.022, 0.20)), waxMat);
-      waxPool.position.set(0, 0.76, 0);
+      const waxPool = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.26, 0.018, 0.20)), waxMat);
+      waxPool.position.set(0, 0.766, 0);
 
       const pScreen = createLiveDeviceScreen('PARAFFIN', '#f59e0b', ['53 C', 'DIP&WRAP', '15:00', 'MELT'], 'thermal');
       trackTex(pScreen.texture);
@@ -2461,9 +2610,9 @@ export function createFppEquipment3D(
         })
       );
       const scrBezel = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.20, 0.105, 0.018)), slateFrameMat);
-      scrBezel.position.set(0, 0.66, 0.135);
+      scrBezel.position.set(0, 0.65, 0.14);
       const scrFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(0.175, 0.082)), pScreenMat);
-      scrFace.position.set(0, 0.66, 0.145);
+      scrFace.position.set(0, 0.65, 0.154);
 
       markDeviceScreen(scrBezel);
       markDeviceScreen(scrFace);

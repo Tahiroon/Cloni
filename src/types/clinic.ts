@@ -246,6 +246,13 @@ export interface FppProbeAnchor {
   nx?: number;
   ny?: number;
   nz?: number;
+  boneName?: string;
+  blx?: number;
+  bly?: number;
+  blz?: number;
+  bnx?: number;
+  bny?: number;
+  bnz?: number;
   placed: boolean;
 }
 

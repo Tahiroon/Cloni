@@ -4757,9 +4757,9 @@ export function createCatalogMesh3D(
         emissiveIntensity: 0.36,
         roughness: 0.16,
       });
-      const waxSurface = box(0.36, 0.025, 0.26, waxMat, 0, 0.855, 0);
+      const waxSurface = box(0.36, 0.022, 0.26, waxMat, 0, 0.879, 0);
       waxSurface.userData.noCastShadow = true;
-      const heatLed = box(0.04, 0.025, 0.02, amberAccent, -0.14, 0.72, 0.185);
+      const heatLed = box(0.04, 0.025, 0.016, amberAccent, -0.14, 0.72, 0.19);
       heatLed.userData.noCastShadow = true;
       inner.scale.setScalar(0.81);
       break;

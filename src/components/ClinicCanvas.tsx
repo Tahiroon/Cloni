@@ -77,6 +77,11 @@ import {
 } from '../engine3d/fppViewRig';
 import { createTextureBundle, TextureBundle } from '../engine3d/textures3d';
 import {
+  ActiveDeviceAudioInput,
+  PatientReactionKind,
+  soundFx,
+} from '../services/soundEffects';
+import {
   CatalogItem,
   ClinicRoom,
   DeviceConsoleParams,
@@ -618,6 +623,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     nx: number;
     ny: number;
     nz: number;
+    boneName?: string;
+    blx?: number;
+    bly?: number;
+    blz?: number;
+    bnx?: number;
+    bny?: number;
+    bnz?: number;
     committed: boolean;
     setupTimer: number;
     setupDuration: number;
@@ -971,6 +983,105 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const _probeAxisCam = new THREE.Vector3(0, 1, 0);
     const _hsHandWorld = new THREE.Vector3();
     const _hsHandCam = new THREE.Vector3();
+    const _skVA = new THREE.Vector3();
+    const _skVB = new THREE.Vector3();
+    const _skVC = new THREE.Vector3();
+    const _skEdge1 = new THREE.Vector3();
+    const _skEdge2 = new THREE.Vector3();
+    const _skFaceNrm = new THREE.Vector3();
+    const _boneMatTmp = new THREE.Matrix4();
+    const _boneNrmMatTmp = new THREE.Matrix3();
+    let fppBoneCachePid: string | null = null;
+    const fppBoneCacheMap = new Map<string, THREE.Object3D>();
+    const fppObjToBoneKey = new Map<THREE.Object3D, string>();
+    const fppAudioDevicesScratch: ActiveDeviceAudioInput[] = [];
+    type StimRegionType =
+      | 'upper_l'
+      | 'upper_r'
+      | 'neck'
+      | 'torso'
+      | 'thigh_l'
+      | 'thigh_r'
+      | 'shin_l'
+      | 'shin_r'
+      | 'general';
+    const fppStimState = {
+      patientId: null as string | null,
+      level: 0,
+      pulse: 0,
+      spike: 0,
+      kind: 'electrical' as PatientReactionKind,
+      region: 'general' as StimRegionType,
+      prevLevel: 0,
+      lastVoiceLevel: 0,
+      lastSustainedVoiceAt: 0,
+    };
+
+    const ensureFppBoneCache = (rig: HumanoidRig, pid: string) => {
+      if (fppBoneCachePid === pid && fppBoneCacheMap.size > 0) return;
+      fppBoneCachePid = pid;
+      fppBoneCacheMap.clear();
+      fppObjToBoneKey.clear();
+      if (rig.bones) {
+        for (const [key, ref] of Object.entries(rig.bones)) {
+          if (ref?.bone) {
+            fppBoneCacheMap.set(key, ref.bone);
+            fppObjToBoneKey.set(ref.bone, key);
+          }
+        }
+      }
+      rig.root.traverse((obj) => {
+        if ((obj as THREE.Bone).isBone && obj.name && !fppBoneCacheMap.has(obj.name)) {
+          fppBoneCacheMap.set(obj.name, obj);
+        }
+      });
+    };
+
+    const boneToStimRegion = (
+      boneName?: string,
+      bedRegion?: FppTargetRegion,
+      bayX?: number
+    ): StimRegionType => {
+      if (boneName) {
+        switch (boneName) {
+          case 'ShoulderL':
+          case 'UpperArmL':
+          case 'LowerArmL':
+          case 'HandL':
+            return 'upper_l';
+          case 'ShoulderR':
+          case 'UpperArmR':
+          case 'LowerArmR':
+          case 'HandR':
+            return 'upper_r';
+          case 'Head':
+          case 'Neck':
+            return 'neck';
+          case 'UpperLegL':
+            return 'thigh_l';
+          case 'LowerLegL':
+          case 'FootL':
+          case 'ToeL':
+            return 'shin_l';
+          case 'UpperLegR':
+            return 'thigh_r';
+          case 'LowerLegR':
+          case 'FootR':
+          case 'ToeR':
+            return 'shin_r';
+          case 'Chest':
+          case 'Abdomen':
+          case 'Torso':
+          case 'Hips':
+            return 'torso';
+        }
+      }
+      if (bedRegion === 'cervical') return 'neck';
+      if (bedRegion === 'shoulder') return (bayX ?? 0) >= 0 ? 'upper_l' : 'upper_r';
+      if (bedRegion === 'lumbar') return 'torso';
+      if (bedRegion === 'knee') return (bayX ?? 0) >= 0 ? 'shin_l' : 'shin_r';
+      return 'general';
+    };
 
     const BODY_ZONES = {
       head: { ar: 'الرأس', en: 'Head' },
@@ -1675,6 +1786,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       entry.probeAnchors = getDefaultProbeAnchors(entry.sprite);
       probeReticleHoverActive = false;
       fppProbeReticleGroup.visible = false;
+      soundFx.fppEquipGrab(getFppEquipCarrySpec(entry.sprite).carryMode === 'roll');
       if (wasBed) {
         emitAttachedDevicesForActiveFpp();
       }
@@ -1749,6 +1861,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           : 0.68;
       act.setupBayZ = plan.finalZ;
 
+      soundFx.fppEquipPlace(getFppEquipCarrySpec(held.sprite).carryMode === 'roll', plan.nearBed);
       emitAttachedDevicesForActiveFpp();
       lastFppHeldKey = '';
       lastFppNearKey = '';
@@ -1780,6 +1893,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       entry.probeAnchors = getDefaultProbeAnchors(entry.sprite);
       probeReticleHoverActive = false;
       fppProbeReticleGroup.visible = false;
+      soundFx.fppEquipReturn();
       if (wasBed) {
         emitAttachedDevicesForActiveFpp();
       }
@@ -1850,6 +1964,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           const signZ = entry.placedZ >= -0.24 ? 1 : -1;
           const baseZ = curPosture === 'standing' ? 0.18 : entry.placedZ >= -0.24 ? 0.02 : -0.24;
           entry.placedZ = THREE.MathUtils.clamp(baseZ + signZ * nextIrDist, -1.35, 1.45);
+          soundFx.fppEquipAdjust(performance.now() * 0.001);
+        }
+        if (steeredByStick) {
+          soundFx.fppEquipAdjust(performance.now() * 0.001);
         }
       }
 
@@ -1913,6 +2031,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
       if (next.screenTapped || prevRunning !== entry.isRunning) {
         fppCamRef.current.consoleTapPulse = 1.0;
+      }
+      if (prevRunning !== entry.isRunning) {
+        soundFx.deviceToggle(entry.isRunning);
       }
 
       emitAttachedDevicesForActiveFpp();
@@ -3213,6 +3334,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       nx: number;
       ny: number;
       nz: number;
+      boneName?: string;
+      blx?: number;
+      bly?: number;
+      blz?: number;
+      bnx?: number;
+      bny?: number;
+      bnz?: number;
       zone: { ar: string; en: string };
     } | null => {
       const curFppId = fppCamRef.current.activeId;
@@ -3222,6 +3350,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
       pEntry.rig.root.updateMatrixWorld(true);
       fppBackdrop.group.updateMatrixWorld(true);
+      ensureFppBoneCache(pEntry.rig, curFppId);
 
       const rect = renderer.domElement.getBoundingClientRect();
       _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -3248,26 +3377,135 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
         if (!vis) continue;
 
+        const skMesh = (hit.object as THREE.SkinnedMesh).isSkinnedMesh
+          ? (hit.object as THREE.SkinnedMesh)
+          : null;
+
         if (hit.face) {
-          _hitNormalWorld.copy(hit.face.normal).transformDirection(hit.object.matrixWorld).normalize();
+          if (skMesh) {
+            skMesh.getVertexPosition(hit.face.a, _skVA);
+            skMesh.getVertexPosition(hit.face.b, _skVB);
+            skMesh.getVertexPosition(hit.face.c, _skVC);
+            _skEdge1.subVectors(_skVB, _skVA);
+            _skEdge2.subVectors(_skVC, _skVA);
+            _skFaceNrm.crossVectors(_skEdge1, _skEdge2);
+            if (_skFaceNrm.lengthSq() > 1e-10) {
+              _hitNormalWorld.copy(_skFaceNrm).transformDirection(skMesh.matrixWorld).normalize();
+            } else {
+              _hitNormalWorld.copy(hit.face.normal).transformDirection(hit.object.matrixWorld).normalize();
+            }
+          } else {
+            _hitNormalWorld.copy(hit.face.normal).transformDirection(hit.object.matrixWorld).normalize();
+          }
           _toCamVec.copy(camera.position).sub(hit.point);
           if (_hitNormalWorld.dot(_toCamVec) < 0) _hitNormalWorld.negate();
         } else {
           _hitNormalWorld.copy(camera.position).sub(hit.point).normalize();
         }
 
+        // Resolve dominant skeletal bone for skin-tracking electrodes & probes
+        let dominantBone: THREE.Object3D | undefined;
+        let dominantBoneName: string | undefined;
+        if (skMesh && hit.face && skMesh.skeleton?.bones?.length) {
+          const skinIdxAttr = skMesh.geometry.attributes.skinIndex;
+          const skinWgtAttr = skMesh.geometry.attributes.skinWeight;
+          if (skinIdxAttr && skinWgtAttr) {
+            const vi = hit.face.a;
+            const w0 = skinWgtAttr.getX(vi);
+            const w1 = skinWgtAttr.getY(vi);
+            const w2 = skinWgtAttr.getZ(vi);
+            const w3 = skinWgtAttr.getW(vi);
+            let bestSlot = 0;
+            let bestW = w0;
+            if (w1 > bestW) { bestW = w1; bestSlot = 1; }
+            if (w2 > bestW) { bestW = w2; bestSlot = 2; }
+            if (w3 > bestW) { bestSlot = 3; }
+            const boneIndex =
+              bestSlot === 0
+                ? skinIdxAttr.getX(vi)
+                : bestSlot === 1
+                  ? skinIdxAttr.getY(vi)
+                  : bestSlot === 2
+                    ? skinIdxAttr.getZ(vi)
+                    : skinIdxAttr.getW(vi);
+            const rawBone = skMesh.skeleton.bones[Math.round(boneIndex)];
+            if (rawBone) {
+              let walk: THREE.Object3D | null = rawBone;
+              for (let depth = 0; depth < 5 && walk && walk !== pEntry.rig.root; depth++) {
+                const mapped = fppObjToBoneKey.get(walk);
+                if (mapped) {
+                  dominantBone = walk;
+                  dominantBoneName = mapped;
+                  break;
+                }
+                walk = walk.parent;
+              }
+              if (!dominantBone && rawBone.name) {
+                dominantBone = rawBone;
+                dominantBoneName = rawBone.name;
+              }
+            }
+          }
+        }
+        if (!dominantBone && pEntry.rig.bones) {
+          let bestDistSq = Infinity;
+          for (const key of BONE_CHECK_KEYS) {
+            const bRef = pEntry.rig.bones[key];
+            if (!bRef) continue;
+            bRef.bone.getWorldPosition(_zoneBonePos);
+            const dSq = _zoneBonePos.distanceToSquared(hit.point);
+            if (dSq < bestDistSq) {
+              bestDistSq = dSq;
+              dominantBone = bRef.bone;
+              dominantBoneName = key;
+            }
+          }
+        }
+
         _bayInvMat.copy(fppBackdrop.group.matrixWorld).invert();
         _bayInvNrmMat.getNormalMatrix(_bayInvMat);
         _bayPtTmp.copy(hit.point).addScaledVector(_hitNormalWorld, 0.008).applyMatrix4(_bayInvMat);
         _bayNrmTmp.copy(_hitNormalWorld).applyMatrix3(_bayInvNrmMat).normalize();
+        const bayX = _bayPtTmp.x;
+        const bayY = _bayPtTmp.y;
+        const bayZ = _bayPtTmp.z;
+        const nx = _bayNrmTmp.x;
+        const ny = _bayNrmTmp.y;
+        const nz = _bayNrmTmp.z;
+
+        let blx: number | undefined;
+        let bly: number | undefined;
+        let blz: number | undefined;
+        let bnx: number | undefined;
+        let bny: number | undefined;
+        let bnz: number | undefined;
+        if (dominantBone && dominantBoneName) {
+          _boneMatTmp.copy(dominantBone.matrixWorld).invert();
+          _boneNrmMatTmp.getNormalMatrix(_boneMatTmp);
+          _skVA.copy(hit.point).addScaledVector(_hitNormalWorld, 0.008).applyMatrix4(_boneMatTmp);
+          _skVB.copy(_hitNormalWorld).applyMatrix3(_boneNrmMatTmp).normalize();
+          blx = _skVA.x;
+          bly = _skVA.y;
+          blz = _skVA.z;
+          bnx = _skVB.x;
+          bny = _skVB.y;
+          bnz = _skVB.z;
+        }
 
         return {
-          bayX: _bayPtTmp.x,
-          bayY: _bayPtTmp.y,
-          bayZ: _bayPtTmp.z,
-          nx: _bayNrmTmp.x,
-          ny: _bayNrmTmp.y,
-          nz: _bayNrmTmp.z,
+          bayX,
+          bayY,
+          bayZ,
+          nx,
+          ny,
+          nz,
+          boneName: dominantBoneName,
+          blx,
+          bly,
+          blz,
+          bnx,
+          bny,
+          bnz,
           zone: detectPatientBodyZone(pEntry.rig.bones, hit.point, _bayNrmTmp),
         };
       }
@@ -3368,6 +3606,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                   nx: hit.nx,
                   ny: hit.ny,
                   nz: hit.nz,
+                  boneName: hit.boneName,
+                  blx: hit.blx,
+                  bly: hit.bly,
+                  blz: hit.blz,
+                  bnx: hit.bnx,
+                  bny: hit.bny,
+                  bnz: hit.bnz,
                   placed: true,
                 }
               : a
@@ -3403,10 +3648,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                   nx: hit.nx,
                   ny: hit.ny,
                   nz: hit.nz,
+                  boneName: hit.boneName,
+                  blx: hit.blx,
+                  bly: hit.bly,
+                  blz: hit.blz,
+                  bnx: hit.bnx,
+                  bny: hit.bny,
+                  bnz: hit.bnz,
                   placed: true,
                 }
               : a
           );
+          soundFx.padStick();
         }
         const nextUnplaced = entry.probeAnchors.find((a) => !a.placed);
         entry.selectedProbeId = nextUnplaced ? nextUnplaced.id : null;
@@ -3471,10 +3724,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               nx: act.nx,
               ny: act.ny,
               nz: act.nz,
+              boneName: act.boneName,
+              blx: act.blx,
+              bly: act.bly,
+              blz: act.blz,
+              bnx: act.bnx,
+              bny: act.bny,
+              bnz: act.bnz,
               placed: true,
             }
           : a
       );
+      soundFx.padStick();
       const nextUnplaced = entry.probeAnchors.find((a) => !a.placed);
       entry.selectedProbeId = nextUnplaced ? nextUnplaced.id : null;
       if (!entry.selectedProbeId) {
@@ -3543,6 +3804,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       act.nx = hit.nx;
       act.ny = hit.ny;
       act.nz = hit.nz;
+      act.boneName = hit.boneName;
+      act.blx = hit.blx;
+      act.bly = hit.bly;
+      act.blz = hit.blz;
+      act.bnx = hit.bnx;
+      act.bny = hit.bny;
+      act.bnz = hit.bnz;
       act.committed = false;
       return true;
     };
@@ -4741,7 +5009,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           handshakeBlend: isFppTarget ? fppCamRef.current.handshakeBlend : 0,
           handshakeOsc: isFppTarget ? fppCamRef.current.handshakeOsc : 0,
           handshakeSmile: isFppTarget ? fppCamRef.current.handshakeSmile : 0,
+          stimLevel: isFppTarget ? fppStimState.level : 0,
+          stimPulse: isFppTarget ? fppStimState.pulse : 0,
+          stimSpike: isFppTarget ? fppStimState.spike : 0,
+          stimKind: isFppTarget ? fppStimState.kind : 'electrical',
+          stimRegion: isFppTarget ? fppStimState.region : 'general',
         });
+        if (isFppTarget) {
+          entry.rig.root.updateMatrixWorld(true);
+          ensureFppBoneCache(entry.rig, p.id);
+        }
       }
 
       if (pureFppId) return;
@@ -6701,6 +6978,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         lastFppHandshakeReady = false;
         pushHoverBodyZone(null);
         latestRef.current.onFppHandshakeReadyChange?.(false);
+        fppBoneCachePid = null;
+        fppBoneCacheMap.clear();
+        fppObjToBoneKey.clear();
+        fppStimState.patientId = curFppId;
+        fppStimState.level = 0;
+        fppStimState.pulse = 0;
+        fppStimState.spike = 0;
+        fppStimState.prevLevel = 0;
+        fppStimState.lastVoiceLevel = 0;
+        fppStimState.lastSustainedVoiceAt = 0;
+        soundFx.stopAllDevices();
         for (const eq of fppEquipBayMap.values()) {
           fppEquipLayer.remove(eq.handle.group);
           eq.handle.dispose();
@@ -6724,6 +7012,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fpp.blend = 0;
         fppDropRingGroup.visible = false;
         lastFppEquipSig = '';
+        fppBoneCachePid = null;
+        fppBoneCacheMap.clear();
+        fppObjToBoneKey.clear();
+        fppStimState.patientId = null;
+        fppStimState.level = 0;
+        fppStimState.pulse = 0;
+        fppStimState.spike = 0;
+        fppStimState.prevLevel = 0;
+        fppStimState.lastVoiceLevel = 0;
+        soundFx.stopAllDevices();
         for (const eq of fppEquipBayMap.values()) {
           fppEquipLayer.remove(eq.handle.group);
           eq.handle.dispose();
@@ -7100,6 +7398,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const sync1HzTick = tSec - lastTimerUiSyncAt >= 0.48;
         if (sync1HzTick) lastTimerUiSyncAt = tSec;
 
+        // First pass: update bay device states/positions, collect audio inputs, and compute physiological stimulation
+        fppAudioDevicesScratch.length = 0;
+        let heldMoveSpeed01 = 0;
+        let heldMoveRolling = true;
+        let totalStim = 0;
+        let domStimScore = 0;
+        let domPulseVal = 0;
+        let domKind: PatientReactionKind = 'electrical';
+        let domRegion: StimRegionType = 'general';
+
         for (const eq of fppEquipBayMap.values()) {
           // If patient posture switched to something incompatible with a bedside-deployed device, stow it back to standby
           if (eq.mode === 'placed_bed') {
@@ -7192,16 +7500,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             }
           }
 
-          eq.activeBlend = THREE.MathUtils.damp(eq.activeBlend, eq.isRunning && (eq.mode === 'placed_bed' || eq.mode === 'placed_room') ? 1 : 0, 8.5, dt);
+          eq.activeBlend = THREE.MathUtils.damp(
+            eq.activeBlend,
+            eq.isRunning && (eq.mode === 'placed_bed' || eq.mode === 'placed_room') ? 1 : 0,
+            8.5,
+            dt
+          );
 
-          const region: FppTargetRegion = isBedActive ? eq.bedRegion : 'lumbar';
-          const side: FppBedSide = isBedActive ? eq.bedSide : 'front';
-          const closeRange = isBedActive ? eq.closeRange : true;
-          const aim = computeTargetZoneInBay(region, side);
-          if (eq.sprite === 'infrared_lamp' && isBedActive) {
-            aim.ax += eq.irLateralOffset;
-            aim.ay += eq.irHeightOffset * 0.45;
-          }
+          const prevEqX = eq.curX;
+          const prevEqY = eq.curY;
+          const prevEqZ = eq.curZ;
+          const prevEqRot = eq.curRotY;
 
           if (isHeld) {
             const spec = getFppEquipCarrySpec(eq.sprite);
@@ -7241,6 +7550,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             eq.curY = THREE.MathUtils.damp(eq.curY, hy, 18, dt);
             eq.curZ = THREE.MathUtils.damp(eq.curZ, hz, 18, dt);
             eq.curRotY = lerpAngle(eq.curRotY, hRot, Math.min(1, dt * 18));
+
+            const stepDist = Math.hypot(eq.curX - prevEqX, eq.curZ - prevEqZ);
+            const stepVel = stepDist / Math.max(0.004, dt);
+            const rotVel = Math.abs(eq.curRotY - prevEqRot) / Math.max(0.004, dt);
+            heldMoveSpeed01 = THREE.MathUtils.clamp((stepVel * 0.85 + rotVel * 0.25) / 1.45, 0, 1);
+            heldMoveRolling = spec.carryMode === 'roll';
           } else {
             let destX = eq.standbyX;
             let destY = 0;
@@ -7260,13 +7575,234 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             eq.curRotY = lerpAngle(eq.curRotY, destRotY, Math.min(1, dt * 9.5));
           }
 
+          const eqTransformMoved =
+            isHeld ||
+            Math.abs(eq.curX - prevEqX) > 1e-4 ||
+            Math.abs(eq.curY - prevEqY) > 1e-4 ||
+            Math.abs(eq.curZ - prevEqZ) > 1e-4 ||
+            Math.abs(eq.curRotY - prevEqRot) > 1e-4;
           eq.handle.group.position.set(eq.curX, eq.curY, eq.curZ);
           eq.handle.group.rotation.y = eq.curRotY;
-          eq.handle.group.updateMatrixWorld(true);
+          if (eqTransformMoved || eq.isRunning) {
+            eq.handle.group.updateMatrixWorld(true);
+          }
+
+          if ((eq.mode === 'placed_bed' || eq.mode === 'placed_room') && eq.isRunning) {
+            let placedCount = 0;
+            let firstBone: string | undefined;
+            let firstBayX: number | undefined;
+            for (let ai = 0; ai < eq.probeAnchors.length; ai++) {
+              if (eq.probeAnchors[ai].placed) {
+                placedCount++;
+                if (!firstBone) firstBone = eq.probeAnchors[ai].boneName;
+                if (firstBayX === undefined) firstBayX = eq.probeAnchors[ai].bayX;
+              }
+            }
+            fppAudioDevicesScratch.push({
+              instanceId: eq.instanceId,
+              sprite: eq.sprite,
+              isRunning: eq.isRunning,
+              placedCount,
+              irIntensity: eq.irIntensity,
+              irDistance: eq.irDistance,
+              deviceParams: eq.deviceParams,
+            });
+
+            if (isBedActive) {
+              let contrib = 0;
+              let pulseW = 0;
+              let rKind: PatientReactionKind = 'electrical';
+              const dp = eq.deviceParams;
+              if (eq.sprite === 'tens_unit') {
+                const padFactor = placedCount >= 2 ? 1.0 : placedCount === 1 ? 0.65 : 0.04;
+                const mA = Number(dp.intensity ?? 24);
+                const hz = Number(dp.freqHz ?? 80);
+                const us = Number(dp.pulseUs ?? 180);
+                const mode = String(dp.mode ?? 'CONV');
+                // <=26 mA is normal therapeutic sensory/motor range (<=0.25); >34 mA escalates noticeably
+                const maNorm =
+                  mA <= 26
+                    ? THREE.MathUtils.clamp((mA - 4) / 88, 0.02, 0.25)
+                    : THREE.MathUtils.clamp(0.25 + ((mA - 26) / 34) * 0.92, 0.25, 1.17);
+                const pwMul = 0.88 + 0.22 * THREE.MathUtils.clamp(us / 300, 0, 1.4);
+                contrib = maNorm * padFactor * pwMul;
+                if (mode === 'BURST') {
+                  const burstEnv = Math.pow(Math.max(0, Math.sin(tSec * Math.PI * 2 * 2.1)), 0.7);
+                  pulseW = burstEnv * (0.65 + 0.35 * Math.sin(tSec * Math.PI * 2 * 10));
+                } else if (mode === 'IFC') {
+                  pulseW = 0.5 + 0.5 * Math.sin(tSec * Math.PI * 2 * THREE.MathUtils.clamp(hz * 0.08, 2, 12));
+                } else {
+                  const rate = THREE.MathUtils.clamp(hz * 0.12, 2.5, 16);
+                  pulseW = Math.pow(0.5 + 0.5 * Math.sin(tSec * Math.PI * 2 * rate), 2);
+                }
+                rKind = 'electrical';
+              } else if (eq.sprite === 'shockwave_eswt' && placedCount >= 1) {
+                const bar = Number(dp.intensity ?? 2.2);
+                const hz = Number(dp.freqHz ?? 10);
+                contrib =
+                  bar <= 2.6
+                    ? THREE.MathUtils.clamp((bar - 0.8) / 7.2, 0.05, 0.25)
+                    : THREE.MathUtils.clamp(0.25 + ((bar - 2.6) / 2.2) * 0.9, 0.25, 1.15);
+                pulseW = Math.pow(Math.max(0, Math.sin(tSec * Math.PI * hz)), 6);
+                rKind = 'percussion';
+              } else if (eq.sprite === 'ultrasound_unit' && placedCount >= 1) {
+                const wCm2 = Number(dp.intensity ?? 1.2);
+                const duty = Number(dp.dutyPct ?? 100) / 100;
+                const base =
+                  wCm2 <= 1.5
+                    ? Math.max(0.04, (wCm2 - 0.2) * 0.14)
+                    : 0.18 + ((wCm2 - 1.5) / 1.0) * 0.65;
+                contrib = THREE.MathUtils.clamp(base * (0.4 + 0.6 * duty), 0.04, 0.88);
+                pulseW = 0.25;
+                rKind = 'thermal';
+              } else if (eq.sprite === 'laser_hilt' && placedCount >= 1) {
+                const watts = Number(dp.intensity ?? 8);
+                contrib =
+                  watts <= 10
+                    ? THREE.MathUtils.clamp(watts / 45, 0.05, 0.22)
+                    : THREE.MathUtils.clamp(0.22 + ((watts - 10) / 5) * 0.48, 0.22, 0.7);
+                pulseW = 0.2;
+                rKind = 'thermal';
+              } else if (eq.sprite === 'infrared_lamp') {
+                const closeness = THREE.MathUtils.clamp((0.68 - eq.irDistance) / 0.34, 0.05, 1.15);
+                contrib = eq.irIntensity * closeness * 0.72;
+                pulseW = 0.15;
+                rKind = 'thermal';
+              } else if (eq.sprite === 'swd_unit') {
+                const watts = Number(dp.intensity ?? 80);
+                const pulsed = String(dp.mode ?? 'CONT') === 'PULSED';
+                const wBase =
+                  watts <= 140
+                    ? watts / 540
+                    : 0.26 + ((watts - 140) / 110) * 0.56;
+                contrib = THREE.MathUtils.clamp(wBase * (pulsed ? 0.65 : 1), 0.06, 0.82);
+                pulseW = pulsed ? Math.max(0, Math.sin(tSec * 9)) * 0.5 : 0.2;
+                rKind = 'thermal';
+              } else if (eq.sprite === 'cryo_unit' && placedCount >= 1) {
+                const tempC = Number(dp.tempC ?? 6);
+                const mmHg = Number(dp.pressureMmHg ?? 45);
+                const coldNorm = THREE.MathUtils.clamp((10 - tempC) / 14, 0.06, 1);
+                const pressNorm = THREE.MathUtils.clamp((mmHg - 15) / 70, 0.05, 1);
+                const extremeBoost = (tempC <= 1 ? 0.2 : 0) + (mmHg >= 65 ? 0.16 : 0);
+                contrib = coldNorm * 0.32 + pressNorm * 0.3 + extremeBoost;
+                pulseW = 0.35 + 0.35 * Math.sin(tSec * 1.1);
+                rKind = 'cold';
+              } else if (eq.sprite === 'hydro_sink' && placedCount >= 1) {
+                const tempC = Number(dp.tempC ?? 68);
+                contrib =
+                  tempC <= 75
+                    ? THREE.MathUtils.clamp((tempC - 58) / 68, 0.08, 0.25)
+                    : THREE.MathUtils.clamp(0.25 + ((tempC - 75) / 6) * 0.55, 0.25, 0.8);
+                pulseW = 0.18;
+                rKind = 'thermal';
+              } else if (eq.sprite === 'cpm_device') {
+                const flexDeg = Number(dp.flexDeg ?? 60);
+                const speed = Number(dp.speed ?? 1.5);
+                contrib =
+                  flexDeg <= 75
+                    ? THREE.MathUtils.clamp((flexDeg - 30) / 160, 0.06, 0.28)
+                    : THREE.MathUtils.clamp(0.28 + ((flexDeg - 75) / 45) * 0.62, 0.28, 0.9) *
+                      (0.78 + 0.22 * (speed / 4));
+                pulseW = 0.5 + 0.5 * Math.sin(tSec * (0.65 + speed * 0.45));
+                rKind = 'stretch';
+              } else if (eq.sprite === 'emg_biofeedback' && placedCount >= 1) {
+                contrib = 0.04;
+                pulseW = 0;
+              }
+
+              totalStim += contrib;
+              if (contrib > domStimScore) {
+                domStimScore = contrib;
+                domPulseVal = pulseW;
+                domKind = rKind;
+                domRegion = boneToStimRegion(firstBone, eq.bedRegion, firstBayX);
+              }
+            }
+          }
+        }
+
+        totalStim = THREE.MathUtils.clamp(totalStim, 0, 1.25);
+        const fppPatient = latestRef.current.patients.find((pt) => pt.id === curFppId);
+        const isFemalePatient = fppPatient?.clinicalCase.gender === 'female';
+        if (totalStim < 0.24) {
+          fppStimState.lastVoiceLevel = 0;
+        } else if (totalStim < fppStimState.lastVoiceLevel - 0.12) {
+          fppStimState.lastVoiceLevel = totalStim;
+        }
+        const stimDelta = totalStim - fppStimState.prevLevel;
+        const stepJump = totalStim - fppStimState.lastVoiceLevel;
+        // Only trigger an active flinch/reaction spike when stimulation enters noticeably strong/excessive territory
+        if ((stimDelta > 0.12 || stepJump >= 0.16) && totalStim >= 0.48) {
+          const mag = Math.max(stimDelta, stepJump);
+          fppStimState.spike = Math.max(fppStimState.spike, Math.min(1, 0.48 + mag * 1.3));
+          fppStimState.lastVoiceLevel = totalStim;
+        }
+        fppStimState.spike = Math.max(0, fppStimState.spike - dt * 2.5);
+        fppStimState.prevLevel = THREE.MathUtils.damp(fppStimState.prevLevel, totalStim, 8, dt);
+        fppStimState.level = totalStim;
+        fppStimState.pulse = domPulseVal;
+        fppStimState.kind = domKind;
+        fppStimState.region = domRegion;
+
+        soundFx.syncFppDevices(fppAudioDevicesScratch, tSec);
+        soundFx.syncFppEquipMove(Boolean(heldEntry), heldMoveSpeed01, heldMoveRolling, tSec);
+        soundFx.syncPatientReaction(
+          {
+            active: totalStim >= 0.24,
+            intensity01: totalStim,
+            pulse01: domPulseVal,
+            spike01: fppStimState.spike,
+            isFemale: Boolean(isFemalePatient),
+            kind: domKind,
+          },
+          tSec
+        );
+
+        // Pure FPP Isolation: hide outside clinic, staff, and non-session patients
+        const fppStationId = fppPatient?.assignedStationId ?? null;
+
+        if (!wasPureFpp || lastIsolatedStationId !== fppStationId) {
+          lastIsolatedStationId = fppStationId;
+          worldLayer.visible = false;
+          draftLayer.visible = false;
+          lightsLayer.visible = false;
+          itemsLayer.visible = Boolean(fppStationId);
+          for (const [id, entry] of itemMeshes.entries()) {
+            entry.mesh.visible = id === fppStationId;
+          }
+          for (const [id, entry] of patientRigs.entries()) {
+            entry.rig.root.visible = id === curFppId;
+          }
+          for (const entry of staffRigs.values()) {
+            entry.rig.root.visible = false;
+          }
+          const fog = scene.fog as THREE.Fog;
+          fog.near = 25;
+          fog.far = 65;
+          sunLight.visible = false;
+          hemi.intensity = 0.44;
+          scene.environmentIntensity = 0.64;
+          renderer.toneMappingExposure = 0.96;
+          drawOverlayBadges();
+        }
+
+        // Update patient rig & bone world matrices FIRST so skin-attached pads track moving limbs with zero lag
+        syncAndAnimateActors(tSec, dt, curFppId);
+
+        // Second pass: resolve bone-tracked skin coordinates & animate each bay device
+        for (const eq of fppEquipBayMap.values()) {
+          const isBedActive = eq.mode === 'placed_bed';
+          const region: FppTargetRegion = isBedActive ? eq.bedRegion : 'lumbar';
+          const side: FppBedSide = isBedActive ? eq.bedSide : 'front';
+          const closeRange = isBedActive ? eq.closeRange : true;
+          const aim = computeTargetZoneInBay(region, side);
+          if (eq.sprite === 'infrared_lamp' && isBedActive) {
+            aim.ax += eq.irLateralOffset;
+            aim.ay += eq.irHeightOffset * 0.45;
+          }
 
           _fppAimWorld.set(aim.ax, aim.ay, aim.az).applyMatrix4(fppBackdrop.group.matrixWorld);
 
-          // Preallocated world-space targets for patient-placed electrodes & probes (including hover-in-hand & active attach)
           let worldTargets: FppProbeWorldTarget[] | undefined;
           const actRef = fppProbeActionRef.current;
           const actMatchingEquip = actRef.active && actRef.instanceId === eq.instanceId;
@@ -7301,13 +7837,30 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 const app = THREE.MathUtils.clamp(u / 0.44, 0, 1);
                 t.holding = true;
                 t.attachBlend = app * app * (3 - 2 * app);
-                _probePosWorld
-                  .set(actRef.bayX, actRef.bayY, actRef.bayZ)
-                  .applyMatrix4(fppBackdrop.group.matrixWorld);
-                _probeNrmBay
-                  .set(actRef.nx, actRef.ny, actRef.nz)
-                  .applyMatrix3(_bayNrmMat)
-                  .normalize();
+                const actBone = actRef.boneName ? fppBoneCacheMap.get(actRef.boneName) : undefined;
+                if (
+                  actBone &&
+                  actRef.blx !== undefined &&
+                  actRef.bly !== undefined &&
+                  actRef.blz !== undefined
+                ) {
+                  _probePosWorld
+                    .set(actRef.blx, actRef.bly, actRef.blz)
+                    .applyMatrix4(actBone.matrixWorld);
+                  _boneNrmMatTmp.getNormalMatrix(actBone.matrixWorld);
+                  _probeNrmBay
+                    .set(actRef.bnx ?? 0, actRef.bny ?? 1, actRef.bnz ?? 0)
+                    .applyMatrix3(_boneNrmMatTmp)
+                    .normalize();
+                } else {
+                  _probePosWorld
+                    .set(actRef.bayX, actRef.bayY, actRef.bayZ)
+                    .applyMatrix4(fppBackdrop.group.matrixWorld);
+                  _probeNrmBay
+                    .set(actRef.nx, actRef.ny, actRef.nz)
+                    .applyMatrix3(_bayNrmMat)
+                    .normalize();
+                }
                 t.worldX = _probePosWorld.x;
                 t.worldY = _probePosWorld.y;
                 t.worldZ = _probePosWorld.z;
@@ -7325,7 +7878,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 _probePosWorld
                   .copy(fppProbeReticleGroup.position)
                   .applyMatrix4(fppBackdrop.group.matrixWorld);
-                _probeNrmBay.set(0, 0, 1).applyQuaternion(fppProbeReticleGroup.quaternion).applyMatrix3(_bayNrmMat).normalize();
+                _probeNrmBay
+                  .set(0, 0, 1)
+                  .applyQuaternion(fppProbeReticleGroup.quaternion)
+                  .applyMatrix3(_bayNrmMat)
+                  .normalize();
                 t.worldX = _probePosWorld.x;
                 t.worldY = _probePosWorld.y;
                 t.worldZ = _probePosWorld.z;
@@ -7333,11 +7890,28 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 t.wny = _probeNrmBay.y;
                 t.wnz = _probeNrmBay.z;
               } else if (a.placed) {
-                _probePosWorld.set(a.bayX, a.bayY, a.bayZ).applyMatrix4(fppBackdrop.group.matrixWorld);
-                _probeNrmBay
-                  .set(a.nx ?? 0, a.ny ?? 1, a.nz ?? 0)
-                  .applyMatrix3(_bayNrmMat)
-                  .normalize();
+                const trackedBone = a.boneName ? fppBoneCacheMap.get(a.boneName) : undefined;
+                if (
+                  trackedBone &&
+                  a.blx !== undefined &&
+                  a.bly !== undefined &&
+                  a.blz !== undefined
+                ) {
+                  _probePosWorld
+                    .set(a.blx, a.bly, a.blz)
+                    .applyMatrix4(trackedBone.matrixWorld);
+                  _boneNrmMatTmp.getNormalMatrix(trackedBone.matrixWorld);
+                  _probeNrmBay
+                    .set(a.bnx ?? 0, a.bny ?? 1, a.bnz ?? 0)
+                    .applyMatrix3(_boneNrmMatTmp)
+                    .normalize();
+                } else {
+                  _probePosWorld.set(a.bayX, a.bayY, a.bayZ).applyMatrix4(fppBackdrop.group.matrixWorld);
+                  _probeNrmBay
+                    .set(a.nx ?? 0, a.ny ?? 1, a.nz ?? 0)
+                    .applyMatrix3(_bayNrmMat)
+                    .normalize();
+                }
                 t.worldX = _probePosWorld.x;
                 t.worldY = _probePosWorld.y;
                 t.worldZ = _probePosWorld.z;
@@ -7492,35 +8066,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               latestRef.current.onFppNearbyDeviceChange?.(null);
             }
           }
-        }
-
-        // Pure FPP Isolation: hide outside clinic, staff, and non-session patients
-        const fppPatient = latestRef.current.patients.find((pt) => pt.id === curFppId);
-        const fppStationId = fppPatient?.assignedStationId ?? null;
-
-        if (!wasPureFpp || lastIsolatedStationId !== fppStationId) {
-          lastIsolatedStationId = fppStationId;
-          worldLayer.visible = false;
-          draftLayer.visible = false;
-          lightsLayer.visible = false;
-          itemsLayer.visible = Boolean(fppStationId);
-          for (const [id, entry] of itemMeshes.entries()) {
-            entry.mesh.visible = id === fppStationId;
-          }
-          for (const [id, entry] of patientRigs.entries()) {
-            entry.rig.root.visible = id === curFppId;
-          }
-          for (const entry of staffRigs.values()) {
-            entry.rig.root.visible = false;
-          }
-          const fog = scene.fog as THREE.Fog;
-          fog.near = 25;
-          fog.far = 65;
-          sunLight.visible = false;
-          hemi.intensity = 0.44;
-          scene.environmentIntensity = 0.64;
-          renderer.toneMappingExposure = 0.96;
-          drawOverlayBadges();
         }
 
         fppBackdrop.group.visible = true;
@@ -7711,9 +8256,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           }
         }
 
-        // Update patient rig first so HandR bone world matrix is current for clinician palm alignment
-        syncAndAnimateActors(tSec, dt, curFppId);
-
         const pChestZ = curPosture === 'standing' ? 0.18 : -0.02;
         const toPtX = -camBayX;
         const toPtZ = pChestZ - camBayZ;
@@ -7767,7 +8309,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           _fppInteractionScratch
         );
         if (renderer.shadowMap.enabled) {
-          if (shadowsDirty || nowMs - lastShadowUpdateMs >= 65) {
+          if (shadowsDirty || nowMs - lastShadowUpdateMs >= 100) {
             renderer.shadowMap.needsUpdate = true;
             lastShadowUpdateMs = nowMs;
             shadowsDirty = false;
@@ -8026,6 +8568,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 }));
                 clinicProbeTargetsPool.set(depKey, cPool);
               }
+              let pRigMatrixUpdated = false;
               for (let ai = 0; ai < dev.probeAnchors.length; ai++) {
                 const a = dev.probeAnchors[ai];
                 const t = cPool[ai];
@@ -8033,15 +8576,43 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 t.placed = a.placed;
                 t.selected = false;
                 if (a.placed) {
-                  const enx = a.nx ?? 0;
-                  const eny = a.ny ?? 1;
-                  const enz = a.nz ?? 0;
-                  t.worldX = bx + cosF * a.bayX + sinF * a.bayZ;
-                  t.worldY = bSurfPt.floorY + a.bayY;
-                  t.worldZ = bz - sinF * a.bayX + cosF * a.bayZ;
-                  t.wnx = cosF * enx + sinF * enz;
-                  t.wny = eny;
-                  t.wnz = -sinF * enx + cosF * enz;
+                  const boneObj =
+                    a.boneName && pRig?.rig.bones?.[a.boneName]?.bone
+                      ? pRig.rig.bones[a.boneName].bone
+                      : undefined;
+                  if (
+                    boneObj &&
+                    a.blx !== undefined &&
+                    a.bly !== undefined &&
+                    a.blz !== undefined
+                  ) {
+                    if (!pRigMatrixUpdated && pRig) {
+                      pRig.rig.root.updateMatrixWorld(true);
+                      pRigMatrixUpdated = true;
+                    }
+                    _probePosWorld.set(a.blx, a.bly, a.blz).applyMatrix4(boneObj.matrixWorld);
+                    _boneNrmMatTmp.getNormalMatrix(boneObj.matrixWorld);
+                    _probeNrmBay
+                      .set(a.bnx ?? 0, a.bny ?? 1, a.bnz ?? 0)
+                      .applyMatrix3(_boneNrmMatTmp)
+                      .normalize();
+                    t.worldX = _probePosWorld.x;
+                    t.worldY = _probePosWorld.y;
+                    t.worldZ = _probePosWorld.z;
+                    t.wnx = _probeNrmBay.x;
+                    t.wny = _probeNrmBay.y;
+                    t.wnz = _probeNrmBay.z;
+                  } else {
+                    const enx = a.nx ?? 0;
+                    const eny = a.ny ?? 1;
+                    const enz = a.nz ?? 0;
+                    t.worldX = bx + cosF * a.bayX + sinF * a.bayZ;
+                    t.worldY = bSurfPt.floorY + a.bayY;
+                    t.worldZ = bz - sinF * a.bayX + cosF * a.bayZ;
+                    t.wnx = cosF * enx + sinF * enz;
+                    t.wny = eny;
+                    t.wnz = -sinF * enx + cosF * enz;
+                  }
                 }
               }
               clinicProbeTargets = cPool;
@@ -8137,6 +8708,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
     return () => {
       disposed = true;
+      soundFx.stopAllDevices();
       unsubGlb();
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();

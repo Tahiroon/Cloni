@@ -61,6 +61,15 @@ interface RealisticFppBehaviorState {
   curGestureAmp: number;
 }
 
+export interface HumanoidStimState {
+  lastTimeSec: number;
+  level: number;
+  spike: number;
+  pulse: number;
+  squirmPhase: number;
+  sideDir: number;
+}
+
 export interface HumanoidRig {
   root: THREE.Group;
   bodyPivot: THREE.Group;
@@ -78,6 +87,7 @@ export interface HumanoidRig {
   morphMeshes?: MorphMeshRef[];
   smoothedMorphs?: Record<string, number>;
   fppBehavior?: RealisticFppBehaviorState;
+  stimState?: HumanoidStimState;
   hipHeight?: number;
   heightScale?: number;
   bones?: Record<string, SkinnedBoneRef>;
@@ -3067,6 +3077,20 @@ export function animateHumanoid3D(
     handshakeBlend?: number;
     handshakeOsc?: number;
     handshakeSmile?: number;
+    stimLevel?: number;
+    stimPulse?: number;
+    stimSpike?: number;
+    stimKind?: 'electrical' | 'percussion' | 'thermal' | 'cold' | 'stretch';
+    stimRegion?:
+      | 'upper_l'
+      | 'upper_r'
+      | 'neck'
+      | 'torso'
+      | 'thigh_l'
+      | 'thigh_r'
+      | 'shin_l'
+      | 'shin_r'
+      | 'general';
   }
 ) {
   const {
@@ -3110,6 +3134,11 @@ export function animateHumanoid3D(
     handshakeBlend = 0,
     handshakeOsc = 0,
     handshakeSmile = 0,
+    stimLevel = 0,
+    stimPulse = 0,
+    stimSpike = 0,
+    stimKind = 'electrical',
+    stimRegion = 'general',
   } = opts;
 
   const isRealScan = Boolean(rig.isRealisticScan);
@@ -3117,18 +3146,58 @@ export function animateHumanoid3D(
   const rbArmOffset = isRocketbox ? 0.76 : 0;
   const fppBeh = rig.fppBehavior;
   let frameDt = 0.016;
+  if (!rig.stimState) {
+    rig.stimState = {
+      lastTimeSec: -1,
+      level: 0,
+      spike: 0,
+      pulse: 0,
+      squirmPhase: (Math.abs(actorSeed) % 19) * 0.37,
+      sideDir: actorSeed % 2 === 0 ? 1 : -1,
+    };
+  }
+  const stState = rig.stimState;
+  if (stState.lastTimeSec >= 0) {
+    frameDt = THREE.MathUtils.clamp(timeSec - stState.lastTimeSec, 0.001, 0.08);
+  }
+  stState.lastTimeSec = timeSec;
+
   if (fppBeh) {
-    if (fppBeh.lastTimeSec >= 0) {
-      frameDt = THREE.MathUtils.clamp(timeSec - fppBeh.lastTimeSec, 0.001, 0.08);
-    }
     fppBeh.lastTimeSec = timeSec;
   }
+
+  const rawStimLvl = isFppSession ? THREE.MathUtils.clamp(stimLevel, 0, 1.25) : 0;
+  const rawStimPulse = isFppSession ? THREE.MathUtils.clamp(stimPulse, -1, 1) : 0;
+  const rawStimSpike = isFppSession ? THREE.MathUtils.clamp(stimSpike, 0, 1) : 0;
+  stState.level = THREE.MathUtils.damp(stState.level, rawStimLvl, rawStimLvl > stState.level ? 9.5 : 4.2, frameDt);
+  stState.spike = THREE.MathUtils.damp(stState.spike, rawStimSpike, rawStimSpike > stState.spike ? 24 : 5.5, frameDt);
+  stState.pulse = THREE.MathUtils.damp(stState.pulse, rawStimPulse, 26, frameDt);
+
+  const sLvl = stState.level;
+  const sSpike = stState.spike;
+  const sPulse = stState.pulse;
+  // Normal therapeutic range (<0.38) keeps the patient relaxed; discomfort builds only at high/excessive intensities
+  const effDiscomfort = THREE.MathUtils.clamp((sLvl - 0.40) / 0.65, 0, 1.12);
+  const highDiscomfort = THREE.MathUtils.clamp((sLvl - 0.65) / 0.42, 0, 1.15);
+  const stimTwitch = sPulse * THREE.MathUtils.clamp((sLvl - 0.08) * 0.78, 0, 0.95);
+
+  if (highDiscomfort > 0.04) {
+    stState.squirmPhase += frameDt * (1.7 + highDiscomfort * 2.1);
+  }
+  if (stimRegion === 'upper_l' || stimRegion === 'thigh_l' || stimRegion === 'shin_l') {
+    stState.sideDir = 1;
+  } else if (stimRegion === 'upper_r' || stimRegion === 'thigh_r' || stimRegion === 'shin_r') {
+    stState.sideDir = -1;
+  }
+  const stimDir = stState.sideDir;
+  const stimSq1 = highDiscomfort * Math.sin(stState.squirmPhase);
+  const stimSq2 = highDiscomfort * Math.cos(stState.squirmPhase * 0.67 + 0.5);
 
   // Individualized phase & cadence so people never breathe, fidget, blink, or glance in lockstep
   const seedMod = Math.abs(actorSeed) % 13;
   const t = timeSec + (actorSeed % 97) * 1.43;
-  const breathFreq = 1.42 + seedMod * 0.045;
-  const breathWave = Math.sin(t * breathFreq);
+  const breathFreq = (1.42 + seedMod * 0.045) * (1 + effDiscomfort * 0.34);
+  const breathWave = Math.sin(t * breathFreq) * (1 + highDiscomfort * 0.48);
 
   const blinkPeriod = 3.5 + seedMod * 0.22;
   const cyclePos = t % blinkPeriod;
@@ -3139,9 +3208,11 @@ export function animateHumanoid3D(
   } else if (isDouble && cyclePos >= 0.24 && cyclePos < 0.39) {
     blinkAmt = Math.sin(((cyclePos - 0.24) / 0.15) * Math.PI);
   }
+  const stimBlink = Math.max(sSpike * 0.85, highDiscomfort * 0.22);
+  const effBlinkAmt = Math.min(1, Math.max(blinkAmt, stimBlink));
 
   if (rig.blinkLids) {
-    const lidRx = THREE.MathUtils.lerp(-0.98, 0.42, blinkAmt);
+    const lidRx = THREE.MathUtils.lerp(-0.98, 0.42, effBlinkAmt);
     rig.blinkLids[0].rotation.x = lidRx;
     rig.blinkLids[1].rotation.x = lidRx;
   }
@@ -3161,63 +3232,117 @@ export function animateHumanoid3D(
   const speakingActive =
     isSpeaking &&
     ((lieBlend ?? (pose === 'lying' ? 1 : 0)) < 0.2 || proneW < 0.35);
-  const hsSmile = THREE.MathUtils.clamp(handshakeSmile, 0, 1);
+  const hsSmile = THREE.MathUtils.clamp(handshakeSmile, 0, 1) * Math.max(0, 1 - effDiscomfort * 1.1);
   if (rig.mouthLower && rig.mouthSeam) {
     if (speakingActive) {
       const cadence = Math.max(0, Math.sin(t * 9.5) * 0.65 + Math.sin(t * 14.3) * 0.35);
       rig.mouthLower.position.y = -cadence * 0.0040;
       rig.mouthSeam.position.y = -cadence * 0.0014;
       rig.mouthSeam.scale.set(1 + hsSmile * 0.06, 1, 1);
-      rig.mouthSeam.rotation.x = -hsSmile * 0.12;
+      rig.mouthSeam.rotation.x = -hsSmile * 0.12 + effDiscomfort * 0.14;
     } else {
-      rig.mouthLower.position.y = hsSmile * 0.0007;
-      rig.mouthSeam.position.y = hsSmile * 0.0004;
-      rig.mouthSeam.scale.set(1 + hsSmile * 0.10, 1, 1);
-      rig.mouthSeam.rotation.x = -hsSmile * 0.18;
+      const gaspDrop = (sSpike * 0.0024 + highDiscomfort * 0.0012);
+      rig.mouthLower.position.y = hsSmile * 0.0007 - gaspDrop;
+      rig.mouthSeam.position.y = hsSmile * 0.0004 - gaspDrop * 0.35;
+      rig.mouthSeam.scale.set(1 + hsSmile * 0.10 - effDiscomfort * 0.05, 1, 1);
+      rig.mouthSeam.rotation.x = -hsSmile * 0.18 + effDiscomfort * 0.22;
     }
   }
   if (rig.brows) {
-    rig.brows[0].position.y = hsSmile * 0.0018;
-    rig.brows[1].position.y = hsSmile * 0.0018;
+    const browFurrowY = -effDiscomfort * 0.0022 - sSpike * 0.0014;
+    rig.brows[0].position.y = hsSmile * 0.0018 + browFurrowY;
+    rig.brows[1].position.y = hsSmile * 0.0018 + browFurrowY;
   }
 
   // Lifelike facial blendshape animation for photorealistic scanned characters (FPP close-up only)
   if (isRealScan && isFppSession && rig.morphMeshes && rig.morphMeshes.length > 0) {
     const painIntensity =
       isFppSession && !hasRelief ? THREE.MathUtils.clamp((vasPain - 3) / 7, 0, 1) : 0;
-    const rawWince =
+    const rawVasWince =
       painIntensity > 0.1
         ? painIntensity * Math.max(0, Math.sin(timeSec * 0.72) * 0.5 + Math.sin(timeSec * 1.45) * 0.35)
         : 0;
+    const stimWincePulse =
+      effDiscomfort * (0.48 + 0.24 * Math.max(0, sPulse) + 0.22 * Math.sin(timeSec * 2.4)) +
+      sSpike * 0.52;
+    const rawWince = Math.min(1.15, Math.max(rawVasWince, stimWincePulse));
     const winceWave = rawWince * (1 - hsSmile * 0.85);
-    const warmBaseline = hasRelief ? 0.22 : isFppSession ? 0.12 * (1 - winceWave * 0.6) : 0.10;
-    const talkWarmth = speakingActive ? 0.14 : 0;
-    const blinkL = Math.min(1, blinkAmt * 0.96);
-    const blinkR = Math.min(1, blinkAmt * 0.94);
-    const smileAmt = Math.min(0.76, warmBaseline + talkWarmth * 0.45 + hsSmile * 0.46);
+    const calmFactor = Math.max(0, 1 - effDiscomfort * 1.18 - sSpike * 0.8);
+    const warmBaseline =
+      (hasRelief ? 0.22 : isFppSession ? 0.12 * (1 - winceWave * 0.6) : 0.10) * calmFactor;
+    const talkWarmth = speakingActive ? 0.14 * calmFactor : 0;
+    const blinkL = Math.min(1, Math.max(blinkAmt * 0.96, sSpike * 0.84 + highDiscomfort * 0.20));
+    const blinkR = Math.min(1, Math.max(blinkAmt * 0.94, sSpike * 0.82 + highDiscomfort * 0.20));
+    const smileAmt = Math.min(0.76, warmBaseline + talkWarmth * 0.45 + hsSmile * 0.46) * calmFactor;
     const browTalkLift =
       (speakingActive
         ? Math.max(0, Math.sin(timeSec * 2.9 + 0.4) * 0.16 + Math.sin(timeSec * 1.3) * 0.10)
-        : Math.max(0, Math.sin(timeSec * 0.65) - 0.55) * 0.22) +
+        : Math.max(0, Math.sin(timeSec * 0.65) - 0.55) * 0.22) *
+        calmFactor +
       hsSmile * 0.14;
+    const stimSquintBoost = effDiscomfort * 0.42 + sSpike * 0.36;
+    const stimFrownBoost = effDiscomfort * 0.44 + highDiscomfort * 0.26 + sSpike * 0.22;
+    const stimGaspJaw = !speakingActive ? Math.min(0.32, sSpike * 0.24 + highDiscomfort * 0.12) : 0;
 
     if (isRocketbox) {
       // Microsoft Rocketbox ARKit (AK_*) + Oculus Viseme (AA_VI_*) blendshapes
       dampMorphTarget(rig, 'AK_09_EyeBlinkLeft', blinkL, 42, frameDt);
       dampMorphTarget(rig, 'AK_10_EyeBlinkRight', blinkR, 42, frameDt);
-      dampMorphTarget(rig, 'AK_19_EyeSquintLeft', warmBaseline * 0.38 + winceWave * 0.25 + hsSmile * 0.16, 12, frameDt);
-      dampMorphTarget(rig, 'AK_20_EyeSquintRight', warmBaseline * 0.38 + winceWave * 0.25 + hsSmile * 0.16, 12, frameDt);
-      dampMorphTarget(rig, 'AK_07_CheekSquintLeft', smileAmt * 0.45 + winceWave * 0.18 + hsSmile * 0.14, 10, frameDt);
-      dampMorphTarget(rig, 'AK_08_CheekSquintRight', smileAmt * 0.45 + winceWave * 0.18 + hsSmile * 0.14, 10, frameDt);
+      dampMorphTarget(
+        rig,
+        'AK_19_EyeSquintLeft',
+        Math.min(0.95, warmBaseline * 0.38 + winceWave * 0.36 + stimSquintBoost + hsSmile * 0.16),
+        14,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'AK_20_EyeSquintRight',
+        Math.min(0.95, warmBaseline * 0.38 + winceWave * 0.36 + stimSquintBoost + hsSmile * 0.16),
+        14,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'AK_07_CheekSquintLeft',
+        Math.min(0.9, smileAmt * 0.45 + winceWave * 0.26 + effDiscomfort * 0.20 + hsSmile * 0.14),
+        12,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'AK_08_CheekSquintRight',
+        Math.min(0.9, smileAmt * 0.45 + winceWave * 0.26 + effDiscomfort * 0.20 + hsSmile * 0.14),
+        12,
+        frameDt
+      );
       dampMorphTarget(rig, 'AK_44_MouthSmileLeft', smileAmt * 0.85, 7, frameDt);
       dampMorphTarget(rig, 'AK_45_MouthSmileRight', smileAmt * 0.80, 7, frameDt);
-      dampMorphTarget(rig, 'AK_03_BrowInnerUp', browTalkLift * (1 - winceWave * 0.5) + winceWave * 0.22, 8, frameDt);
+      dampMorphTarget(
+        rig,
+        'AK_03_BrowInnerUp',
+        browTalkLift * (1 - winceWave * 0.5) + winceWave * 0.24 + effDiscomfort * 0.14,
+        9,
+        frameDt
+      );
       dampMorphTarget(rig, 'AK_04_BrowOuterUpLeft', browTalkLift * 0.65, 8, frameDt);
       dampMorphTarget(rig, 'AK_05_BrowOuterUpRight', browTalkLift * 0.60, 8, frameDt);
-      dampMorphTarget(rig, 'AK_01_BrowDownLeft', winceWave * 0.32, 7, frameDt);
-      dampMorphTarget(rig, 'AK_02_BrowDownRight', winceWave * 0.32, 7, frameDt);
-      dampMorphTarget(rig, 'AK_30_MouthFrownLeft', winceWave * 0.20, 6, frameDt);
-      dampMorphTarget(rig, 'AK_31_MouthFrownRight', winceWave * 0.20, 6, frameDt);
+      dampMorphTarget(
+        rig,
+        'AK_01_BrowDownLeft',
+        Math.min(0.92, winceWave * 0.45 + effDiscomfort * 0.36 + sSpike * 0.22),
+        10,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'AK_02_BrowDownRight',
+        Math.min(0.92, winceWave * 0.45 + effDiscomfort * 0.36 + sSpike * 0.22),
+        10,
+        frameDt
+      );
+      dampMorphTarget(rig, 'AK_30_MouthFrownLeft', Math.min(0.88, winceWave * 0.32 + stimFrownBoost), 9, frameDt);
+      dampMorphTarget(rig, 'AK_31_MouthFrownRight', Math.min(0.88, winceWave * 0.32 + stimFrownBoost), 9, frameDt);
 
       if (speakingActive) {
         const sylGate = THREE.MathUtils.clamp(0.65 + 0.55 * Math.sin(timeSec * 4.2 + 0.3), 0, 1);
@@ -3236,9 +3361,9 @@ export function animateHumanoid3D(
         dampMorphTarget(rig, 'AA_VI_14_U', vU, 22, frameDt);
         dampMorphTarget(rig, 'AA_VI_01_PP', vPP, 24, frameDt);
       } else {
-        dampMorphTarget(rig, 'AK_25_JawOpen', 0, 14, frameDt);
-        dampMorphTarget(rig, 'AA_VI_10_aa', 0, 14, frameDt);
-        dampMorphTarget(rig, 'AA_VI_13_O', 0, 14, frameDt);
+        dampMorphTarget(rig, 'AK_25_JawOpen', stimGaspJaw, 18, frameDt);
+        dampMorphTarget(rig, 'AA_VI_10_aa', stimGaspJaw * 0.45, 16, frameDt);
+        dampMorphTarget(rig, 'AA_VI_13_O', stimKind === 'cold' ? stimGaspJaw * 0.35 : 0, 14, frameDt);
         dampMorphTarget(rig, 'AA_VI_11_E', 0, 14, frameDt);
         dampMorphTarget(rig, 'AA_VI_14_U', 0, 14, frameDt);
         dampMorphTarget(rig, 'AA_VI_01_PP', 0, 14, frameDt);
@@ -3247,19 +3372,55 @@ export function animateHumanoid3D(
       // Mixamo h_expressions.* & h_teeth.* blendshapes
       dampMorphTarget(rig, 'h_expressions.LeyeClose_h', blinkL, 42, frameDt);
       dampMorphTarget(rig, 'h_expressions.ReyeClose_h', blinkR, 42, frameDt);
-      dampMorphTarget(rig, 'h_expressions.LlowLid_h', 0.14 + blinkL * 0.2 + warmBaseline * 0.35 + hsSmile * 0.14, 16, frameDt);
-      dampMorphTarget(rig, 'h_expressions.RlowLid_h', 0.14 + blinkR * 0.2 + warmBaseline * 0.35 + hsSmile * 0.14, 16, frameDt);
-      dampMorphTarget(rig, 'h_expressions.Lsquint_h', warmBaseline * 0.45 + winceWave * 0.22 + hsSmile * 0.20, 10, frameDt);
-      dampMorphTarget(rig, 'h_expressions.Rsquint_h', warmBaseline * 0.45 + winceWave * 0.22 + hsSmile * 0.20, 10, frameDt);
+      dampMorphTarget(
+        rig,
+        'h_expressions.LlowLid_h',
+        Math.min(0.9, 0.14 + blinkL * 0.2 + warmBaseline * 0.35 + effDiscomfort * 0.28 + hsSmile * 0.14),
+        16,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'h_expressions.RlowLid_h',
+        Math.min(0.9, 0.14 + blinkR * 0.2 + warmBaseline * 0.35 + effDiscomfort * 0.28 + hsSmile * 0.14),
+        16,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'h_expressions.Lsquint_h',
+        Math.min(0.95, warmBaseline * 0.45 + winceWave * 0.34 + stimSquintBoost + hsSmile * 0.20),
+        12,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'h_expressions.Rsquint_h',
+        Math.min(0.95, warmBaseline * 0.45 + winceWave * 0.34 + stimSquintBoost + hsSmile * 0.20),
+        12,
+        frameDt
+      );
 
       dampMorphTarget(rig, 'h_expressions.LsmileClose_h', smileAmt, 7, frameDt);
       dampMorphTarget(rig, 'h_expressions.RsmileClose_h', smileAmt * 0.94, 7, frameDt);
       dampMorphTarget(rig, 'h_expressions.LbrowUp_h', browTalkLift * (1 - winceWave * 0.5), 8, frameDt);
       dampMorphTarget(rig, 'h_expressions.RbrowUp_h', browTalkLift * 0.92 * (1 - winceWave * 0.5), 8, frameDt);
-      dampMorphTarget(rig, 'h_expressions.LbrowDown_h', winceWave * 0.26, 7, frameDt);
-      dampMorphTarget(rig, 'h_expressions.RbrowDown_h', winceWave * 0.26, 7, frameDt);
-      dampMorphTarget(rig, 'h_expressions.Lsad_h', winceWave * 0.16, 6, frameDt);
-      dampMorphTarget(rig, 'h_expressions.Rsad_h', winceWave * 0.16, 6, frameDt);
+      dampMorphTarget(
+        rig,
+        'h_expressions.LbrowDown_h',
+        Math.min(0.92, winceWave * 0.38 + effDiscomfort * 0.34 + sSpike * 0.24),
+        10,
+        frameDt
+      );
+      dampMorphTarget(
+        rig,
+        'h_expressions.RbrowDown_h',
+        Math.min(0.92, winceWave * 0.38 + effDiscomfort * 0.34 + sSpike * 0.24),
+        10,
+        frameDt
+      );
+      dampMorphTarget(rig, 'h_expressions.Lsad_h', Math.min(0.85, winceWave * 0.28 + stimFrownBoost * 0.72), 9, frameDt);
+      dampMorphTarget(rig, 'h_expressions.Rsad_h', Math.min(0.85, winceWave * 0.28 + stimFrownBoost * 0.72), 9, frameDt);
 
       if (speakingActive) {
         const sylGate = THREE.MathUtils.clamp(0.65 + 0.55 * Math.sin(timeSec * 4.2 + 0.3), 0, 1);
@@ -3285,10 +3446,10 @@ export function animateHumanoid3D(
         dampMorphTarget(rig, 'h_expressions.LsmileOpen_h', jaw * 0.18, 18, frameDt);
         dampMorphTarget(rig, 'h_expressions.RsmileOpen_h', jaw * 0.18, 18, frameDt);
       } else {
-        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', 0, 14, frameDt);
-        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', 0, 14, frameDt);
-        dampMorphTarget(rig, 'h_expressions.AE_AA_h', 0, 14, frameDt);
-        dampMorphTarget(rig, 'h_teeth.t_AE_AA_h', 0, 14, frameDt);
+        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', stimGaspJaw, 18, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', stimGaspJaw, 18, frameDt);
+        dampMorphTarget(rig, 'h_expressions.AE_AA_h', stimGaspJaw * 0.42, 16, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_AE_AA_h', stimGaspJaw * 0.42, 16, frameDt);
         dampMorphTarget(rig, 'h_expressions.AO_a_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_teeth.t_AO_a_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_expressions.Ax_E_h', 0, 14, frameDt);
@@ -3544,49 +3705,127 @@ export function animateHumanoid3D(
     const effLieHeadRoll =
       supineW * lieHeadRoll + proneW * -0.08 + sideW * (sideSign * 0.09);
 
+    // Anatomical regional stimulation offsets (local muscle twitches + high-intensity natural squirm & bracing)
+    const twUpperL = stimRegion === 'upper_l' ? 1 : stimRegion === 'general' ? 0.3 : 0;
+    const twUpperR = stimRegion === 'upper_r' ? 1 : stimRegion === 'general' ? 0.3 : 0;
+    const twThighL = stimRegion === 'thigh_l' || stimRegion === 'shin_l' ? 1 : stimRegion === 'general' ? 0.35 : 0;
+    const twThighR = stimRegion === 'thigh_r' || stimRegion === 'shin_r' ? 1 : stimRegion === 'general' ? 0.35 : 0;
+    const twTorso = stimRegion === 'torso' ? 1 : stimRegion === 'neck' ? 0.45 : stimRegion === 'general' ? 0.35 : 0.12;
+    const twNeck = stimRegion === 'neck' ? 1 : stimRegion === 'upper_l' || stimRegion === 'upper_r' ? 0.35 : 0.15;
+    const absTwitch = Math.max(0, stimTwitch);
+
+    const lieShrug = highDiscomfort * 0.036 + sSpike * 0.032;
+    const lieArmBrace = highDiscomfort * 0.16 + sSpike * 0.12;
+    const lieTorsoSquirmX =
+      supineW * (highDiscomfort * 0.035 + stimSq2 * 0.025 + absTwitch * twTorso * 0.028) +
+      proneW * (-highDiscomfort * 0.02 - absTwitch * twTorso * 0.018) +
+      sideW * (stimSq2 * 0.028);
+    const lieTorsoSquirmY = stimSq1 * 0.055 * (1 - 0.35 * sideW) + sSpike * stimDir * 0.045;
+    const lieKneePull =
+      (supineW + sideW * 0.75) * (highDiscomfort * 0.11 + sSpike * 0.09 + stimSq1 * 0.035);
+    const lieShinFlex =
+      (supineW * 1.45 + proneW * 0.95 + sideW * 1.1) * (highDiscomfort * 0.12 + sSpike * 0.10);
+    const lieHeadAvertYaw = stimDir * (highDiscomfort * 0.16 + sSpike * 0.12 + stimSq2 * 0.05);
+    const lieHeadAvertPitch =
+      supineW * (highDiscomfort * 0.05 + sSpike * 0.04) + proneW * (-highDiscomfort * 0.03);
+    const lieHeadAvertRoll = -stimDir * (highDiscomfort * 0.055 + sSpike * 0.04);
+
     // Fast path for full horizontal bed posture (Supine / Prone / Right Side / Left Side)
     if (lie >= 0.999) {
       rig.bodyPivot.rotation.set(tiltPitch, bodyRoll, 0);
       rig.bodyPivot.position.set(0, lyingHeight, liePosZ);
 
-      applyCharEuler(b['Hips'], 0, lieHipsY, lieHipsZ);
+      applyCharEuler(b['Hips'], 0, lieHipsY + stimSq1 * 0.028, lieHipsZ + stimSq2 * 0.018);
       if (isRealScan && b['Abdomen']) {
-        applyCharEuler(b['Abdomen'], lieTorsoX * 0.45, lieTorsoY * 0.45, lieTorsoZ * 0.45);
+        applyCharEuler(
+          b['Abdomen'],
+          (lieTorsoX + lieTorsoSquirmX) * 0.45,
+          (lieTorsoY + lieTorsoSquirmY) * 0.45,
+          lieTorsoZ * 0.45
+        );
       }
       applyCharEuler(
         b['Torso'],
-        lieTorsoX * (isRealScan ? 0.65 : 1),
-        lieTorsoY * (isRealScan ? 0.65 : 1),
+        (lieTorsoX + lieTorsoSquirmX) * (isRealScan ? 0.65 : 1),
+        (lieTorsoY + lieTorsoSquirmY) * (isRealScan ? 0.65 : 1),
         lieTorsoZ * (isRealScan ? 0.65 : 1)
       );
-      applyCharEuler(b['Chest'], lieChestX, lieChestY, lieChestZ);
-      applyCharEuler(b['ShoulderL'], 0, 0, lieShLZ);
-      applyCharEuler(b['ShoulderR'], 0, 0, lieShRZ);
+      applyCharEuler(
+        b['Chest'],
+        lieChestX + lieTorsoSquirmX * 0.55,
+        lieChestY + lieTorsoSquirmY * 0.45,
+        lieChestZ
+      );
+      applyCharEuler(b['ShoulderL'], 0, 0, lieShLZ - lieShrug - absTwitch * twUpperL * 0.042);
+      applyCharEuler(b['ShoulderR'], 0, 0, lieShRZ + lieShrug + absTwitch * twUpperR * 0.042);
 
-      applyCharEuler(b['UpperLegL'], lieULX, lieULY, lieULZ);
-      applyCharEuler(b['UpperLegR'], lieURX, lieURY, lieURZ);
-      applyCharEuler(b['LowerLegL'], lieLLX, 0, 0);
-      applyCharEuler(b['LowerLegR'], lieLRX, 0, 0);
-      applyCharEuler(b['FootL'], lieFootLX, lieFootLY, 0);
-      applyCharEuler(b['FootR'], lieFootRX, lieFootRY, 0);
+      applyCharEuler(
+        b['UpperLegL'],
+        lieULX - lieKneePull * 0.55 - absTwitch * twThighL * 0.038,
+        lieULY,
+        lieULZ
+      );
+      applyCharEuler(
+        b['UpperLegR'],
+        lieURX - lieKneePull * 0.55 - absTwitch * twThighR * 0.038,
+        lieURY,
+        lieURZ
+      );
+      applyCharEuler(b['LowerLegL'], lieLLX + lieShinFlex + absTwitch * twThighL * 0.072, 0, 0);
+      applyCharEuler(b['LowerLegR'], lieLRX + lieShinFlex + absTwitch * twThighR * 0.072, 0, 0);
+      applyCharEuler(b['FootL'], lieFootLX + absTwitch * twThighL * 0.045, lieFootLY, 0);
+      applyCharEuler(b['FootR'], lieFootRX + absTwitch * twThighR * 0.045, lieFootRY, 0);
 
-      applyArmSagittal(b['UpperArmL'], lieArmDropL, lieArmSwingL, lieArmAdductL);
-      applyArmSagittal(b['UpperArmR'], lieArmDropR, lieArmSwingR, lieArmAdductR);
-      applyLocalElbowFlex(b['LowerArmL'], true, lieElbowL, isRealScan, isRocketbox);
-      applyLocalElbowFlex(b['LowerArmR'], false, lieElbowR, isRealScan, isRocketbox);
+      applyArmSagittal(
+        b['UpperArmL'],
+        lieArmDropL,
+        lieArmSwingL - supineW * (absTwitch * twUpperL * 0.055 + lieArmBrace * 0.35),
+        lieArmAdductL
+      );
+      applyArmSagittal(
+        b['UpperArmR'],
+        lieArmDropR,
+        lieArmSwingR - supineW * (absTwitch * twUpperR * 0.055 + lieArmBrace * 0.35),
+        lieArmAdductR
+      );
+      applyLocalElbowFlex(
+        b['LowerArmL'],
+        true,
+        lieElbowL + lieArmBrace + absTwitch * twUpperL * 0.085,
+        isRealScan,
+        isRocketbox
+      );
+      applyLocalElbowFlex(
+        b['LowerArmR'],
+        false,
+        lieElbowR + lieArmBrace + absTwitch * twUpperR * 0.085,
+        isRealScan,
+        isRocketbox
+      );
       if (isRealScan) {
         const lieHandPron = supineW * 1.05 + proneW * 0.25 + rightW * 0.35 - leftW * 0.35;
-        applyLocalHandPose(b['HandL'], 0, lieHandPron, 0, isRocketbox);
-        applyLocalHandPose(b['HandR'], 0, -lieHandPron, 0, isRocketbox);
+        applyLocalHandPose(b['HandL'], -highDiscomfort * 0.14, lieHandPron, 0, isRocketbox);
+        applyLocalHandPose(b['HandR'], -highDiscomfort * 0.14, -lieHandPron, 0, isRocketbox);
       }
-      applyNaturalHandFingers(b, 'L', 0.26, isRealScan, isRocketbox);
-      applyNaturalHandFingers(b, 'R', 0.30, isRealScan, isRocketbox);
+      const lieCurlGrip = THREE.MathUtils.clamp(0.28 + highDiscomfort * 0.32 + sSpike * 0.24, 0, 0.92);
+      applyNaturalHandFingers(b, 'L', lieCurlGrip, isRealScan, isRocketbox);
+      applyNaturalHandFingers(b, 'R', lieCurlGrip, isRealScan, isRocketbox);
 
-      applyCharEuler(b['Neck'], lieNeckX, lieNeckY, lieNeckZ);
-      applyCharEuler(b['Head'], effLieHeadPitch, effLieHeadYaw, effLieHeadRoll);
+      applyCharEuler(
+        b['Neck'],
+        lieNeckX + lieHeadAvertPitch * 0.35 + absTwitch * twNeck * 0.025,
+        lieNeckY + lieHeadAvertYaw * 0.42,
+        lieNeckZ + lieHeadAvertRoll * 0.35
+      );
+      applyCharEuler(
+        b['Head'],
+        effLieHeadPitch + lieHeadAvertPitch,
+        effLieHeadYaw + lieHeadAvertYaw * 0.65,
+        effLieHeadRoll + lieHeadAvertRoll
+      );
       if (isRealScan) {
-        applyCharEuler(b['EyeL'], 0.04, Math.sin(t * 0.45) * 0.05, 0);
-        applyCharEuler(b['EyeR'], 0.04, Math.sin(t * 0.45) * 0.05, 0);
+        applyCharEuler(b['EyeL'], 0.04, Math.sin(t * 0.45) * 0.05 - lieHeadAvertYaw * 0.25, 0);
+        applyCharEuler(b['EyeR'], 0.04, Math.sin(t * 0.45) * 0.05 - lieHeadAvertYaw * 0.25, 0);
       }
       return;
     }
@@ -3766,40 +4005,50 @@ export function animateHumanoid3D(
       (activePlaceFile ? -0.1 * placeReach : 0);
     const walkTurnLean = THREE.MathUtils.clamp(turnLean, -0.09, 0.09) * activeBlend * (1 - sit) * (1 - lie);
     const torsoStandZ = -stride * 0.018 * activeBlend - standWeight * 0.042 + walkTurnLean;
-    const baseTorsoX = THREE.MathUtils.lerp(torsoStandX, sitTorsoX + hsLeanX * 0.85, sit);
-    const baseTorsoY = THREE.MathUtils.lerp(torsoStandY, sitTorsoY + hsTurnY, sit);
-    const baseTorsoZ = THREE.MathUtils.lerp(torsoStandZ, sitTorsoZ, sit);
+    const stimTorsoLean =
+      -sSpike * 0.055 +
+      highDiscomfort * (-0.04 + stimSq2 * 0.035) +
+      absTwitch * twTorso * 0.025;
+    const stimTorsoTurn = stimSq1 * 0.065 + sSpike * stimDir * 0.05;
+    const stimTorsoSide = stimSq2 * 0.042 * (1 - lie);
+    const baseTorsoX = THREE.MathUtils.lerp(torsoStandX, sitTorsoX + hsLeanX * 0.85, sit) + stimTorsoLean;
+    const baseTorsoY = THREE.MathUtils.lerp(torsoStandY, sitTorsoY + hsTurnY, sit) + stimTorsoTurn;
+    const baseTorsoZ = THREE.MathUtils.lerp(torsoStandZ, sitTorsoZ, sit) + stimTorsoSide;
     if (isRealScan && b['Abdomen']) {
       applyCharEuler(
         b['Abdomen'],
-        THREE.MathUtils.lerp(baseTorsoX, lieTorsoX, lie) * 0.52,
-        THREE.MathUtils.lerp(baseTorsoY, lieTorsoY, lie) * 0.45,
+        THREE.MathUtils.lerp(baseTorsoX, lieTorsoX + lieTorsoSquirmX, lie) * 0.52,
+        THREE.MathUtils.lerp(baseTorsoY, lieTorsoY + lieTorsoSquirmY, lie) * 0.45,
         THREE.MathUtils.lerp(baseTorsoZ, lieTorsoZ, lie) * 0.45
       );
     }
     applyCharEuler(
       b['Torso'],
-      THREE.MathUtils.lerp(baseTorsoX, lieTorsoX, lie) * (isRealScan ? 0.65 : 1),
-      THREE.MathUtils.lerp(baseTorsoY, lieTorsoY, lie) * (isRealScan ? 0.65 : 1),
+      THREE.MathUtils.lerp(baseTorsoX, lieTorsoX + lieTorsoSquirmX, lie) * (isRealScan ? 0.65 : 1),
+      THREE.MathUtils.lerp(baseTorsoY, lieTorsoY + lieTorsoSquirmY, lie) * (isRealScan ? 0.65 : 1),
       THREE.MathUtils.lerp(baseTorsoZ, lieTorsoZ, lie) * (isRealScan ? 0.65 : 1)
     );
 
-    const baseChestX = THREE.MathUtils.lerp(
-      (isRealScan ? -0.022 * (1 - activeBlend * 0.5) : 0.018 * activeBlend) +
-        0.05 * climbAmt -
-        0.02 * descAmt -
-        pushAmt * 0.04 +
-        pickTorsoLean * 0.6 +
-        placeTorsoLean * 0.45 +
-        breath,
-      sitChestX,
-      sit
-    );
-    const baseChestY = THREE.MathUtils.lerp(
-      stride * 0.068 * activeBlend - pushAmt * 0.08 - standWeight * 0.03 + (activePlaceFile ? -0.06 * placeReach : 0),
-      sitTorsoY * 0.45,
-      sit
-    );
+    const baseChestX =
+      THREE.MathUtils.lerp(
+        (isRealScan ? -0.022 * (1 - activeBlend * 0.5) : 0.018 * activeBlend) +
+          0.05 * climbAmt -
+          0.02 * descAmt -
+          pushAmt * 0.04 +
+          pickTorsoLean * 0.6 +
+          placeTorsoLean * 0.45 +
+          breath,
+        sitChestX,
+        sit
+      ) +
+      stimTorsoLean * 0.55;
+    const baseChestY =
+      THREE.MathUtils.lerp(
+        stride * 0.068 * activeBlend - pushAmt * 0.08 - standWeight * 0.03 + (activePlaceFile ? -0.06 * placeReach : 0),
+        sitTorsoY * 0.45,
+        sit
+      ) +
+      stimTorsoTurn * 0.45;
     const baseChestZ = THREE.MathUtils.lerp(
       -stride * 0.022 * activeBlend - standWeight * 0.025 + walkTurnLean * 0.55,
       -sitTorsoZ * 0.3,
@@ -3807,13 +4056,15 @@ export function animateHumanoid3D(
     );
     applyCharEuler(
       b['Chest'],
-      THREE.MathUtils.lerp(baseChestX, lieChestX, lie),
-      THREE.MathUtils.lerp(baseChestY, lieChestY, lie),
+      THREE.MathUtils.lerp(baseChestX, lieChestX + lieTorsoSquirmX * 0.55, lie),
+      THREE.MathUtils.lerp(baseChestY, lieChestY + lieTorsoSquirmY * 0.45, lie),
       THREE.MathUtils.lerp(baseChestZ, lieChestZ, lie)
     );
 
     const restShrug = seatedActivity === 'rest' ? Math.sin(t * 1.1) * 0.022 * sit * (1 - lie) : 0;
     const fppBreathShrug = isRealScan && isFppSession ? breathWave * 0.014 * (1 - lie) : 0;
+    const stimShrugL = highDiscomfort * 0.042 + sSpike * 0.038 + absTwitch * twUpperL * 0.042;
+    const stimShrugR = highDiscomfort * 0.042 + sSpike * 0.038 + absTwitch * twUpperR * 0.042;
     const baseShoulderLY = -stride * 0.05 * activeBlend * (1 - sit);
     const baseShoulderRY =
       activeDrink
@@ -3829,15 +4080,17 @@ export function animateHumanoid3D(
       b['ShoulderL'],
       0,
       THREE.MathUtils.lerp(baseShoulderLY, 0, lie),
-      THREE.MathUtils.lerp(shoulderRestL - restShrug - fppBreathShrug, lieShLZ, lie)
+      THREE.MathUtils.lerp(shoulderRestL - restShrug - fppBreathShrug - stimShrugL, lieShLZ - lieShrug, lie)
     );
     applyCharEuler(
       b['ShoulderR'],
       0,
       THREE.MathUtils.lerp(baseShoulderRY, 0, lie),
       THREE.MathUtils.lerp(
-        activeDrink || activePickFile || activePlaceFile ? -0.04 : shoulderRestR + restShrug + fppBreathShrug,
-        lieShRZ,
+        activeDrink || activePickFile || activePlaceFile
+          ? -0.04
+          : shoulderRestR + restShrug + fppBreathShrug + stimShrugR,
+        lieShRZ + lieShrug,
         lie
       )
     );
@@ -3904,11 +4157,15 @@ export function animateHumanoid3D(
 
     const sitTurnoutL = isRealScan ? 0.14 : 0.05;
     const sitTurnoutR = isRealScan ? -0.12 : -0.05;
-    const baseULX = THREE.MathUtils.lerp(
-      -swing - stairThighLiftL - idleKneeL * 0.45,
-      sitThighAngle - pedal + (isRealScan ? -0.01 : 0),
-      sit
-    );
+    const stimLegTwitchL = absTwitch * twThighL * 0.055 + highDiscomfort * Math.max(0, stimSq1) * 0.045;
+    const stimLegTwitchR = absTwitch * twThighR * 0.055 + highDiscomfort * Math.max(0, -stimSq1) * 0.045;
+    const baseULX =
+      THREE.MathUtils.lerp(
+        -swing - stairThighLiftL - idleKneeL * 0.45,
+        sitThighAngle - pedal + (isRealScan ? -0.01 : 0),
+        sit
+      ) -
+      stimLegTwitchL * 0.55;
     const baseULY = THREE.MathUtils.lerp(
       (isRealScan ? 0.05 : 0.025) * (1 - activeBlend * 0.35),
       sitTurnoutL + sitLegFidget * 0.35,
@@ -3917,16 +4174,18 @@ export function animateHumanoid3D(
     const baseULZ = THREE.MathUtils.lerp(0.018 + standWeight * 0.03, 0.048, sit);
     applyCharEuler(
       b['UpperLegL'],
-      THREE.MathUtils.lerp(baseULX, lieULX, lie) - legSwingLift,
+      THREE.MathUtils.lerp(baseULX, lieULX - lieKneePull * 0.55, lie) - legSwingLift,
       THREE.MathUtils.lerp(baseULY, lieULY, lie),
       THREE.MathUtils.lerp(baseULZ, lieULZ, lie)
     );
 
-    const baseURX = THREE.MathUtils.lerp(
-      swing - stairThighLiftR - idleKneeR * 0.45,
-      sitThighAngle + pedal + (isRealScan ? 0.01 : 0),
-      sit
-    );
+    const baseURX =
+      THREE.MathUtils.lerp(
+        swing - stairThighLiftR - idleKneeR * 0.45,
+        sitThighAngle + pedal + (isRealScan ? 0.01 : 0),
+        sit
+      ) -
+      stimLegTwitchR * 0.55;
     const baseURY = THREE.MathUtils.lerp(
       (isRealScan ? -0.05 : -0.025) * (1 - activeBlend * 0.35),
       sitTurnoutR - sitLegFidget * 0.35,
@@ -3935,23 +4194,27 @@ export function animateHumanoid3D(
     const baseURZ = THREE.MathUtils.lerp(-0.018 + standWeight * 0.03, -0.048, sit);
     applyCharEuler(
       b['UpperLegR'],
-      THREE.MathUtils.lerp(baseURX, lieURX, lie) - legSwingLift,
+      THREE.MathUtils.lerp(baseURX, lieURX - lieKneePull * 0.55, lie) - legSwingLift,
       THREE.MathUtils.lerp(baseURY, lieURY, lie),
       THREE.MathUtils.lerp(baseURZ, lieURZ, lie)
     );
 
-    const baseLLX = THREE.MathUtils.lerp(
-      standKneeL,
-      sitKneeAngle + (isRealScan ? 0.02 : 0) + pedal * 0.65 + sitLegFidget,
-      sit
-    );
-    const baseLRX = THREE.MathUtils.lerp(
-      standKneeR,
-      sitKneeAngle + (isRealScan ? -0.04 : 0) - pedal * 0.65 - sitLegFidget,
-      sit
-    );
-    applyCharEuler(b['LowerLegL'], THREE.MathUtils.lerp(baseLLX, lieLLX, shinBlend), 0, 0);
-    applyCharEuler(b['LowerLegR'], THREE.MathUtils.lerp(baseLRX, lieLRX, shinBlend), 0, 0);
+    const baseLLX =
+      THREE.MathUtils.lerp(
+        standKneeL,
+        sitKneeAngle + (isRealScan ? 0.02 : 0) + pedal * 0.65 + sitLegFidget,
+        sit
+      ) +
+      stimLegTwitchL * 1.1;
+    const baseLRX =
+      THREE.MathUtils.lerp(
+        standKneeR,
+        sitKneeAngle + (isRealScan ? -0.04 : 0) - pedal * 0.65 - sitLegFidget,
+        sit
+      ) +
+      stimLegTwitchR * 1.1;
+    applyCharEuler(b['LowerLegL'], THREE.MathUtils.lerp(baseLLX, lieLLX + lieShinFlex, shinBlend), 0, 0);
+    applyCharEuler(b['LowerLegR'], THREE.MathUtils.lerp(baseLRX, lieLRX + lieShinFlex, shinBlend), 0, 0);
 
     // Ankle dorsiflexion during swing, heel-strike & terminal stance heel-peel (keeps forefoot grounded)
     const ankleSwingL = isRealScan
@@ -3960,16 +4223,16 @@ export function animateHumanoid3D(
     const ankleSwingR = isRealScan
       ? (-Math.max(0, -cosP) * 0.12 - Math.max(0, -sinP) * 0.15 - Math.max(0, sinP) * 0.14) * activeBlend
       : (-Math.max(0, -cosP) * 0.14 - Math.max(0, -sinP) * 0.08 + Math.max(0, sinP) * 0.18) * activeBlend;
-    const baseFootLX = THREE.MathUtils.lerp(
-      ankleSwingL + stairFootL - idleKneeL * 0.35,
-      sitFootAngle + toeTap,
-      sit
-    );
-    const baseFootRX = THREE.MathUtils.lerp(
-      ankleSwingR + stairFootR - idleKneeR * 0.35,
-      sitFootAngle + (isRealScan ? 0.02 : 0),
-      sit
-    );
+    const baseFootLX =
+      THREE.MathUtils.lerp(ankleSwingL + stairFootL - idleKneeL * 0.35, sitFootAngle + toeTap, sit) +
+      absTwitch * twThighL * 0.045;
+    const baseFootRX =
+      THREE.MathUtils.lerp(
+        ankleSwingR + stairFootR - idleKneeR * 0.35,
+        sitFootAngle + (isRealScan ? 0.02 : 0),
+        sit
+      ) +
+      absTwitch * twThighR * 0.045;
     applyCharEuler(
       b['FootL'],
       THREE.MathUtils.lerp(baseFootLX, lieFootLX, shinBlend) - ankleLift,
@@ -4110,12 +4373,15 @@ export function animateHumanoid3D(
       rightElbowFlex = THREE.MathUtils.lerp(rightElbowFlex, hsElbowTarget, hsArmBlend);
     }
 
+    const stimArmBraceL = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperL * 0.08;
+    const stimArmBraceR = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperR * 0.08;
     const baseArmDropL = THREE.MathUtils.lerp(
       isRocketbox ? -1.37 : isRealScan ? -1.425 : -1.43,
       isRealScan ? -1.39 : -1.42,
       sit
     ) + rbArmOffset;
-    const baseArmSwingL = THREE.MathUtils.lerp(armStandL, sitArmLSwing, sit);
+    const baseArmSwingL =
+      THREE.MathUtils.lerp(armStandL, sitArmLSwing, sit) - stimArmBraceL * 0.45;
     const baseArmAdductL = isRealScan ? -0.22 * sit : 0;
 
     applyArmSagittal(
@@ -4127,7 +4393,7 @@ export function animateHumanoid3D(
     applyArmSagittal(
       b['UpperArmR'],
       THREE.MathUtils.lerp(rightArmDropZ, lieArmDropR, lie),
-      THREE.MathUtils.lerp(rightArmSwingX, lieArmSwingR, lie),
+      THREE.MathUtils.lerp(rightArmSwingX - stimArmBraceR * 0.45, lieArmSwingR, lie),
       THREE.MathUtils.lerp(rightArmAdductY, lieArmAdductR, lie)
     );
 
@@ -4135,18 +4401,18 @@ export function animateHumanoid3D(
       (isRealScan ? 0.20 : 0.24) +
       Math.max(0, -armStride) * 0.26 * activeBlend +
       Math.sin(t * 0.47) * 0.03 * standIdleAmt;
-    const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit);
+    const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit) + stimArmBraceL;
     applyLocalElbowFlex(
       b['LowerArmL'],
       true,
-      THREE.MathUtils.lerp(baseElbowL, lieElbowL, lie),
+      THREE.MathUtils.lerp(baseElbowL, lieElbowL + lieArmBrace, lie),
       isRealScan,
       isRocketbox
     );
     applyLocalElbowFlex(
       b['LowerArmR'],
       false,
-      THREE.MathUtils.lerp(rightElbowFlex, lieElbowR, lie),
+      THREE.MathUtils.lerp(rightElbowFlex + stimArmBraceR, lieElbowR + lieArmBrace, lie),
       isRealScan,
       isRocketbox
     );
@@ -4206,17 +4472,19 @@ export function animateHumanoid3D(
         : 0;
     const effStdGrip = Math.max(gripAmt, hsActive ? hsArmBlend * hsClasp : 0);
     if (isRealScan) {
-      const relaxedCurlL = THREE.MathUtils.lerp(0.28, 0.30, sit) + Math.sin(t * 0.52) * 0.03;
+      const tenseCurlBoost = highDiscomfort * 0.30 + sSpike * 0.22;
+      const relaxedCurlL =
+        THREE.MathUtils.lerp(0.28, 0.30, sit) + Math.sin(t * 0.52) * 0.03 + tenseCurlBoost;
       let rightCurl = activeDrink
         ? 0.72
         : gripAmt > 0.05
           ? THREE.MathUtils.lerp(0.28, 0.88, gripAmt)
-          : THREE.MathUtils.lerp(THREE.MathUtils.lerp(0.30, 0.32, sit), 0.16, gestFade);
+          : THREE.MathUtils.lerp(THREE.MathUtils.lerp(0.30, 0.32, sit), 0.16, gestFade) + tenseCurlBoost;
       if (hsActive) {
         rightCurl = THREE.MathUtils.lerp(rightCurl, hsClasp, hsArmBlend);
       }
-      applyNaturalHandFingers(b, 'L', relaxedCurlL, true, isRocketbox);
-      applyNaturalHandFingers(b, 'R', rightCurl, true, isRocketbox);
+      applyNaturalHandFingers(b, 'L', Math.min(0.92, relaxedCurlL), true, isRocketbox);
+      applyNaturalHandFingers(b, 'R', Math.min(0.92, rightCurl), true, isRocketbox);
     } else {
       const f1Curl = -0.68 * effStdGrip;
       const f2Curl = -0.56 * effStdGrip;
@@ -4344,34 +4612,43 @@ export function animateHumanoid3D(
       residualEyePitch = Math.sin(t * 0.31) * 0.02;
     }
 
+    const stimHeadAvertYaw = stimDir * (highDiscomfort * 0.17 + sSpike * 0.14 + stimSq2 * 0.06);
+    const stimHeadAvertPitch = highDiscomfort * 0.09 + sSpike * 0.07;
+    const stimHeadAvertRoll = -stimDir * (highDiscomfort * 0.06 + sSpike * 0.045);
+
     const baseNeckX = activeDrink
       ? drinkNeckPitch
       : THREE.MathUtils.lerp(
           0.012 * activeBlend + (activePlaceFile ? 0.1 * placeReach : 0),
           -0.025 + finalLookPitch * 0.28,
           sit
-        );
-    const baseHeadX = THREE.MathUtils.lerp(finalLookPitch, -0.02 + finalLookPitch, sit);
+        ) +
+        stimHeadAvertPitch * 0.35 +
+        absTwitch * twNeck * 0.025;
+    const baseHeadX =
+      THREE.MathUtils.lerp(finalLookPitch, -0.02 + finalLookPitch, sit) + stimHeadAvertPitch;
     const expressiveTilt =
       headTiltZ +
       (isRealScan && isFppSession && lie < 0.2
         ? (isSpeaking ? Math.sin(t * 1.8) * 0.032 : Math.sin(t * 0.48) * 0.024)
-        : 0);
+        : 0) +
+      stimHeadAvertRoll;
+    const uprightLookYaw = finalLookYaw + stimHeadAvertYaw;
     applyCharEuler(
       b['Neck'],
-      THREE.MathUtils.lerp(baseNeckX, lieNeckX, lie),
-      THREE.MathUtils.lerp(finalLookYaw * 0.45, lieNeckY, lie),
-      THREE.MathUtils.lerp(expressiveTilt * 0.35, lieNeckZ, lie)
+      THREE.MathUtils.lerp(baseNeckX, lieNeckX + lieHeadAvertPitch * 0.35, lie),
+      THREE.MathUtils.lerp(uprightLookYaw * 0.45, lieNeckY + lieHeadAvertYaw * 0.42, lie),
+      THREE.MathUtils.lerp(expressiveTilt * 0.35, lieNeckZ + lieHeadAvertRoll * 0.35, lie)
     );
     applyCharEuler(
       b['Head'],
-      THREE.MathUtils.lerp(baseHeadX, effLieHeadPitch, lie),
-      THREE.MathUtils.lerp(finalLookYaw, effLieHeadYaw, lie),
-      THREE.MathUtils.lerp(expressiveTilt, effLieHeadRoll, lie)
+      THREE.MathUtils.lerp(baseHeadX, effLieHeadPitch + lieHeadAvertPitch, lie),
+      THREE.MathUtils.lerp(uprightLookYaw, effLieHeadYaw + lieHeadAvertYaw * 0.65, lie),
+      THREE.MathUtils.lerp(expressiveTilt, effLieHeadRoll + lieHeadAvertRoll, lie)
     );
     if (isRealScan) {
-      applyCharEuler(b['EyeL'], residualEyePitch, residualEyeYaw, 0);
-      applyCharEuler(b['EyeR'], residualEyePitch, residualEyeYaw, 0);
+      applyCharEuler(b['EyeL'], residualEyePitch, residualEyeYaw - stimHeadAvertYaw * 0.22, 0);
+      applyCharEuler(b['EyeR'], residualEyePitch, residualEyeYaw - stimHeadAvertYaw * 0.22, 0);
     }
     return;
   }

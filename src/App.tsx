@@ -2444,6 +2444,7 @@ export default function App() {
     if (wasInFpp) {
       triggerFppBlinkTransition(
         () => {
+          soundFx.stopAllDevices();
           setFirstPersonPatientId(null);
           setFppNearbyDevice(null);
           setFppHeldDevice(null);
@@ -2502,6 +2503,7 @@ export default function App() {
       return;
     }
 
+    soundFx.stopAllDevices();
     setFirstPersonPatientId(null);
     setFppNearbyDevice(null);
     setFppHeldDevice(null);
@@ -3065,6 +3067,9 @@ export default function App() {
     setClinic((prev) => {
       const next = !prev.soundEnabled;
       soundFx.enabled = next;
+      if (!next) {
+        soundFx.stopAllDevices();
+      }
       return { ...prev, soundEnabled: next };
     });
   };
@@ -3094,6 +3099,7 @@ export default function App() {
   };
 
   const handleResetClinic = () => {
+    soundFx.stopAllDevices();
     treatmentTimersRef.current.forEach((t) => clearTimeout(t));
     treatmentTimersRef.current.clear();
     clearFppBlinkTimers();
@@ -3556,6 +3562,7 @@ export default function App() {
           onExit={() => {
             soundFx.tap();
             triggerFppBlinkTransition(() => {
+              soundFx.stopAllDevices();
               setFirstPersonPatientId(null);
               setFppNearbyDevice(null);
               setFppHeldDevice(null);

@@ -652,20 +652,20 @@ export function createFppRoomBackdrop3D(
   group.add(ceilingMesh);
 
   const trofferBezel = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.26, 0.028, 0.54)),
+    trackGeom(new THREE.BoxGeometry(1.26, 0.02, 0.54)),
     aluminumMat
   );
-  trofferBezel.position.set(0, wallH - 0.008, 0.52);
+  trofferBezel.position.set(0, wallH - 0.01, 0.52);
   const trofferRecess = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.2, 0.024, 0.48)),
+    trackGeom(new THREE.BoxGeometry(1.2, 0.014, 0.48)),
     darkTrimMat
   );
-  trofferRecess.position.set(0, wallH - 0.011, 0.52);
+  trofferRecess.position.set(0, wallH - 0.023, 0.52);
   const ceilingLightPanel = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.16, 0.018, 0.44)),
+    trackGeom(new THREE.BoxGeometry(1.16, 0.012, 0.44)),
     ceilingPanelMat
   );
-  ceilingLightPanel.position.set(0, wallH - 0.014, 0.52);
+  ceilingLightPanel.position.set(0, wallH - 0.032, 0.52);
   group.add(trofferBezel, trofferRecess, ceilingLightPanel);
 
   const slatShape = new THREE.Shape();
@@ -688,20 +688,20 @@ export function createFppRoomBackdrop3D(
 
   for (const flankX of [-1.62, 1.62]) {
     const outerFrame = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(0.59, 1.59, 0.018)),
+      trackGeom(new THREE.BoxGeometry(0.59, 1.59, 0.012)),
       aluminumMat
     );
-    outerFrame.position.set(flankX, 1.74, backZ + 0.032);
+    outerFrame.position.set(flankX, 1.74, backZ + 0.038);
     const backing = new THREE.Mesh(
-      trackGeom(new THREE.BoxGeometry(0.56, 1.56, 0.022)),
+      trackGeom(new THREE.BoxGeometry(0.56, 1.56, 0.012)),
       darkTrimMat
     );
-    backing.position.set(flankX, 1.74, backZ + 0.038);
+    backing.position.set(flankX, 1.74, backZ + 0.048);
     backing.receiveShadow = enableShadows;
     group.add(outerFrame, backing);
     for (let si = -2; si <= 2; si++) {
       const slat = new THREE.Mesh(beveledSlatGeom, woodSlatMat);
-      slat.position.set(flankX + si * 0.105, 1.74, backZ + 0.056);
+      slat.position.set(flankX + si * 0.105, 1.74, backZ + 0.066);
       slat.castShadow = enableShadows;
       slat.receiveShadow = enableShadows;
       group.add(slat);
@@ -712,20 +712,20 @@ export function createFppRoomBackdrop3D(
     trackGeom(new THREE.PlaneGeometry(2.38, 0.74)),
     wallEngravingMat
   );
-  wallEngraving.position.set(0, 1.56, backZ + 0.036);
+  wallEngraving.position.set(0, 1.56, backZ + 0.04);
   wallEngraving.renderOrder = 1;
   group.add(wallEngraving);
 
   const coveHousing = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(2.02, 0.038, 0.068)),
+    trackGeom(new THREE.BoxGeometry(2.02, 0.032, 0.056)),
     darkTrimMat
   );
-  coveHousing.position.set(0, wallH - 0.052, backZ + 0.072);
+  coveHousing.position.set(0, wallH - 0.056, backZ + 0.095);
   const coveBar = new THREE.Mesh(
-    trackGeom(new THREE.BoxGeometry(1.95, 0.022, 0.044)),
+    trackGeom(new THREE.BoxGeometry(1.94, 0.018, 0.034)),
     warmCoveMat
   );
-  coveBar.position.set(0, wallH - 0.064, backZ + 0.082);
+  coveBar.position.set(0, wallH - 0.082, backZ + 0.095);
   group.add(coveHousing, coveBar);
 
   // Calibrated Three-Point Clinical FPP Illumination (also fills clinician side of bay smoothly)
