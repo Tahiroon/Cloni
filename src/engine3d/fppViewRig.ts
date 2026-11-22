@@ -62,18 +62,19 @@ function createWallEngravingTextures(maxAniso: number): {
 } {
   const W = 3840;
   const H = 1184;
+  const TEX_SCALE = 0.5;
 
   const colorCanvas = document.createElement('canvas');
-  colorCanvas.width = W;
-  colorCanvas.height = H;
+  colorCanvas.width = Math.round(W * TEX_SCALE);
+  colorCanvas.height = Math.round(H * TEX_SCALE);
   const cCtx = colorCanvas.getContext('2d');
 
   const bumpCanvas = document.createElement('canvas');
-  bumpCanvas.width = W;
-  bumpCanvas.height = H;
+  bumpCanvas.width = Math.round(W * TEX_SCALE);
+  bumpCanvas.height = Math.round(H * TEX_SCALE);
   const bCtx = bumpCanvas.getContext('2d');
 
-  const aniso = Math.min(16, Math.max(8, maxAniso || 8));
+  const aniso = Math.min(8, Math.max(4, maxAniso || 4));
   const colorTex = new THREE.CanvasTexture(colorCanvas);
   colorTex.colorSpace = THREE.SRGBColorSpace;
   colorTex.anisotropy = aniso;
@@ -89,6 +90,8 @@ function createWallEngravingTextures(maxAniso: number): {
 
   const renderCanvases = () => {
     if (!cCtx || !bCtx) return;
+    cCtx.setTransform(TEX_SCALE, 0, 0, TEX_SCALE, 0, 0);
+    bCtx.setTransform(TEX_SCALE, 0, 0, TEX_SCALE, 0, 0);
     cCtx.clearRect(0, 0, W, H);
     bCtx.fillStyle = '#ffffff';
     bCtx.fillRect(0, 0, W, H);
@@ -752,12 +755,12 @@ export function createFppRoomBackdrop3D(
   examKeySpot.target.position.set(0, 0.42, -0.2);
   if (enableShadows) {
     examKeySpot.castShadow = true;
-    examKeySpot.shadow.mapSize.set(1024, 1024);
+    examKeySpot.shadow.mapSize.set(768, 768);
     examKeySpot.shadow.camera.near = 0.4;
     examKeySpot.shadow.camera.far = 7.8;
     examKeySpot.shadow.bias = -0.00045;
     examKeySpot.shadow.normalBias = 0.016;
-    examKeySpot.shadow.radius = 2.8;
+    examKeySpot.shadow.radius = 2.2;
   }
   group.add(examKeySpot, examKeySpot.target);
 

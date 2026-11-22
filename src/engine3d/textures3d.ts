@@ -152,8 +152,8 @@ export function createTextureBundle(
   // Photorealistic Architectural Porcelain / Carrara-Stone Medical Tiles (3x3 66.7cm module in 1024x1024)
   // Uses fast periodic multi-octave FBM + domain-warped stone veining per pixel so each tile looks like real kiln-fired stone.
   const TILE_COLS = 3;
-  const TILE_SIZE = 1024;
-  const TILE_INSET = 4.2;
+  const TILE_SIZE = 512;
+  const TILE_INSET = 2.1;
 
   const worldStoneTextures = catalogOnly
     ? null
@@ -338,13 +338,13 @@ export function createTextureBundle(
               b = b * (1 - vMix) + sheetOpts.veinRgb[2] * vMix;
 
               let bevelBoost = 0;
-              if (edgeDist < TILE_INSET + 3.4) {
-                const isTop = localY < TILE_INSET + 3.4;
-                const isLeft = localX < TILE_INSET + 3.4;
-                const isBottom = step - localY < TILE_INSET + 3.4;
-                const isRight = step - localX < TILE_INSET + 3.4;
-                const bFactor = 1 - (edgeDist - TILE_INSET) / 3.4;
-                if (edgeDist < TILE_INSET + 1.2) {
+              if (edgeDist < TILE_INSET + 1.7) {
+                const isTop = localY < TILE_INSET + 1.7;
+                const isLeft = localX < TILE_INSET + 1.7;
+                const isBottom = step - localY < TILE_INSET + 1.7;
+                const isRight = step - localX < TILE_INSET + 1.7;
+                const bFactor = 1 - (edgeDist - TILE_INSET) / 1.7;
+                if (edgeDist < TILE_INSET + 0.6) {
                   bevelBoost = -20;
                 } else if (isTop || isLeft) {
                   bevelBoost = 11 * bFactor;
@@ -390,7 +390,7 @@ export function createTextureBundle(
               let val: number;
               if (edgeDist < TILE_INSET) {
                 val = 216 + Math.round(tileMicroField[idx] * 18);
-              } else if (edgeDist < TILE_INSET + 3.0) {
+              } else if (edgeDist < TILE_INSET + 1.5) {
                 val = 144;
               } else {
                 const cloud = tileCloudField[idx];
@@ -426,8 +426,8 @@ export function createTextureBundle(
               if (edgeDist < TILE_INSET) {
                 const t = edgeDist / TILE_INSET;
                 h = 0.08 + 0.14 * t * t + tileMicroField[idx] * 0.03;
-              } else if (edgeDist < TILE_INSET + 3.8) {
-                const t = (edgeDist - TILE_INSET) / 3.8;
+              } else if (edgeDist < TILE_INSET + 1.9) {
+                const t = (edgeDist - TILE_INSET) / 1.9;
                 const smooth = t * t * (3 - 2 * t);
                 h = 0.24 + 0.74 * smooth;
               } else {
@@ -481,8 +481,7 @@ export function createTextureBundle(
         });
 
         const courtyardPaver = (() => {
-          const [c, ctx] = makeCanvas(1024, 1024);
-          ctx.scale(2, 2);
+          const [c, ctx] = makeCanvas(512, 512);
           ctx.fillStyle = '#9b8f80';
           ctx.fillRect(0, 0, 512, 512);
           const cols = 4;
@@ -522,8 +521,7 @@ export function createTextureBundle(
   const courtyardPaver = worldStoneTextures ? worldStoneTextures.courtyardPaver : dummyTex;
 
   const paverBump = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#484848';
     ctx.fillRect(0, 0, 512, 512);
     ctx.fillStyle = '#dedede';
@@ -548,8 +546,7 @@ export function createTextureBundle(
   const grass = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#3f632e';
     ctx.fillRect(0, 0, 512, 512);
 
@@ -621,8 +618,7 @@ export function createTextureBundle(
   const asphalt = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#9b876a';
     ctx.fillRect(0, 0, 512, 512);
 
@@ -712,8 +708,7 @@ export function createTextureBundle(
   const asphaltBump = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 512, 512);
     for (let i = 0; i < 9500; i++) {
@@ -725,12 +720,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 7, false));
   })();
 
-  // 7. Natural Weathered Garden Flagstone Walkway (1024x1024 warm irregular garden stones + earthy soil/moss joints)
+  // 7. Natural Weathered Garden Flagstone Walkway (512x512 warm irregular garden stones + earthy soil/moss joints)
   const sidewalk = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#7c7564'; // Warm soil & moss joint base
     ctx.fillRect(0, 0, 512, 512);
 
@@ -775,8 +769,7 @@ export function createTextureBundle(
 
   // 8. Rich architectural oak/teak wood grain with plank seams, cathedral rings, and bump map (1024x1024)
   const wood = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#97633b';
     ctx.fillRect(0, 0, 512, 512);
     for (let y = 0; y < 512; y += 1) {
@@ -821,8 +814,7 @@ export function createTextureBundle(
   })();
 
   const woodBump = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#888888';
     ctx.fillRect(0, 0, 256, 256);
     for (let y = 0; y < 256; y += 1) {
@@ -836,10 +828,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, false));
   })();
 
-  // 8a. Deeply furrowed organic tree bark texture + companion normal-feel bump map (1024x1024)
+  // 8a. Deeply furrowed organic tree bark texture + companion normal-feel bump map
   const bark = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#4e3523';
     ctx.fillRect(0, 0, 512, 512);
     // Vertical fibrous grain gradient streaks
@@ -871,8 +862,7 @@ export function createTextureBundle(
   })();
 
   const barkBump = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 420; i++) {
@@ -886,12 +876,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 2, 3, false));
   })();
 
-  // 8a-bis. Paper birch silver-white bark with dark horizontal lenticel markings (512x512)
+  // 8a-bis. Paper birch silver-white bark with dark horizontal lenticel markings
   const birchBark = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#ddd7ce';
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 80; i++) {
@@ -945,8 +934,7 @@ export function createTextureBundle(
   const leafFoliage = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.clearRect(0, 0, 512, 512);
     const tones: Array<[string, string]> = [
       ['#224c1a', '#3a7229'],
@@ -982,10 +970,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 8ac. Deep-green columnar cypress/pine needle scale spray texture (1024x1024)
+  // 8ac. Deep-green columnar cypress/pine needle scale spray texture (512x512)
   const cypressFoliage = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.clearRect(0, 0, 512, 512);
     const tones = ['#1a3c24', '#214d2c', '#2a5f35', '#15311d', '#34713f'];
     for (let i = 0; i < 165; i++) {
@@ -1009,10 +996,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 8ad. Silvery Mediterranean olive-tree slender lanceolate leaf spray texture (1024x1024)
+  // 8ad. Silvery Mediterranean olive-tree slender lanceolate leaf spray texture (512x512)
   const oliveFoliage = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.clearRect(0, 0, 512, 512);
     const tones: Array<[string, string]> = [
       ['#465c42', '#7d9375'],
@@ -1039,8 +1025,7 @@ export function createTextureBundle(
   const roofShingle = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#8b4534';
     ctx.fillRect(0, 0, 256, 256);
     const rows = 8;
@@ -1060,12 +1045,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 3, 2, true));
   })();
 
-  // 9. Multi-layered architectural plaster & stucco PBR set (1024x1024 albedo + bump + roughness)
+  // 9. Multi-layered architectural plaster & stucco PBR set (512x512 albedo + bump, 256x256 roughness)
   const plasterAlbedo = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#dcd6cb';
     ctx.fillRect(0, 0, 512, 512);
     for (let i = 0; i < 180; i++) {
@@ -1092,8 +1076,7 @@ export function createTextureBundle(
   const stuccoBump = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 512, 512);
     for (let i = 0; i < 90; i++) {
@@ -1120,8 +1103,7 @@ export function createTextureBundle(
   const plasterRough = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#dadada';
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 180; i++) {
@@ -1135,12 +1117,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 3, 2, false));
   })();
 
-  // 9b. Architectural clinic acoustic wainscot wall paneling (512x512 albedo + vertical seam bump)
+  // 9b. Architectural clinic acoustic wainscot wall paneling (256x256)
   const wainscotAlbedo = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#205b86';
     ctx.fillRect(0, 0, 256, 256);
     const panels = 4;
@@ -1167,8 +1148,7 @@ export function createTextureBundle(
   const wainscotBump = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#dcdcdc';
     ctx.fillRect(0, 0, 256, 256);
     const pw = 64;
@@ -1181,22 +1161,22 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 3, 1, false));
   })();
 
-  // 9c. Brushed stainless / anodized aluminum directional streaks bump (512x512)
+  // 9c. Brushed stainless / anodized aluminum directional streaks bump (256x256)
   const brushedMetalBump = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, 512, 512);
-    for (let y = 0; y < 512; y += 1) {
+    ctx.fillRect(0, 0, 256, 256);
+    for (let y = 0; y < 256; y += 1) {
       const v = 116 + ((Math.sin(y * 13.7) * 0.5 + 0.5) * 24) | 0;
       ctx.fillStyle = `rgb(${v},${v},${v})`;
-      ctx.fillRect(0, y, 512, 1);
+      ctx.fillRect(0, y, 256, 1);
     }
     return track(finalizeTexture(c, aniso, 2, 2, false));
   })();
 
-  // 9d. Ultra-fine anti-aliased linen/twill textile weave bump (1024x1024, zero blocky checkerboard pixels when zoomed in!)
+  // 9d. Anti-aliased linen/twill textile weave bump (512x512)
   const fabricWeaveBump = (() => {
-    const size = 1024;
+    const size = 512;
     const [c, ctx] = makeCanvas(size, size);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, size, size);
@@ -1213,10 +1193,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 6, 6, false));
   })();
 
-  // 9e. Pebbled medical vinyl / upholstery leather bump (512x512)
+  // 9e. Pebbled medical vinyl / upholstery leather bump (256x256)
   const leatherBump = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#7c7c7c';
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 2400; i++) {
@@ -1230,10 +1209,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 4, 4, false));
   })();
 
-  // 9f. Natural human skin micro-pore & tonal variation map (512x512, neutral so rich dark-brown & medium tones stay true)
+  // 9f. Natural human skin micro-pore & tonal variation map (256x256)
   const skinMicroMap = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#fdfaf8';
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 90; i++) {
@@ -1259,8 +1237,7 @@ export function createTextureBundle(
   })();
 
   const skinRoughMap = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.fillStyle = '#989898'; // ~0.59 natural semi-matte skin for realistic close-up lighting
     ctx.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 140; i++) {
@@ -1277,11 +1254,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 2, 2, false));
   })();
 
-  // 9g. Seamless multi-octave water ripple normal map (512x512)
+  // 9g. Seamless multi-octave water ripple normal map (256x256)
   const waterNormal = catalogOnly
     ? dummyTex
     : (() => {
-    const size = 512;
+    const size = 256;
     const [c, ctx] = makeCanvas(size, size);
     const img = ctx.createImageData(size, size);
     const data = img.data;
@@ -1314,10 +1291,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 2, 2, false));
   })();
 
-  // 9h. Woven clinical reception rug pattern (1024x512)
+  // 9h. Woven clinical reception rug pattern (512x256)
   const rugPattern = (() => {
-    const [c, ctx] = makeCanvas(1024, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 256);
     ctx.fillStyle = '#1b3b5c';
     ctx.fillRect(0, 0, 512, 256);
     ctx.fillStyle = '#dbe4ee';
@@ -1356,12 +1332,12 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 11. Reception back wall THERASON architectural panel (2048x560 ultra-crisp print)
+  // 11. Reception back wall THERASON architectural panel (1024x280 crisp print)
   const therasonWall = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(2048, 560);
-    ctx.scale(2048 / 1536, 560 / 420);
+    const [c, ctx] = makeCanvas(1024, 280);
+    ctx.scale(1024 / 1536, 280 / 420);
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, 1536, 420);
 
@@ -1401,16 +1377,17 @@ export function createTextureBundle(
     return tex;
   })();
 
-  // 11b. West Wall Direct Architectural Lettering ("Powered by طـــاهـر محمد", 2048x368 transparent overlay)
+  // 11b. West Wall Direct Architectural Lettering ("Powered by طـــاهـر محمد", 1024x184 transparent overlay)
   const poweredByWall = catalogOnly
     ? dummyTex
     : (() => {
     const W = 2048;
     const H = 368;
-    const [c, ctx] = makeCanvas(W, H);
+    const [c, ctx] = makeCanvas(1024, 184);
 
     const drawPoweredByWall = () => {
       ctx.save();
+      ctx.scale(0.5, 0.5);
       ctx.clearRect(0, 0, W, H);
 
       // Measure both runs cleanly so mixed English + Arabic renders cleanly without BiDi reordering
@@ -1493,10 +1470,9 @@ export function createTextureBundle(
     return tex;
   })();
 
-  // 12. Illuminated blue-glow outdoor monument sign (1024x520)
+  // 12. Illuminated blue-glow outdoor monument sign (512x260)
   const therasonMonument = (() => {
-    const [c, ctx] = makeCanvas(1024, 520);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 260);
     const grad = ctx.createLinearGradient(0, 0, 512, 260);
     grad.addColorStop(0, '#1d4ed8');
     grad.addColorStop(0.5, '#2563eb');
@@ -1512,12 +1488,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 12b. Illuminated Main Entrance Facade Sign ("Therason Clinic", 1280x360)
+  // 12b. Illuminated Main Entrance Facade Sign ("Therason Clinic", 640x180)
   const therasonFacadeSign = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(1280, 360);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(640, 180);
     const grad = ctx.createLinearGradient(0, 0, 640, 180);
     grad.addColorStop(0, '#1e40af');
     grad.addColorStop(0.5, '#2563eb');
@@ -1723,10 +1698,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, 1, 1, 1, true, true));
   })();
 
-  // 17. LG Dual Inverter modern AC dark display strip (1024x256)
+  // 17. LG Dual Inverter modern AC dark display strip (512x128)
   const lgAcFront = (() => {
-    const [c, ctx] = makeCanvas(1024, 256);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 128);
     const bg = ctx.createLinearGradient(0, 0, 512, 128);
     bg.addColorStop(0, '#0f172a');
     bg.addColorStop(0.5, '#1e293b');
@@ -1829,10 +1803,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 20. High-efficiency half-cut monocrystalline photovoltaic solar panel texture (1024x1536)
+  // 20. High-efficiency half-cut monocrystalline photovoltaic solar panel texture (512x768)
   const solarCell = (() => {
-    const [c, ctx] = makeCanvas(1024, 1536);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 768);
     const w = 512;
     const h = 768;
 
@@ -1916,10 +1889,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 21. Alpha-cutout feathery pinnate palm frond texture (512x512)
+  // 21. Alpha-cutout feathery pinnate palm frond texture (256x256)
   const palmFrond = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(256, 256);
     ctx.clearRect(0, 0, 256, 256);
     ctx.strokeStyle = '#658f36';
     ctx.lineWidth = 6;
@@ -1952,10 +1924,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor (1024x1024)
+  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor (512x512)
   const roseFoliage = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.clearRect(0, 0, 512, 512);
     const leafTones: Array<[string, string]> = [
       ['#1f481b', '#38742c'],
@@ -2005,10 +1976,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 23. Alpha-cutout rich flowering courtyard & world blossom tree foliage card (1024x1024)
+  // 23. Alpha-cutout rich flowering courtyard & world blossom tree foliage card (512x512)
   const blossomFoliage = (() => {
-    const [c, ctx] = makeCanvas(1024, 1024);
-    ctx.scale(2, 2);
+    const [c, ctx] = makeCanvas(512, 512);
     ctx.clearRect(0, 0, 512, 512);
     const leafTones: Array<[string, string]> = [
       ['#214b1e', '#37732c'],
@@ -2048,8 +2018,8 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 24. Continuous 16:9 Live TV News Broadcast display texture (1024x576, animated studio anchor, broadcast graphics, lower-third & seamless scrolling ticker)
-  const [screenCanvas, screenCtx] = makeCanvas(1024, 576);
+  // 24. Continuous 16:9 Live TV News Broadcast display texture (512x288, animated studio anchor, broadcast graphics, lower-third & seamless scrolling ticker)
+  const [screenCanvas, screenCtx] = makeCanvas(512, 288);
   screenCtx.direction = 'ltr';
   const newsSegments = [
     {
@@ -2084,7 +2054,6 @@ export function createTextureBundle(
 
   const drawReceptionScreenFrame = (tSec: number) => {
     screenCtx.save();
-    screenCtx.scale(2, 2);
     const w = 512;
     const h = 288;
     const segLen = 6.5;
@@ -2491,7 +2460,7 @@ export function createTextureBundle(
   receptionScreen.magFilter = THREE.LinearFilter;
   let lastScreenBucket = -1;
   const updateReceptionScreen = (tSec: number) => {
-    const bucket = Math.floor(tSec * 15);
+    const bucket = Math.floor(tSec * 3);
     if (bucket === lastScreenBucket) return;
     lastScreenBucket = bucket;
     drawReceptionScreenFrame(tSec);

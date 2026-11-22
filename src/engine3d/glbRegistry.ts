@@ -41,11 +41,11 @@ const MODEL_PATHS: Record<string, string> = {
   char_man2: '/models/chars/man_casual2.glb',
   char_suit: '/models/chars/man_suit.glb',
   char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
+  char_sudanese_man_1: '/models/chars/patient_sudanese_1.glb',
   hand_left: '/models/chars/hand_left.glb',
   hand_right: '/models/chars/hand_right.glb',
 
   // Furniture & Clinic Props (active lineup only)
-  furn_bed_single: '/models/furn/bed_single.glb',
   furn_desk: '/models/furn/desk.glb',
   furn_chair_desk: '/models/furn/chair_desk.glb',
   furn_monitor: '/models/furn/monitor.glb',

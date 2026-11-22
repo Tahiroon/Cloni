@@ -141,13 +141,15 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
   const allWorkDone =
     fontsReady && hydrated && glbInfo.ready && effectiveSceneReady && thumbsReady && minDwellDone;
 
-  // Monotonic damped real progress bar animation (never fakes 100% before real assets finish)
+  // Monotonic damped real progress bar animation (only commits React state when displayed % changes)
   useEffect(() => {
     let rafId = 0;
     let lastT = performance.now();
+    let localProg = displayProgress;
+    let lastCommittedPct = Math.round(localProg * 100);
 
     const step = (now: number) => {
-      const dt = Math.min(0.06, Math.max(0.004, (now - lastT) / 1000));
+      const dt = Math.min(0.08, Math.max(0.012, (now - lastT) / 1000));
       lastT = now;
 
       const elapsedFraction = Math.min(1, (now - startedAtRef.current) / MIN_SPLASH_MS);
@@ -155,19 +157,31 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
         ? 1
         : Math.min(0.97, Math.min(realTargetProgress, 0.1 + elapsedFraction * 0.88));
 
-      setDisplayProgress((prev) => {
-        if (allWorkDone && prev >= 0.996) return 1;
-        if (rawCap <= prev) return prev;
+      if (allWorkDone && localProg >= 0.996) {
+        if (localProg < 1) {
+          localProg = 1;
+          setDisplayProgress(1);
+        }
+        return;
+      }
+
+      if (rawCap > localProg) {
         const speed = allWorkDone ? 10.5 : 3.5;
-        const next = prev + (rawCap - prev) * Math.min(1, dt * speed);
-        return Math.min(rawCap, Math.max(prev, next));
-      });
+        const next = localProg + (rawCap - localProg) * Math.min(1, dt * speed);
+        localProg = Math.min(rawCap, Math.max(localProg, next));
+        const nextPct = Math.round(localProg * 100);
+        if (nextPct !== lastCommittedPct || localProg >= 0.992) {
+          lastCommittedPct = nextPct;
+          setDisplayProgress(localProg);
+        }
+      }
 
       rafId = requestAnimationFrame(step);
     };
 
     rafId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(rafId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [realTargetProgress, allWorkDone]);
 
   const readyToComplete = allWorkDone && displayProgress >= 0.992;
@@ -212,16 +226,11 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
         className="absolute inset-0 bg-gradient-to-b from-[#1374ee] via-[#268ef8] to-[#042466]"
       />
 
-      {/* Soft Ambient Lateral Extension for Wide Desktop Screens (eliminates letterbox bars seamlessly) */}
-      {!artFailed && (
-        <img
-          src={splashSrc}
-          alt=""
-          aria-hidden="true"
-          referrerPolicy="no-referrer"
-          className="hidden sm:block absolute inset-0 w-full h-full object-cover object-top scale-110 blur-2xl opacity-60 [mask-image:linear-gradient(to_bottom,black_0%,black_55%,transparent_78%)]"
-        />
-      )}
+      {/* Soft Ambient Lateral Extension for Wide Desktop Screens (no expensive GPU blur-2xl) */}
+      <div
+        aria-hidden="true"
+        className="hidden sm:block absolute inset-0 bg-[radial-gradient(ellipse_at_50%_20%,rgba(56,189,248,0.28),transparent_68%)] pointer-events-none"
+      />
 
       {/* Main Focal Illustration Stage: Preserves Logo + THERASON Clinic + Two Clinicians Cleanly & Masks Out Static Baked Lower HUD (y >= 68.5%) */}
       <div className="absolute inset-x-0 top-0 flex justify-center pointer-events-none">
@@ -253,8 +262,8 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
       {/* Interactive Live Bottom HUD (Replaces Static Baked Elements 1:1 with Real Progress & Changing Tips) */}
       <div className="relative z-10 flex flex-col justify-end items-center w-full h-full px-4 sm:px-6 pb-8 sm:pb-11">
         <div className="w-full max-w-[540px] flex flex-col items-center gap-3 sm:gap-3.5">
-          {/* Frosted Dark-Blue "جاري التحميل" Header Pill */}
-          <div className="inline-flex items-center gap-2.5 px-7 py-1.5 rounded-full bg-[#13326e]/88 backdrop-blur-md border border-sky-300/25 shadow-[0_8px_22px_rgba(3,18,54,0.45)]">
+          {/* Header Pill (opaque translucent fill without expensive backdrop-blur) */}
+          <div className="inline-flex items-center gap-2.5 px-7 py-1.5 rounded-full bg-[#13326e]/95 border border-sky-300/25 shadow-[0_8px_22px_rgba(3,18,54,0.45)]">
             <span className="text-lg sm:text-xl font-extrabold text-white tracking-wide">
               {isAr ? 'جاري التحميل' : 'Loading'}
             </span>
@@ -286,8 +295,8 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
             </div>
           </div>
 
-          {/* Translucent Glowing Cyan-Bordered Auto-Rotating Tips Banner */}
-          <div className="w-full rounded-[26px] bg-[#082661]/86 backdrop-blur-md border-[1.5px] border-[#38d3ff]/80 px-3.5 py-2.5 sm:px-5 sm:py-3 shadow-[0_12px_32px_rgba(2,16,52,0.58)] flex items-center gap-3">
+          {/* Glowing Cyan-Bordered Auto-Rotating Tips Banner */}
+          <div className="w-full rounded-[26px] bg-[#082661]/94 border-[1.5px] border-[#38d3ff]/80 px-3.5 py-2.5 sm:px-5 sm:py-3 shadow-[0_12px_32px_rgba(2,16,52,0.58)] flex items-center gap-3">
             {/* Golden Lightbulb Icon */}
             <div className="w-11 h-11 sm:w-12 sm:h-12 flex items-center justify-center shrink-0">
               <svg viewBox="0 0 64 64" aria-hidden="true" className="w-full h-full drop-shadow-[0_0_10px_rgba(250,204,21,0.6)]">

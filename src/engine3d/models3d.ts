@@ -918,7 +918,6 @@ export function buildClinicWorld3D(
   for (const bz of [5.4, 13.2, 16.8, 22.8]) {
     const bollard = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.065, 0.075, 0.56, 8)), woodSlatMat);
     bollard.position.set(29.75, 0.28, bz);
-    bollard.castShadow = true;
     microDetailsGroup.add(bollard);
   }
 
@@ -1053,45 +1052,40 @@ export function buildClinicWorld3D(
 
     // Brushed stainless-steel handrail stanchion posts + sloped continuous top bar
     const postTop = new THREE.Mesh(
-      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.56, 10)),
+      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.56, 8)),
       aluminumTrimMat
     );
     postTop.position.set(22.24, 0.72, zSide);
-    postTop.castShadow = true;
 
     const postMid = new THREE.Mesh(
-      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.54, 10)),
+      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.54, 8)),
       aluminumTrimMat
     );
     postMid.position.set(22.88, 0.57, zSide);
-    postMid.castShadow = true;
 
     const postBot = new THREE.Mesh(
-      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.53, 10)),
+      trackGeom(new THREE.CylinderGeometry(0.022, 0.024, 0.53, 8)),
       aluminumTrimMat
     );
     postBot.position.set(23.48, 0.46, zSide);
-    postBot.castShadow = true;
 
     // Flat landing rail + angled stair slope rail connecting cleanly
     const flatRail = new THREE.Mesh(
-      trackGeom(new THREE.CylinderGeometry(0.024, 0.024, 0.36, 10)),
+      trackGeom(new THREE.CylinderGeometry(0.024, 0.024, 0.36, 8)),
       aluminumTrimMat
     );
     flatRail.rotation.z = Math.PI / 2;
     flatRail.position.set(22.39, 1.00, zSide);
-    flatRail.castShadow = true;
 
     const dxR = 23.50 - 22.54;
     const dyR = 0.72 - 1.00;
     const slopeLenR = Math.hypot(dxR, dyR);
     const slopeRail = new THREE.Mesh(
-      trackGeom(new THREE.CylinderGeometry(0.024, 0.024, slopeLenR, 10)),
+      trackGeom(new THREE.CylinderGeometry(0.024, 0.024, slopeLenR, 8)),
       aluminumTrimMat
     );
     slopeRail.rotation.z = Math.PI / 2 + Math.atan2(dyR, dxR);
     slopeRail.position.set((22.54 + 23.50) / 2, (1.00 + 0.72) / 2, zSide);
-    slopeRail.castShadow = true;
 
     stairsGroup.add(
       cheekUpper,
@@ -1253,6 +1247,9 @@ export function buildClinicWorld3D(
   for (const [bx, bz, key] of bushCoords) {
     const bush = glbRegistry.cloneNormalized(key, { targetHeight: 0.62, rotY: bx + bz });
     if (bush) {
+      bush.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = false;
+      });
       bush.position.set(bx, 0.02, bz);
       root.add(bush);
     }
@@ -1266,6 +1263,9 @@ export function buildClinicWorld3D(
   ]) {
     const grassClump = glbRegistry.cloneNormalized('grass_clump', { targetHeight: 0.34, rotY: gx * 2 });
     if (grassClump) {
+      grassClump.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = false;
+      });
       grassClump.position.set(gx, 0.0, gz);
       microDetailsGroup.add(grassClump);
     }
@@ -1619,7 +1619,6 @@ export function buildClinicWorld3D(
         aluminumTrimMat
       );
       sill.position.set(cx, 0.07 + kneeH + 0.022, cz);
-      sill.castShadow = true;
       clinicBuildingGroup.add(sill);
 
       const glassH = height - kneeH - 0.12;
@@ -1636,7 +1635,6 @@ export function buildClinicWorld3D(
           darkMullionMat
         );
         transom.position.set(cx, 0.07 + height - 0.62, cz);
-        transom.castShadow = true;
         clinicBuildingGroup.add(transom);
       }
 
@@ -1650,7 +1648,6 @@ export function buildClinicWorld3D(
           const t = mi / (mullCount + 1);
           const m = new THREE.Mesh(mullGeom, darkMullionMat);
           m.position.set(x1 + dx * t, 0.07 + kneeH + 0.03 + glassH / 2, z1 + dz * t);
-          m.castShadow = true;
           clinicBuildingGroup.add(m);
         }
       }
@@ -1691,7 +1688,6 @@ export function buildClinicWorld3D(
       aluminumTrimMat
     );
     dado.position.set(cx, 0.07 + baseH + 0.008, cz);
-    dado.castShadow = true;
     clinicBuildingGroup.add(dadoShadow, dado);
 
     const upperH = Math.max(0.06, height - baseH);
@@ -1711,7 +1707,6 @@ export function buildClinicWorld3D(
       aluminumTrimMat
     );
     cap.position.set(cx, 0.07 + height + 0.037, cz);
-    cap.castShadow = true;
     clinicBuildingGroup.add(capReveal, cap);
   };
 
@@ -1756,13 +1751,11 @@ export function buildClinicWorld3D(
   for (let lz = 13.15; lz <= 13.65; lz += 0.18) {
     const slat = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.16, 3.12, 0.06)), woodSlatMat);
     slat.position.set(22.16, 1.63, lz);
-    slat.castShadow = true;
     clinicBuildingGroup.add(slat);
   }
   for (let lz = 16.35; lz <= 16.85; lz += 0.18) {
     const slat = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.16, 3.12, 0.06)), woodSlatMat);
     slat.position.set(22.16, 1.63, lz);
-    slat.castShadow = true;
     clinicBuildingGroup.add(slat);
   }
 
@@ -1788,7 +1781,6 @@ export function buildClinicWorld3D(
     darkMullionMat
   );
   wallLogoFrame.position.set(12.126, 1.43, 18.6);
-  wallLogoFrame.castShadow = true;
   clinicBuildingGroup.add(wallLogoFrame);
 
   const wallLogo = new THREE.Mesh(
@@ -3142,7 +3134,7 @@ export function createCatalogMesh3D(
     return m;
   };
   const cyl = (rt: number, rb: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 14), mat);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 10), mat);
     m.position.set(x, y, z);
     if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
     inner.add(m);
@@ -3156,7 +3148,7 @@ export function createCatalogMesh3D(
     x = 0,
     y = 0,
     z = 0,
-    radialSegs = 24
+    radialSegs = 14
   ) => {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, radialSegs), mat);
     m.position.set(x, y, z);
@@ -3165,7 +3157,7 @@ export function createCatalogMesh3D(
     return m;
   };
   const sphereCap = (r: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat);
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), mat);
     m.position.set(x, y, z);
     if (sharedMatSet.has(mat)) m.userData.sharedGlbMat = true;
     inner.add(m);
@@ -4984,7 +4976,7 @@ export function createCatalogMesh3D(
       // Molded composite outer PEMF tunnel + aluminum rim bezels + 3 glowing copper-cyan flux rings inside
       const ringCenterY = 0.64;
       const outerSolenoid = new THREE.Mesh(
-        new THREE.TorusGeometry(0.39, 0.072, 20, 44),
+        new THREE.TorusGeometry(0.39, 0.072, 12, 24),
         magShell
       );
       outerSolenoid.rotation.y = Math.PI / 2;
@@ -4992,7 +4984,7 @@ export function createCatalogMesh3D(
 
       for (const rx of [-0.062, 0.062]) {
         const bezelRing = new THREE.Mesh(
-          new THREE.TorusGeometry(0.39, 0.018, 12, 44),
+          new THREE.TorusGeometry(0.39, 0.018, 8, 22),
           magChrome
         );
         bezelRing.rotation.y = Math.PI / 2;
@@ -5001,7 +4993,7 @@ export function createCatalogMesh3D(
       }
 
       const trimSolenoid = new THREE.Mesh(
-        new THREE.TorusGeometry(0.42, 0.022, 12, 44),
+        new THREE.TorusGeometry(0.42, 0.022, 8, 22),
         cyanAccent
       );
       trimSolenoid.rotation.y = Math.PI / 2;
@@ -5009,7 +5001,7 @@ export function createCatalogMesh3D(
       trimSolenoid.userData.sharedGlbMat = true;
 
       const innerLiner = new THREE.Mesh(
-        new THREE.TorusGeometry(0.345, 0.042, 14, 40),
+        new THREE.TorusGeometry(0.345, 0.042, 10, 24),
         magSlate
       );
       innerLiner.rotation.y = Math.PI / 2;
@@ -5019,7 +5011,7 @@ export function createCatalogMesh3D(
 
       for (const cx of [-0.036, 0, 0.036]) {
         const innerCoil = new THREE.Mesh(
-          new THREE.TorusGeometry(0.322, 0.011, 10, 36),
+          new THREE.TorusGeometry(0.322, 0.011, 8, 20),
           pemfCoilMat
         );
         innerCoil.rotation.y = Math.PI / 2;
@@ -7064,7 +7056,7 @@ export function createCatalogMesh3D(
       // Crisp brushed-aluminum clinical wall clock mounted flush on wall at x = -0.38, y = 1.40
       const dialMat = makeMat({ color: 0xf8fafc, roughness: 0.28 });
       const clockY = 1.4;
-      const frame = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.024, 10, 28), silverMetal);
+      const frame = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.024, 8, 18), silverMetal);
       frame.rotation.y = Math.PI / 2;
       frame.position.set(-0.37, clockY, 0);
       frame.userData.sharedGlbMat = true;

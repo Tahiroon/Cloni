@@ -285,7 +285,7 @@ export function scheduleIdleBrowserPrewarm(): () => void {
   let cancelled = false;
 
   void (async () => {
-    await waitForIdleSlice(1100);
+    await waitForIdleSlice(2800);
     if (cancelled) return;
 
     await hydrateThumbCacheFromIdb();
@@ -296,7 +296,7 @@ export function scheduleIdleBrowserPrewarm(): () => void {
 
     if (isSoftwareRenderer() || !glbRegistry.ready) return;
 
-    // 2. Incrementally cache remaining store thumbnails in IndexedDB (3 per idle slice)
+    // 2. Incrementally cache remaining store thumbnails in IndexedDB (10 per slice on shared session)
     const allSpecs: CatalogThumbSpec[] = CATALOG_ITEMS.map((c) => ({
       sprite: c.sprite,
       width: c.width,
@@ -304,11 +304,11 @@ export function scheduleIdleBrowserPrewarm(): () => void {
     }));
     const missingCatalog = getMissingCatalogThumbSpecs(allSpecs);
 
-    for (let i = 0; i < missingCatalog.length; i += 3) {
+    for (let i = 0; i < missingCatalog.length; i += 10) {
       if (cancelled) return;
-      await waitForIdleSlice(150);
+      await waitForIdleSlice(240);
       if (cancelled) return;
-      renderThumbBatch(missingCatalog.slice(i, i + 3));
+      renderThumbBatch(missingCatalog.slice(i, i + 10));
     }
 
     // 3. Incrementally cache male & female clinician outfit thumbnails in IndexedDB
@@ -327,11 +327,11 @@ export function scheduleIdleBrowserPrewarm(): () => void {
       (s) => !hasPlayerOutfitThumb(s.gender, s.outfitId, s.hasTarha)
     );
 
-    for (let i = 0; i < missingOutfits.length; i += 2) {
+    for (let i = 0; i < missingOutfits.length; i += 4) {
       if (cancelled) return;
-      await waitForIdleSlice(180);
+      await waitForIdleSlice(260);
       if (cancelled) return;
-      renderPlayerOutfitBatch(missingOutfits.slice(i, i + 2));
+      renderPlayerOutfitBatch(missingOutfits.slice(i, i + 4));
     }
   })();
 

@@ -1,10 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import {
   CATALOG_ITEMS,
   FPP_EXCLUDED_BED_SPRITES,
@@ -723,7 +719,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     const getTargetDpr = (w: number, h: number) => {
       if (isSoftwareGl) return 1;
       const rawDpr = window.devicePixelRatio || 1;
-      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.5) : Math.min(rawDpr, 2.0);
+      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.25) : Math.min(rawDpr, 1.5);
       return Math.min(baseDpr, maxSurfaceSize / Math.max(1, w, h));
     };
     const dpr = getTargetDpr(initW, initH);
@@ -734,6 +730,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     renderer.toneMappingExposure = 0.94;
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
@@ -752,84 +750,39 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     roomEnv.dispose();
     pmrem.dispose();
 
-    // Calibrated Architectural Daylight Rig (crisp high-res shadows, soft sky rim & natural contrast)
-    const hemi = new THREE.HemisphereLight(0xc6dcf0, 0x4b5c34, 0.56);
+    // Calibrated Architectural Daylight Rig (crisp shadows, warm-cool fill & natural contrast)
+    const hemi = new THREE.HemisphereLight(0xc6dcf0, 0x4b5c34, 0.62);
     scene.add(hemi);
 
-    const sunLight = new THREE.DirectionalLight(0xfff1dc, 1.48);
+    const sunLight = new THREE.DirectionalLight(0xfff1dc, 1.52);
     sunLight.position.set(25, 32, 18);
     sunLight.target.position.set(13, 0, 12);
     scene.add(sunLight.target);
     if (!isSoftwareGl) {
-      const shadowRes = Math.min(2048, maxTexSize);
+      const shadowRes = Math.min(1024, maxTexSize);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
-      sunLight.shadow.radius = 2.4;
+      sunLight.shadow.radius = 1.8;
       sunLight.shadow.camera.near = 6;
       sunLight.shadow.camera.far = 90;
       sunLight.shadow.camera.left = -18;
       sunLight.shadow.camera.right = 18;
       sunLight.shadow.camera.top = 18;
       sunLight.shadow.camera.bottom = -18;
-      sunLight.shadow.bias = -0.00025;
-      sunLight.shadow.normalBias = 0.012;
+      sunLight.shadow.bias = -0.0003;
+      sunLight.shadow.normalBias = 0.014;
     }
     scene.add(sunLight);
 
-    const fillLight = new THREE.DirectionalLight(0xb8d4f2, 0.26);
+    const fillLight = new THREE.DirectionalLight(0xb8d4f2, 0.34);
     fillLight.position.set(-16, 14, -12);
     scene.add(fillLight);
-
-    const rimLight = !isSoftwareGl ? new THREE.DirectionalLight(0xc8e4ff, 0.34) : null;
-    if (rimLight) {
-      rimLight.position.set(-18, 16, 24);
-      scene.add(rimLight);
-    }
 
     // Low-FOV Architectural Perspective Camera (authentic 3D depth without distortion)
     const camera = new THREE.PerspectiveCamera(30, 1, 0.5, 220);
 
-    // Restrained crisp HDR Bloom + MSAA + ACES OutputPass on desktop hardware GPUs
-    let composer: EffectComposer | null = null;
-    let composerRt: THREE.WebGLRenderTarget | null = null;
-    let bloomPass: UnrealBloomPass | null = null;
-    if (!isSoftwareGl && !isMobileGpu) {
-      let safeSamples = 0;
-      if (renderer.capabilities.isWebGL2) {
-        const gl2 = gl as WebGL2RenderingContext;
-        let maxFloatSamples = 0;
-        try {
-          const supported = gl2.getInternalformatParameter(
-            gl2.RENDERBUFFER,
-            gl2.RGBA16F,
-            gl2.SAMPLES
-          ) as Int32Array | number[] | null;
-          if (supported && supported.length > 0) {
-            for (let i = 0; i < supported.length; i++) {
-              const s = Number(supported[i]);
-              if (Number.isFinite(s) && s > maxFloatSamples) {
-                maxFloatSamples = s;
-              }
-            }
-          }
-        } catch {
-          maxFloatSamples = 0;
-        }
-        safeSamples = Math.min(4, maxFloatSamples, renderer.capabilities.maxSamples || 0);
-      }
-      const rtW = Math.min(maxSurfaceSize, Math.max(1, Math.round(initW * dpr)));
-      const rtH = Math.min(maxSurfaceSize, Math.max(1, Math.round(initH * dpr)));
-      composerRt = new THREE.WebGLRenderTarget(rtW, rtH, {
-        type: THREE.HalfFloatType,
-        samples: safeSamples,
-      });
-      composer = new EffectComposer(renderer, composerRt);
-      composer.setSize(initW, initH);
-      composer.addPass(new RenderPass(scene, camera));
-      bloomPass = new UnrealBloomPass(new THREE.Vector2(initW, initH), 0.07, 0.22, 0.95);
-      composer.addPass(bloomPass);
-      composer.addPass(new OutputPass());
-    }
+    let shadowsDirty = true;
+    let shadowFrameCounter = 0;
 
     const maxAniso = renderer.capabilities.getMaxAnisotropy();
     const textures: TextureBundle = createTextureBundle(maxAniso);
@@ -1726,14 +1679,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
     const fppHands = createFppClinicianHands3D(textures, latestRef.current.playerProfile);
     camera.add(fppHands.group);
-    fppBackdrop.group.visible = true;
-    fppHands.group.visible = true;
-    renderer.compile(scene, camera);
+    if (!isSoftwareGl) {
+      fppBackdrop.group.visible = true;
+      fppHands.group.visible = true;
+      renderer.compile(scene, camera);
+    }
     fppBackdrop.group.visible = false;
     fppHands.group.visible = false;
 
-    // Pre-allocated PointLight Pool (capped tightly on mobile GPUs: wall-wash & lamp halos illuminate standby lights at 0 shader cost)
-    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 5 : isMobileGpu ? 7 : 9;
+    // Pre-allocated PointLight Pool (wall-wash & lamp halos illuminate secondary fixtures at 0 shader cost)
+    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 2 : isMobileGpu ? 3 : 4;
     const smartLightPool: THREE.PointLight[] = [];
     for (let i = 0; i < SMART_LIGHT_POOL_SIZE; i++) {
       const pl = new THREE.PointLight(0xffdfb0, 0, 14, 1.0);
@@ -1996,10 +1951,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const blendChanged = Math.abs(nightBlend - lastNightBlend) > 1e-4;
       if (atmoDirty || blendChanged) {
         lastNightBlend = nightBlend;
+        shadowsDirty = true;
         const duskFactor = Math.sin(nightBlend * Math.PI);
 
         sunLight.color.copy(_daySun).lerp(_moonSun, nightBlend).lerp(_duskSun, duskFactor * 0.42);
-        sunLight.intensity = THREE.MathUtils.lerp(1.48, 0.64, nightBlend);
+        sunLight.intensity = THREE.MathUtils.lerp(1.52, 0.64, nightBlend);
         sunLight.position.set(
           THREE.MathUtils.lerp(25, -22, nightBlend),
           THREE.MathUtils.lerp(32, 26, nightBlend),
@@ -2008,20 +1964,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
         hemi.color.copy(_dayHemiSky).lerp(_nightHemiSky, nightBlend);
         hemi.groundColor.copy(_dayHemiGround).lerp(_nightHemiGround, nightBlend);
-        hemi.intensity = THREE.MathUtils.lerp(0.56, 0.48, nightBlend);
+        hemi.intensity = THREE.MathUtils.lerp(0.62, 0.50, nightBlend);
 
         fillLight.color.copy(_dayFill).lerp(_nightFill, nightBlend);
-        fillLight.intensity = 0.26;
-        if (rimLight) {
-          rimLight.intensity = THREE.MathUtils.lerp(0.34, 0.18, nightBlend);
-        }
+        fillLight.intensity = 0.34;
 
         scene.environmentIntensity = THREE.MathUtils.lerp(0.54, 0.26, nightBlend);
         renderer.toneMappingExposure = THREE.MathUtils.lerp(0.94, 1.08, nightBlend);
-        if (bloomPass) {
-          bloomPass.strength =
-            nightBlend <= 0.015 ? 0 : THREE.MathUtils.lerp(0.0, 0.17, (nightBlend - 0.015) / 0.985);
-        }
 
         const fog = scene.fog as THREE.Fog;
         fog.color.copy(_dayFog).lerp(_nightFog, nightBlend).lerp(_duskFog, duskFactor * 0.35);
@@ -2294,7 +2243,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       // Reserve slots fairly so store lamps NEVER get starved by room sconces
       const reservedLampSlots = Math.min(
         _lampTargetsScratch.length,
-        Math.max(2, Math.floor(SMART_LIGHT_POOL_SIZE * 0.45))
+        Math.max(1, Math.floor(SMART_LIGHT_POOL_SIZE * 0.5))
       );
       const maxRoomSlotsNow = Math.max(0, SMART_LIGHT_POOL_SIZE - reservedLampSlots);
       _selectedTargetsScratch.length = 0;
@@ -2337,6 +2286,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       worldHandle = buildClinicWorld3D(nextRooms, textures, nextRemovedTreeIds);
       worldLayer.add(worldHandle.group);
       atmoDirty = true;
+      shadowsDirty = true;
       updateAtmosphereAndLights(performance.now() * 0.001, 0.05);
     };
 
@@ -2423,6 +2373,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       }
       hasPlacedDisplayKiosk = foundKiosk;
       atmoDirty = true;
+      shadowsDirty = true;
     };
 
     const syncDraft = (draft: PlacementDraft | null) => {
@@ -2484,6 +2435,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         );
         draftGhost.position.set(wx, wy, wz);
       }
+      shadowsDirty = true;
     };
 
     let sceneAssetsInitialized = false;
@@ -2494,6 +2446,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
       syncDraft(latestRef.current.placementDraft);
       updateCameraTransform();
+      shadowsDirty = true;
       if (!isSoftwareGl) {
         renderer.compile(scene, camera);
       }
@@ -3401,7 +3354,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       };
     }
 
-    let lastComposerDpr = dpr;
     const onResize = () => {
       if (!container) return;
       containerW = Math.max(1, container.clientWidth);
@@ -3411,13 +3363,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       const curDpr = getTargetDpr(w, h);
       renderer.setPixelRatio(curDpr);
       renderer.setSize(w, h);
-      if (composer) {
-        composer.setSize(w, h);
-        if (Math.abs(curDpr - lastComposerDpr) > 0.001) {
-          lastComposerDpr = curDpr;
-          composer.setPixelRatio(curDpr);
-        }
-      }
+      lastOverlaySig = '';
       updateCameraTransform();
     };
     const resizeObserver = new ResizeObserver(onResize);
@@ -3654,7 +3600,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
               p.modelKey ||
               (p.clinicalCase.id.startsWith('case_lbp_radiculopathy')
                 ? 'char_patient_realistic_1'
-                : undefined),
+                : p.clinicalCase.id.startsWith('case_knee_oa_elder')
+                  ? 'char_sudanese_man_1'
+                  : undefined),
             skinTone: p.skinTone,
             hairColor: p.hairColor,
             shirtColor: p.shirtColor,
@@ -3766,7 +3714,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         const postureHeightLift =
           entry.proneBlend * 0.01 + (entry.rightSideBlend + entry.leftSideBlend) * 0.032;
         const bedMattressTop = spr === 'exercise_mat' ? 0.066 : 0.52;
-        const scanOffsetScale = p.modelKey === 'char_patient_realistic_1' ? 1.54 / 1.34 : 1;
+        const scanOffsetScale =
+          p.modelKey === 'char_patient_realistic_1' || p.modelKey === 'char_sudanese_man_1'
+            ? 1.54 / 1.34
+            : 1;
         const lyingHeight =
           spr === 'tilt_table'
             ? THREE.MathUtils.lerp(bedMattressTop + 0.142, 0.545, tiltAlpha)
@@ -5737,6 +5688,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
     let cachedOverlayCanvas: HTMLCanvasElement | null = null;
     let cachedOverlayCtx: CanvasRenderingContext2D | null = null;
     let overlayWasNonEmpty = true;
+    let lastOverlaySig = '';
     const _sp0 = { x: 0, y: 0 };
     const _sp1 = { x: 0, y: 0 };
     const _sp2 = { x: 0, y: 0 };
@@ -5758,10 +5710,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       } = latestRef.current;
 
       let hasLockedRooms = false;
+      let lockedSig = '';
       for (let i = 0; i < curRooms.length; i++) {
         if (!curRooms[i].unlocked) {
           hasLockedRooms = true;
-          break;
+          lockedSig += curRooms[i].id + ',';
         }
       }
       const isEmptyOverlay =
@@ -5774,8 +5727,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
 
       const w = Math.max(1, overlay.clientWidth || containerW);
       const h = Math.max(1, overlay.clientHeight || containerH);
+      const csNow = camStateRef.current;
+      const fppActiveNow = fppCamRef.current.blend > 0.08;
+      const draftSig = curDraft
+        ? `${curDraft.catalogItem.id}_${curDraft.hoverX}_${curDraft.hoverY}_${curDraft.rotation}_${draggingDraftActiveRef.current ? 1 : 0}`
+        : '';
+      const ovSig = `${w}x${h}|${fppActiveNow ? 1 : 0}|${csNow.curX.toFixed(3)},${csNow.curZ.toFixed(3)},${csNow.curZoom.toFixed(3)},${csNow.curYaw.toFixed(3)}|${isEdit ? (hoveredEditItemIdRef.current || '_') : ''}|${curItems.length}|${selTreeId || ''}|${lang}|${lockedSig}|${draftSig}|${sceneAssetsInitialized ? 1 : 0}`;
+      if (fbs.length === 0 && ovSig === lastOverlaySig) {
+        return;
+      }
+      lastOverlaySig = fbs.length > 0 ? '' : ovSig;
 
-      const odpr = getTargetDpr(w, h);
+      const odpr = Math.min(1.25, getTargetDpr(w, h));
       const targetOvW = Math.max(1, Math.round(w * odpr));
       const targetOvH = Math.max(1, Math.round(h * odpr));
       if (overlay.width !== targetOvW || overlay.height !== targetOvH) {
@@ -5792,7 +5755,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       ctx.setTransform(targetOvW / w, 0, 0, targetOvH / h, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      if (fppCamRef.current.blend > 0.08) {
+      if (fppActiveNow) {
         if (overlayWasNonEmpty) {
           const wClr = Math.max(1, overlay.clientWidth || containerW);
           const hClr = Math.max(1, overlay.clientHeight || containerH);
@@ -7004,6 +6967,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
         );
 
         syncAndAnimateActors(tSec, dt, curFppId);
+        if (renderer.shadowMap.enabled) {
+          renderer.shadowMap.needsUpdate = shadowsDirty || ++shadowFrameCounter % 2 === 0;
+          shadowsDirty = false;
+        }
         renderer.render(scene, camera);
       } else {
         if (wasPureFpp) {
@@ -7321,11 +7288,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
           updateDoors3D(worldHandle.doors, doorActorsScratch, unlockedSet, dt);
         }
 
-        if (composer && nightBlend > 0.015) {
-          composer.render();
-        } else {
-          renderer.render(scene, camera);
+        if (renderer.shadowMap.enabled) {
+          renderer.shadowMap.needsUpdate = shadowsDirty || ++shadowFrameCounter % 3 === 0;
+          shadowsDirty = false;
         }
+        renderer.render(scene, camera);
         drawOverlayBadges();
       }
 
@@ -7377,8 +7344,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = ({
       fppDropDiscMat.dispose();
       if (fppCommandRef) fppCommandRef.current = null;
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
-      if (composer) composer.dispose();
-      if (composerRt) composerRt.dispose();
       fppBackdrop.dispose();
       fppHands.dispose();
       camera.remove(fppHands.group);

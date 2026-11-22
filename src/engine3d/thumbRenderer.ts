@@ -164,52 +164,140 @@ export function getMissingCatalogThumbSpecs(specs: CatalogThumbSpec[]): CatalogT
   return Array.from(deduped.values());
 }
 
+interface SharedThumbSession {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  envTarget: THREE.WebGLRenderTarget;
+  textures: ReturnType<typeof createTextureBundle>;
+  hemi: THREE.HemisphereLight;
+  keyLight: THREE.DirectionalLight;
+  fillLight: THREE.DirectionalLight;
+  rimLight: THREE.DirectionalLight;
+  width: number;
+  height: number;
+}
+
+let sharedSession: SharedThumbSession | null = null;
+let sharedDisposeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function disposeSharedThumbSession() {
+  if (sharedDisposeTimer) {
+    clearTimeout(sharedDisposeTimer);
+    sharedDisposeTimer = null;
+  }
+  const s = sharedSession;
+  if (!s) return;
+  sharedSession = null;
+  s.envTarget.dispose();
+  s.textures.dispose();
+  const gl = s.renderer.getContext();
+  s.renderer.dispose();
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
+}
+
+function scheduleSharedThumbCleanup() {
+  if (sharedDisposeTimer) clearTimeout(sharedDisposeTimer);
+  sharedDisposeTimer = setTimeout(() => {
+    disposeSharedThumbSession();
+  }, 1800);
+}
+
+function acquireSharedThumbSession(width: number, height: number): SharedThumbSession | null {
+  if (sharedDisposeTimer) {
+    clearTimeout(sharedDisposeTimer);
+    sharedDisposeTimer = null;
+  }
+  if (!sharedSession) {
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+        preserveDrawingBuffer: true,
+        powerPreference: 'low-power',
+      });
+    } catch {
+      return null;
+    }
+
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(1);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+    const scene = new THREE.Scene();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const roomEnv = new RoomEnvironment();
+    const envTarget = pmrem.fromScene(roomEnv, 0.04);
+    scene.environment = envTarget.texture;
+    roomEnv.dispose();
+    pmrem.dispose();
+
+    const hemi = new THREE.HemisphereLight(0xf1f5f9, 0x64748b, 1.05);
+    const keyLight = new THREE.DirectionalLight(0xfff4e0, 1.6);
+    const fillLight = new THREE.DirectionalLight(0xe0f2fe, 0.84);
+    const rimLight = new THREE.DirectionalLight(0xbae6fd, 0.58);
+    scene.add(hemi, keyLight, fillLight, rimLight);
+
+    const camera = new THREE.PerspectiveCamera(28, width / height, 0.1, 40);
+    const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy(), {
+      catalogOnly: true,
+    });
+
+    sharedSession = {
+      renderer,
+      scene,
+      camera,
+      envTarget,
+      textures,
+      hemi,
+      keyLight,
+      fillLight,
+      rimLight,
+      width,
+      height,
+    };
+  } else if (sharedSession.width !== width || sharedSession.height !== height) {
+    sharedSession.renderer.setSize(width, height);
+    sharedSession.camera.aspect = width / height;
+    sharedSession.width = width;
+    sharedSession.height = height;
+  }
+  return sharedSession;
+}
+
 /**
- * Generates crisp 160x160 3D product thumbnails on-demand using a transient
- * offscreen WebGLRenderer, persists them in IndexedDB, then immediately releases the GPU context.
+ * Generates crisp 160x160 3D product thumbnails on-demand using a shared transient
+ * offscreen WebGLRenderer, persists them in IndexedDB, and disposes after idle timeout.
  */
 export function renderThumbBatch(specs: CatalogThumbSpec[]): void {
   const glbIsReady = glbRegistry.ready;
   const missing = getMissingCatalogThumbSpecs(specs);
   if (missing.length === 0) return;
 
-  let renderer: THREE.WebGLRenderer | null = null;
-  try {
-    renderer = new THREE.WebGLRenderer({
-      alpha: true,
-      antialias: true,
-      preserveDrawingBuffer: true,
-      powerPreference: 'low-power',
-    });
-  } catch {
-    return;
-  }
-
   const size = 160;
-  renderer.setSize(size, size);
-  renderer.setPixelRatio(1);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  const sess = acquireSharedThumbSession(size, size);
+  if (!sess) return;
+
+  const { renderer, scene, camera, textures, hemi, keyLight, fillLight, rimLight } = sess;
   renderer.toneMappingExposure = 1.05;
-
-  const scene = new THREE.Scene();
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const roomEnv = new RoomEnvironment();
-  const envTarget = pmrem.fromScene(roomEnv, 0.04);
-  scene.environment = envTarget.texture;
   scene.environmentIntensity = 0.62;
-  roomEnv.dispose();
-  pmrem.dispose();
 
-  const hemi = new THREE.HemisphereLight(0xf1f5f9, 0x64748b, 1.05);
-  const keyLight = new THREE.DirectionalLight(0xfff4e0, 1.6);
+  hemi.color.setHex(0xf1f5f9);
+  hemi.intensity = 1.05;
+  keyLight.color.setHex(0xfff4e0);
+  keyLight.intensity = 1.6;
   keyLight.position.set(4, 7, 5);
-  const rimLight = new THREE.DirectionalLight(0xbae6fd, 0.58);
+  fillLight.visible = false;
+  rimLight.intensity = 0.58;
   rimLight.position.set(-4, 3, -4);
-  scene.add(hemi, keyLight, rimLight);
 
-  const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 40);
-  const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy(), { catalogOnly: true });
+  camera.fov = 28;
+  camera.near = 0.1;
+  camera.far = 40;
+  camera.aspect = 1;
+
   const box = new THREE.Box3();
   const center = new THREE.Vector3();
   const dims = new THREE.Vector3();
@@ -260,11 +348,7 @@ export function renderThumbBatch(specs: CatalogThumbSpec[]): void {
     disposeObject3D(mesh);
   }
 
-  envTarget.dispose();
-  textures.dispose();
-  const gl = renderer.getContext();
-  renderer.dispose();
-  gl.getExtension('WEBGL_lose_context')?.loseContext();
+  scheduleSharedThumbCleanup();
   notifySubscribers();
   if (persisted.length > 0) {
     void persistThumbEntriesToIdb(persisted);
@@ -396,50 +480,34 @@ export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
   const missing = Array.from(deduped.values());
   if (missing.length === 0) return;
 
-  let renderer: THREE.WebGLRenderer | null = null;
-  try {
-    renderer = new THREE.WebGLRenderer({
-      alpha: true,
-      antialias: true,
-      preserveDrawingBuffer: true,
-      powerPreference: 'low-power',
-    });
-  } catch {
-    return;
-  }
-
   const width = 360;
   const height = 460;
-  renderer.setSize(width, height);
-  renderer.setPixelRatio(1);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  const sess = acquireSharedThumbSession(width, height);
+  if (!sess) return;
+
+  const { renderer, scene, camera, textures, hemi, keyLight, fillLight, rimLight } = sess;
   renderer.toneMappingExposure = 1.15;
-
-  const scene = new THREE.Scene();
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const roomEnv = new RoomEnvironment();
-  const envTarget = pmrem.fromScene(roomEnv, 0.04);
-  scene.environment = envTarget.texture;
   scene.environmentIntensity = 0.76;
-  roomEnv.dispose();
-  pmrem.dispose();
 
-  const hemi = new THREE.HemisphereLight(0xf8fafc, 0x64748b, 1.32);
-  const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.85);
+  hemi.color.setHex(0xf8fafc);
+  hemi.intensity = 1.32;
+  keyLight.color.setHex(0xfff5e6);
+  keyLight.intensity = 1.85;
   keyLight.position.set(2.6, 5.4, 4.8);
-  const fillLight = new THREE.DirectionalLight(0xe0f2fe, 0.84);
+  fillLight.visible = true;
+  fillLight.intensity = 0.84;
   fillLight.position.set(-2.4, 2.4, 3.8);
-  const rimLight = new THREE.DirectionalLight(0xbae6fd, 0.78);
+  rimLight.intensity = 0.78;
   rimLight.position.set(-3.2, 3.6, -3.4);
-  scene.add(hemi, keyLight, fillLight, rimLight);
 
-  const camera = new THREE.PerspectiveCamera(25, width / height, 0.1, 20);
+  camera.fov = 25;
+  camera.near = 0.1;
+  camera.far = 20;
+  camera.aspect = width / height;
   camera.position.set(0.28, 0.82, 3.12);
   camera.lookAt(0, 0.68, 0);
   camera.updateProjectionMatrix();
 
-  const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy(), { catalogOnly: true });
   const pbrMaps = {
     skinMicroMap: textures.skinMicroMap,
     skinRoughMap: textures.skinRoughMap,
@@ -504,11 +572,7 @@ export function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
     disposeHumanoid3D(rig);
   }
 
-  envTarget.dispose();
-  textures.dispose();
-  const gl = renderer.getContext();
-  renderer.dispose();
-  gl.getExtension('WEBGL_lose_context')?.loseContext();
+  scheduleSharedThumbCleanup();
   notifySubscribers();
   if (persisted.length > 0) {
     void persistThumbEntriesToIdb(persisted);

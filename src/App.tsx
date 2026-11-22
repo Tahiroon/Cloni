@@ -227,6 +227,7 @@ export default function App() {
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialSpawnTimeRef = useRef<number | null>(null);
   const sessionSpawnedRealisticRef = useRef(false);
+  const sessionSpawnedSudaneseRef = useRef(false);
   const fppBlinkLockRef = useRef(false);
   const fppBlinkTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const fppBlinkRafsRef = useRef<number[]>([]);
@@ -825,11 +826,18 @@ export default function App() {
           (!sessionSpawnedRealisticRef.current &&
             prev.length === 0 &&
             !prev.some((p) => p.modelKey === 'char_patient_realistic_1'));
+        const shouldUseSudaneseFirst =
+          !shouldUseRealisticFirst &&
+          !sessionSpawnedSudaneseRef.current &&
+          !prev.some((p) => p.modelKey === 'char_sudanese_man_1');
         if (isInitialSinglePatient && initialSpawnTimeRef.current === null) {
           initialSpawnTimeRef.current = Date.now();
         }
         if (shouldUseRealisticFirst) {
           sessionSpawnedRealisticRef.current = true;
+        }
+        if (shouldUseSudaneseFirst) {
+          sessionSpawnedSudaneseRef.current = true;
         }
 
         const activeBaseIds = new Set(
@@ -837,17 +845,31 @@ export default function App() {
         );
         const unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
         const casePool = unseenPool.length > 0 ? unseenPool : FALLBACK_CLINICAL_CASES;
+        const sudanesePreferredCase =
+          casePool.find((c) => c.id === 'case_knee_oa_elder') ||
+          FALLBACK_CLINICAL_CASES.find((c) => c.id === 'case_knee_oa_elder') ||
+          casePool[0];
         const fallbackCase = shouldUseRealisticFirst
           ? FALLBACK_CLINICAL_CASES[0]
-          : casePool[Math.floor(Math.random() * casePool.length)];
+          : shouldUseSudaneseFirst
+            ? sudanesePreferredCase
+            : casePool[Math.floor(Math.random() * casePool.length)];
         const useRealisticModel =
           shouldUseRealisticFirst ||
           (fallbackCase.id === 'case_lbp_radiculopathy' &&
             !prev.some((p) => p.modelKey === 'char_patient_realistic_1'));
+        const useSudaneseRealisticModel =
+          !useRealisticModel &&
+          !prev.some((p) => p.modelKey === 'char_sudanese_man_1') &&
+          (shouldUseSudaneseFirst ||
+            fallbackCase.id === 'case_knee_oa_elder' ||
+            (fallbackCase.gender === 'male' && fallbackCase.age >= 35 && Math.random() < 0.65));
         const chosenCase = { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
-        const skin = useRealisticModel
-          ? '#9e6847'
-          : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
+        const skin = useSudaneseRealisticModel
+          ? '#b07b58'
+          : useRealisticModel
+            ? '#9e6847'
+            : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
         const receptionSpot = getReceptionCheckinSpot(prev);
         const startX = 27.9;
@@ -879,7 +901,13 @@ export default function App() {
           return pool[Math.floor(Math.random() * pool.length)];
         };
 
-        if (useRealisticModel) {
+        if (useSudaneseRealisticModel) {
+          outfitStyle = 'jalabiya';
+          shirtColor = '#f4f1ea';
+          pantsColor = '#f4f1ea';
+          hasHijab = false;
+          hasTurban = true;
+        } else if (useRealisticModel) {
           outfitStyle = 'casual';
           shirtStyle = 'shirt';
           shirtColor = '#bfdbfe';
@@ -960,13 +988,21 @@ export default function App() {
           outfitStyle,
           shirtStyle,
           heightScale,
-          hasBeard: useRealisticModel ? false : !isFemale && chosenCase.age >= 28,
+          hasBeard: useSudaneseRealisticModel
+            ? true
+            : useRealisticModel
+              ? false
+              : !isFemale && chosenCase.age >= 28,
           state: 'arriving',
           assignedStationId: null,
           waitTimer: 0,
           clinicalCase: chosenCase,
           isAiGenerated: false,
-          modelKey: useRealisticModel ? 'char_patient_realistic_1' : undefined,
+          modelKey: useSudaneseRealisticModel
+            ? 'char_sudanese_man_1'
+            : useRealisticModel
+              ? 'char_patient_realistic_1'
+              : undefined,
         };
         return [...prev, newPatient];
       });
@@ -1452,9 +1488,11 @@ export default function App() {
     const hasReceptionDesk = clinic.placedItems.some((it) => it.catalogId === 'reception_desk');
     const hasFileCabinet = clinic.placedItems.some((it) => it.catalogId === 'file_cabinet');
 
+    const standingIdleMap = new Map<string, number>();
+
     const tick = setInterval(() => {
       const nowMs = performance.now();
-      const dtSec = Math.min(0.18, Math.max(0.016, (nowMs - lastTickMs) / 1000));
+      const dtSec = Math.min(0.26, Math.max(0.016, (nowMs - lastTickMs) / 1000));
       const dtMs = dtSec * 1000;
       lastTickMs = nowMs;
 
@@ -1851,10 +1889,13 @@ export default function App() {
                   }
                 }
 
-                // Natural standing waiting idle movements strictly inside Reception
-                const nextIdle = (updated.idleMoveTimer ?? 2400) - dtMs;
+                // Natural standing waiting idle movements strictly inside Reception (countdown in local map avoids re-renders when idle)
+                const curIdle = standingIdleMap.get(updated.id) ?? updated.idleMoveTimer ?? 2400;
+                const nextIdle = curIdle - dtMs;
                 if (nextIdle <= 0) {
-                  updated.idleMoveTimer = 2600 + Math.random() * 2400;
+                  const resetIdle = 2600 + Math.random() * 2400;
+                  standingIdleMap.set(updated.id, resetIdle);
+                  updated.idleMoveTimer = resetIdle;
                   if (Math.random() < 0.45) {
                     const drift = findStandingWaitSpot([...nextList, ...prev.slice(idx + 1)], updated.id);
                     if (
@@ -1871,10 +1912,10 @@ export default function App() {
                   } else {
                     updated.headingRad = Math.PI + (Math.random() - 0.5) * 1.4;
                   }
+                  changed = true;
                 } else {
-                  updated.idleMoveTimer = nextIdle;
+                  standingIdleMap.set(updated.id, nextIdle);
                 }
-                changed = true;
               }
               // Waiting patients strictly stay in Reception chairs / Reception standing area until explicitly called by the user.
             } else if (updated.state === 'walking_to_station') {
@@ -1980,7 +2021,7 @@ export default function App() {
 
         return changed ? nextList : prev;
       });
-    }, 100);
+    }, 160);
 
     return () => clearInterval(tick);
   }, [
