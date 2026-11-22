@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { PLAYER_DEFAULT_SKIN, resolvePlayerOutfitMeta } from '../data/catalog';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { resolvePlayerOutfitMeta } from '../data/catalog';
+import { PlayerCharacterConfig, SpriteKind } from '../types/clinic';
+import { glbRegistry } from './glbRegistry';
 import { TextureBundle } from './textures3d';
-import { PlayerCharacterConfig } from '../types/clinic';
 
 export interface FppBackdropHandle {
   group: THREE.Group;
@@ -22,6 +24,21 @@ export interface FppHandGripTarget {
   rightZ: number;
 }
 
+export interface FppHandInteractionContext {
+  velRight: number;
+  velForward: number;
+  yawVel: number;
+  pitchVel: number;
+  focusBlend: number;
+  isDraggingProbe: boolean;
+  hasSelectedProbe: boolean;
+  probeTargetCamX: number;
+  probeTargetCamY: number;
+  probeTargetCamZ: number;
+  consoleTapPulse: number;
+  activeDeviceSprite: SpriteKind | null;
+}
+
 export interface FppClinicianHandsHandle {
   group: THREE.Group;
   leftArm: THREE.Group;
@@ -33,7 +50,8 @@ export interface FppClinicianHandsHandle {
     timeSec: number,
     isSpeakingOrExam: boolean,
     aspect?: number,
-    gripTarget?: FppHandGripTarget
+    gripTarget?: FppHandGripTarget,
+    interaction?: FppHandInteractionContext
   ) => void;
   dispose: () => void;
 }
@@ -86,7 +104,6 @@ function createWallEngravingTextures(maxAniso: number): {
       strokeColor?: string,
       strokeWidth = 0
     ) => {
-      // Line 1: "Therason physiotherapy"
       ctx.direction = 'ltr';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -101,11 +118,9 @@ function createWallEngravingTextures(maxAniso: number): {
       ctx.fillStyle = mainColor;
       ctx.fillText('Therason physiotherapy', W / 2 + offsetX, 376 + offsetY, W - 240);
 
-      // Clean blue architectural divider bar
       ctx.fillStyle = lineColor;
       ctx.fillRect(W / 2 - 920 + offsetX, 588 + offsetY, 1840, 12);
 
-      // Line 2: "Powered by طـــاهــر مــحـمـد"
       const prefix = 'Powered by ';
       const arName = 'طـــاهــر مــحـمـد';
       ctx.font = '700 132px "Plus Jakarta Sans", sans-serif';
@@ -138,7 +153,6 @@ function createWallEngravingTextures(maxAniso: number): {
       ctx.fillText(arName, startX + totalW, 814 + offsetY);
     };
 
-    // Subtle crisp drop shadow for clean architectural separation against the plaster wall
     drawTextPass(
       cCtx,
       'rgba(7, 34, 78, 0.36)',
@@ -149,7 +163,6 @@ function createWallEngravingTextures(maxAniso: number): {
       7
     );
 
-    // Rich, very clear vivid royal-cerulean blue fill + crisp deep-cobalt outline
     const titleGrad = cCtx.createLinearGradient(320, 220, W - 320, 520);
     titleGrad.addColorStop(0, '#0369a1');
     titleGrad.addColorStop(0.5, '#0284c7');
@@ -167,8 +180,6 @@ function createWallEngravingTextures(maxAniso: number): {
     nameGrad.addColorStop(1, '#1d4ed8');
 
     drawTextPass(cCtx, titleGrad, subPrefixGrad, nameGrad, lineGrad, 0, 0, '#082f68', 6);
-
-    // Clean subtle bevel bump map (gentle relief so lettering stays razor sharp)
     drawTextPass(bCtx, '#3a3a3a', '#444444', '#3a3a3a', '#505050', 0, 0);
 
     colorTex.needsUpdate = true;
@@ -297,7 +308,6 @@ function createExtrudedProfileAlongX(
     bevelSegments: 2,
     steps: 1,
   });
-  // Rotate -PI/2 around Y so Shape X maps directly to +Z room depth, Shape Y maps to +Y height, and extrusion spans X centered at 0
   geom.rotateY(-Math.PI / 2);
   geom.translate(length * 0.5 - bevelSize, 0, 0);
   geom.computeVertexNormals();
@@ -329,7 +339,6 @@ export function createFppRoomBackdrop3D(
     return t;
   };
 
-  // High-resolution textures specifically scaled for close-up examination bay walls & surfaces
   const fppPlasterAlbedo = cloneTex(textures.plasterAlbedo, 5.4, 2.2);
   const fppStuccoBump = cloneTex(textures.stuccoBump, 5.4, 2.2);
   const fppPlasterRough = cloneTex(textures.plasterRough, 5.4, 2.2);
@@ -504,7 +513,6 @@ export function createFppRoomBackdrop3D(
     })
   );
 
-  // Beveled architectural wainscoting stile molding geometry (reused across walls)
   const stileGeom = trackGeom(
     (() => {
       const s = new THREE.Shape();
@@ -527,13 +535,11 @@ export function createFppRoomBackdrop3D(
     })()
   );
 
-  // Enclosed universal examination bay template (completely isolates session from outer clinic landmarks)
   const buildWallSpan = (spanLen: number, x: number, z: number, rotY: number) => {
     const wg = new THREE.Group();
     wg.position.set(x, 0, z);
     wg.rotation.y = rotY;
 
-    // Stepped beveled anodized baseboard skirt (0 .. 0.11m)
     const skirtGeom = trackGeom(
       createExtrudedProfileAlongX(
         spanLen,
@@ -550,7 +556,6 @@ export function createFppRoomBackdrop3D(
     const skirt = new THREE.Mesh(skirtGeom, darkTrimMat);
     skirt.receiveShadow = enableShadows;
 
-    // Wainscot lower wall body
     const wain = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(spanLen, wainH, 0.065)),
       wainscotMat
@@ -558,7 +563,6 @@ export function createFppRoomBackdrop3D(
     wain.position.set(0, wainH / 2, 0);
     wain.receiveShadow = enableShadows;
 
-    // Subtle physical vertical wainscot panel stiles for genuine architectural relief
     const panelCount = Math.max(4, Math.round(spanLen / 0.68));
     const stepX = (spanLen - 0.44) / panelCount;
     for (let i = 0; i <= panelCount; i++) {
@@ -569,7 +573,6 @@ export function createFppRoomBackdrop3D(
       wg.add(stile);
     }
 
-    // Stepped beveled brushed-aluminum dado chair rail
     const dadoGeom = trackGeom(
       createExtrudedProfileAlongX(
         spanLen + 0.02,
@@ -587,7 +590,6 @@ export function createFppRoomBackdrop3D(
     const dado = new THREE.Mesh(dadoGeom, aluminumMat);
     dado.receiveShadow = enableShadows;
 
-    // Upper acoustic lime-plaster wall
     const upper = new THREE.Mesh(
       trackGeom(new THREE.BoxGeometry(spanLen, upperH, 0.06)),
       plasterMat
@@ -595,7 +597,6 @@ export function createFppRoomBackdrop3D(
     upper.position.set(0, wainH + upperH / 2, 0);
     upper.receiveShadow = enableShadows;
 
-    // Stepped recessed ceiling crown cornice
     const crownGeom = trackGeom(
       createExtrudedProfileAlongX(
         spanLen + 0.02,
@@ -616,13 +617,11 @@ export function createFppRoomBackdrop3D(
     group.add(wg);
   };
 
-  // Back wall (behind patient), Front wall (behind camera), and extended Left & Right walls
   buildWallSpan(roomW + 0.12, 0, backZ, 0);
   buildWallSpan(roomW + 0.12, 0, frontZ, Math.PI);
   buildWallSpan(roomD + 0.12, -roomW / 2, centerZ, Math.PI / 2);
   buildWallSpan(roomD + 0.12, roomW / 2, centerZ, -Math.PI / 2);
 
-  // Subtle corner architectural reveal pilasters so wall corners look crisp & clean
   const cornerGeom = trackGeom(new THREE.BoxGeometry(0.064, wallH, 0.064));
   for (const [cx, cz] of [
     [-roomW / 2 + 0.024, backZ + 0.024],
@@ -636,7 +635,6 @@ export function createFppRoomBackdrop3D(
     group.add(pilaster);
   }
 
-  // Seamless universal porcelain floor & ceiling
   const floorMesh = new THREE.Mesh(
     trackGeom(new THREE.PlaneGeometry(roomW + 0.14, roomD + 0.14)),
     floorMat
@@ -654,7 +652,6 @@ export function createFppRoomBackdrop3D(
   ceilingMesh.position.set(0, wallH, centerZ);
   group.add(ceilingMesh);
 
-  // Multi-part recessed ceiling light troffer (aluminum bezel + shadow reveal + frosted acrylic diffuser)
   const trofferBezel = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(1.26, 0.028, 0.54)),
     aluminumMat
@@ -672,7 +669,6 @@ export function createFppRoomBackdrop3D(
   ceilingLightPanel.position.set(0, wallH - 0.014, 0.52);
   group.add(trofferBezel, trofferRecess, ceilingLightPanel);
 
-  // Back wall oak acoustic wood-slat flanks (with outer architectural bezel + beveled oiled oak battens)
   const slatShape = new THREE.Shape();
   slatShape.moveTo(-0.027, -0.755);
   slatShape.lineTo(0.027, -0.755);
@@ -713,7 +709,6 @@ export function createFppRoomBackdrop3D(
     }
   }
 
-  // Wall-engraved typography directly on the plaster wall above the patient's bed
   const wallEngraving = new THREE.Mesh(
     trackGeom(new THREE.PlaneGeometry(2.38, 0.74)),
     wallEngravingMat
@@ -722,7 +717,6 @@ export function createFppRoomBackdrop3D(
   wallEngraving.renderOrder = 1;
   group.add(wallEngraving);
 
-  // Recessed warm LED architectural cove housing + emitter strip
   const coveHousing = new THREE.Mesh(
     trackGeom(new THREE.BoxGeometry(2.02, 0.038, 0.068)),
     darkTrimMat
@@ -735,19 +729,25 @@ export function createFppRoomBackdrop3D(
   coveBar.position.set(0, wallH - 0.064, backZ + 0.082);
   group.add(coveHousing, coveBar);
 
-  // Calibrated Three-Point Clinical FPP Illumination
-  const wallLight = new THREE.PointLight(0xffe9c8, 1.12, 8.2, 1.15);
+  // Calibrated Three-Point Clinical FPP Illumination (also fills clinician side of bay smoothly)
+  const wallLight = new THREE.PointLight(0xffe9c8, 1.12, 8.4, 1.15);
   wallLight.castShadow = false;
   wallLight.position.set(0, 2.28, backZ + 0.95);
   group.add(wallLight);
 
-  const roomFillLight = new THREE.PointLight(0xeef5ff, 0.92, 11.4, 1.1);
+  const roomFillLight = new THREE.PointLight(0xfff4e8, 1.06, 12.0, 1.05);
   roomFillLight.castShadow = false;
-  roomFillLight.position.set(-0.35, 2.46, 1.2);
+  roomFillLight.position.set(0.18, 2.38, 1.72);
   group.add(roomFillLight);
 
-  // Dedicated ceiling exam-bay key SpotLight casting crisp soft shadows from bed & patient onto floor
-  const examKeySpot = new THREE.SpotLight(0xfffaf0, enableShadows ? 2.45 : 1.38, 11.2, Math.PI / 2.2, 0.85, 1.05);
+  const examKeySpot = new THREE.SpotLight(
+    0xfffaf0,
+    enableShadows ? 2.45 : 1.38,
+    11.2,
+    Math.PI / 2.2,
+    0.85,
+    1.05
+  );
   examKeySpot.position.set(0.32, wallH - 0.06, 0.72);
   examKeySpot.target.position.set(0, 0.42, -0.2);
   if (enableShadows) {
@@ -764,8 +764,9 @@ export function createFppRoomBackdrop3D(
   const setLightFactor = (alpha: number, isNight = false) => {
     const a = THREE.MathUtils.clamp(alpha, 0, 1);
     wallLight.intensity = a * (isNight ? 1.52 : 1.14);
-    roomFillLight.intensity = a * (isNight ? 1.24 : 0.92);
-    examKeySpot.intensity = a * (enableShadows ? (isNight ? 2.68 : 2.38) : (isNight ? 1.58 : 1.36));
+    roomFillLight.intensity = a * (isNight ? 1.32 : 1.06);
+    examKeySpot.intensity =
+      a * (enableShadows ? (isNight ? 2.68 : 2.38) : isNight ? 1.58 : 1.36);
   };
 
   group.visible = false;
@@ -779,6 +780,1120 @@ export function createFppRoomBackdrop3D(
       for (const d of disposables) d.dispose();
     },
   };
+}
+
+// ============================================================================
+// Realistic Rigged 3D Clinician Hands & Gender/Outfit-Aware Forearms
+// ============================================================================
+
+interface AnatomicalSkinTexSet {
+  albedoTex: THREE.DataTexture;
+  normalTex: THREE.DataTexture;
+  roughTex: THREE.DataTexture;
+}
+
+const handTexSetCache = new Map<-1 | 1, AnatomicalSkinTexSet>();
+let forearmTexSetCache: AnatomicalSkinTexSet | null = null;
+
+function finalizeDataTexture(
+  data: Uint8Array,
+  width: number,
+  height: number,
+  srgb: boolean
+): THREE.DataTexture {
+  const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 8;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function buildNormalMapFromHeight(
+  heightBuf: Float32Array,
+  width: number,
+  height: number,
+  strength: number
+): THREE.DataTexture {
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const ym = y > 0 ? y - 1 : 0;
+    const yp = y < height - 1 ? y + 1 : height - 1;
+    for (let x = 0; x < width; x++) {
+      const xm = x > 0 ? x - 1 : 0;
+      const xp = x < width - 1 ? x + 1 : width - 1;
+
+      const tl = heightBuf[ym * width + xm];
+      const tc = heightBuf[ym * width + x];
+      const tr = heightBuf[ym * width + xp];
+      const ml = heightBuf[y * width + xm];
+      const mr = heightBuf[y * width + xp];
+      const bl = heightBuf[yp * width + xm];
+      const bc = heightBuf[yp * width + x];
+      const br = heightBuf[yp * width + xp];
+
+      const dhdu = (tr + 2 * mr + br - (tl + 2 * ml + bl)) * strength;
+      const dhdv = (bl + 2 * bc + br - (tl + 2 * tc + tr)) * strength;
+      const nx = -dhdu;
+      const ny = -dhdv;
+      const nz = 1.0;
+      const inv = 1.0 / Math.hypot(nx, ny, nz);
+      const p = (y * width + x) * 4;
+      out[p] = Math.round((nx * inv * 0.5 + 0.5) * 255);
+      out[p + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+      out[p + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+      out[p + 3] = 255;
+    }
+  }
+  return finalizeDataTexture(out, width, height, false);
+}
+
+function dilateBakedBuffers(
+  covered: Uint8Array,
+  albedo: Uint8Array,
+  heightBuf: Float32Array,
+  roughBuf: Uint8Array,
+  size: number,
+  passes = 3
+): void {
+  let curMask = covered;
+  for (let pass = 0; pass < passes; pass++) {
+    const nextMask = curMask.slice();
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const idx = y * size + x;
+        if (curMask[idx]) continue;
+
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        let sumH = 0;
+        let sumRo = 0;
+        let count = 0;
+
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= size) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            if (nx < 0 || nx >= size) continue;
+            const nIdx = ny * size + nx;
+            if (!curMask[nIdx]) continue;
+            const p = nIdx * 4;
+            sumR += albedo[p];
+            sumG += albedo[p + 1];
+            sumB += albedo[p + 2];
+            sumH += heightBuf[nIdx];
+            sumRo += roughBuf[p];
+            count++;
+          }
+        }
+
+        if (count > 0) {
+          const p = idx * 4;
+          albedo[p] = Math.round(sumR / count);
+          albedo[p + 1] = Math.round(sumG / count);
+          albedo[p + 2] = Math.round(sumB / count);
+          albedo[p + 3] = 255;
+          heightBuf[idx] = sumH / count;
+          const roVal = Math.round(sumRo / count);
+          roughBuf[p] = roVal;
+          roughBuf[p + 1] = roVal;
+          roughBuf[p + 2] = roVal;
+          roughBuf[p + 3] = 255;
+          nextMask[idx] = 1;
+        }
+      }
+    }
+    curMask = nextMask;
+  }
+}
+
+function hash3D(x: number, y: number, z: number): number {
+  const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+
+function valueNoise3D(x: number, y: number, z: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fy = y - iy;
+  const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const uz = fz * fz * (3 - 2 * fz);
+
+  const c000 = hash3D(ix, iy, iz);
+  const c100 = hash3D(ix + 1, iy, iz);
+  const c010 = hash3D(ix, iy + 1, iz);
+  const c110 = hash3D(ix + 1, iy + 1, iz);
+  const c001 = hash3D(ix, iy, iz + 1);
+  const c101 = hash3D(ix + 1, iy, iz + 1);
+  const c011 = hash3D(ix, iy + 1, iz + 1);
+  const c111 = hash3D(ix + 1, iy + 1, iz + 1);
+
+  const x00 = c000 + (c100 - c000) * ux;
+  const x10 = c010 + (c110 - c010) * ux;
+  const x01 = c001 + (c101 - c001) * ux;
+  const x11 = c011 + (c111 - c011) * ux;
+  const y0 = x00 + (x10 - x00) * uy;
+  const y1 = x01 + (x11 - x01) * uy;
+  return y0 + (y1 - y0) * uz;
+}
+
+function distToSeg2D(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): { dist: number; t: number } {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy || 1e-8;
+  const t = THREE.MathUtils.clamp(((px - ax) * vx + (py - ay) * vy) / lenSq, 0, 1);
+  const cx = ax + vx * t;
+  const cy = ay + vy * t;
+  return { dist: Math.hypot(px - cx, py - cy), t };
+}
+
+const FINGER_GROUPS = [
+  'index-finger',
+  'middle-finger',
+  'ring-finger',
+  'pinky-finger',
+] as const;
+
+interface FingerPoseParams {
+  indexCurl: number;
+  middleCurl: number;
+  ringCurl: number;
+  pinkyCurl: number;
+  thumbCurl: number;
+  thumbOpp: number;
+  splay: number;
+}
+
+interface FlatFkBone {
+  bone: THREE.Object3D;
+  parentIdx: number; // -1 for wrist root
+  restPos: THREE.Vector3;
+  restQuat: THREE.Quaternion;
+  offsetFromParent: THREE.Vector3;
+  relRestQuat: THREE.Quaternion;
+  curPos: THREE.Vector3;
+  curQuat: THREE.Quaternion;
+  chainRole: 'root' | 'thumb_mcp' | 'thumb_prox' | 'thumb_dist' | 'finger_mcp' | 'finger_prox' | 'finger_mid' | 'finger_dist' | 'tip';
+  fingerSlot: number; // 0=thumb, 1=index, 2=middle, 3=ring, 4=pinky
+}
+
+interface HandSkeletonRig {
+  side: -1 | 1;
+  bones: FlatFkBone[];
+  lastPose: FingerPoseParams;
+  hasAppliedPose: boolean;
+  lastIsFemale: boolean | null;
+}
+
+const _fkDeltaEuler = new THREE.Euler(0, 0, 0, 'XYZ');
+const _fkDeltaQuat = new THREE.Quaternion();
+const _fkOffsetTmp = new THREE.Vector3();
+
+function buildFlatFkRig(skinnedMesh: THREE.SkinnedMesh, side: -1 | 1): HandSkeletonRig {
+  const boneByName = new Map<string, THREE.Object3D>();
+  for (const b of skinnedMesh.skeleton.bones) {
+    boneByName.set(b.name, b);
+  }
+
+  const orderedEntries: Array<{
+    name: string;
+    parentName: string | null;
+    role: FlatFkBone['chainRole'];
+    slot: number;
+  }> = [
+    { name: 'wrist', parentName: null, role: 'root', slot: -1 },
+    { name: 'thumb-metacarpal', parentName: 'wrist', role: 'thumb_mcp', slot: 0 },
+    { name: 'thumb-phalanx-proximal', parentName: 'thumb-metacarpal', role: 'thumb_prox', slot: 0 },
+    { name: 'thumb-phalanx-distal', parentName: 'thumb-phalanx-proximal', role: 'thumb_dist', slot: 0 },
+    { name: 'thumb-tip', parentName: 'thumb-phalanx-distal', role: 'tip', slot: 0 },
+  ];
+
+  FINGER_GROUPS.forEach((prefix, idx) => {
+    const slot = idx + 1;
+    orderedEntries.push(
+      { name: `${prefix}-metacarpal`, parentName: 'wrist', role: 'finger_mcp', slot },
+      { name: `${prefix}-phalanx-proximal`, parentName: `${prefix}-metacarpal`, role: 'finger_prox', slot },
+      { name: `${prefix}-phalanx-intermediate`, parentName: `${prefix}-phalanx-proximal`, role: 'finger_mid', slot },
+      { name: `${prefix}-phalanx-distal`, parentName: `${prefix}-phalanx-intermediate`, role: 'finger_dist', slot },
+      { name: `${prefix}-tip`, parentName: `${prefix}-phalanx-distal`, role: 'tip', slot }
+    );
+  });
+
+  const indexMap = new Map<string, number>();
+  const bones: FlatFkBone[] = [];
+
+  for (const entry of orderedEntries) {
+    const bone = boneByName.get(entry.name);
+    if (!bone) continue;
+    const myIdx = bones.length;
+    indexMap.set(entry.name, myIdx);
+    const parentIdx = entry.parentName ? (indexMap.get(entry.parentName) ?? -1) : -1;
+    const restPos = bone.position.clone();
+    const restQuat = bone.quaternion.clone();
+    const offsetFromParent = new THREE.Vector3();
+    const relRestQuat = new THREE.Quaternion();
+
+    if (parentIdx >= 0) {
+      const p = bones[parentIdx];
+      const invP = p.restQuat.clone().invert();
+      offsetFromParent.copy(restPos).sub(p.restPos).applyQuaternion(invP);
+      relRestQuat.copy(invP).multiply(restQuat);
+    }
+
+    bones.push({
+      bone,
+      parentIdx,
+      restPos,
+      restQuat,
+      offsetFromParent,
+      relRestQuat,
+      curPos: restPos.clone(),
+      curQuat: restQuat.clone(),
+      chainRole: entry.role,
+      fingerSlot: entry.slot,
+    });
+  }
+
+  return {
+    side,
+    bones,
+    lastPose: {
+      indexCurl: -1,
+      middleCurl: -1,
+      ringCurl: -1,
+      pinkyCurl: -1,
+      thumbCurl: -1,
+      thumbOpp: -1,
+      splay: -1,
+    },
+    hasAppliedPose: false,
+    lastIsFemale: null,
+  };
+}
+
+/**
+ * Zero-cost anatomical gender sculpting via existing rigged phalanx cross-section scales.
+ * Slims finger shafts smoothly toward tapered fingertips with sub-0.2mm joint distortion.
+ */
+function applyGenderBoneTaper(rig: HandSkeletonRig, isFemale: boolean): void {
+  if (rig.lastIsFemale === isFemale) return;
+  rig.lastIsFemale = isFemale;
+  for (let i = 0; i < rig.bones.length; i++) {
+    const b = rig.bones[i];
+    if (!isFemale) {
+      b.bone.scale.set(1, 1, 1);
+      continue;
+    }
+    if (b.chainRole === 'thumb_prox' || b.chainRole === 'finger_prox') {
+      b.bone.scale.set(0.95, 0.95, 1.0);
+    } else if (b.chainRole === 'finger_mid') {
+      b.bone.scale.set(0.91, 0.91, 1.0);
+    } else if (b.chainRole === 'thumb_dist' || b.chainRole === 'finger_dist' || b.chainRole === 'tip') {
+      b.bone.scale.set(0.87, 0.87, 1.0);
+    } else {
+      b.bone.scale.set(1, 1, 1);
+    }
+  }
+}
+
+function applyHandFkPose(rig: HandSkeletonRig, pose: FingerPoseParams): void {
+  const lp = rig.lastPose;
+  if (
+    rig.hasAppliedPose &&
+    Math.abs(lp.indexCurl - pose.indexCurl) < 0.0018 &&
+    Math.abs(lp.middleCurl - pose.middleCurl) < 0.0018 &&
+    Math.abs(lp.ringCurl - pose.ringCurl) < 0.0018 &&
+    Math.abs(lp.pinkyCurl - pose.pinkyCurl) < 0.0018 &&
+    Math.abs(lp.thumbCurl - pose.thumbCurl) < 0.0018 &&
+    Math.abs(lp.thumbOpp - pose.thumbOpp) < 0.0018 &&
+    Math.abs(lp.splay - pose.splay) < 0.0018
+  ) {
+    return;
+  }
+
+  lp.indexCurl = pose.indexCurl;
+  lp.middleCurl = pose.middleCurl;
+  lp.ringCurl = pose.ringCurl;
+  lp.pinkyCurl = pose.pinkyCurl;
+  lp.thumbCurl = pose.thumbCurl;
+  lp.thumbOpp = pose.thumbOpp;
+  lp.splay = pose.splay;
+  rig.hasAppliedPose = true;
+
+  const s = rig.side;
+  const splayVals = [0, -1.0, -0.25, 0.35, 1.05];
+
+  for (let i = 0; i < rig.bones.length; i++) {
+    const b = rig.bones[i];
+    if (b.parentIdx < 0) {
+      b.curPos.copy(b.restPos);
+      b.curQuat.copy(b.restQuat);
+      continue;
+    }
+
+    const parent = rig.bones[b.parentIdx];
+    _fkOffsetTmp.copy(b.offsetFromParent).applyQuaternion(parent.curQuat);
+    b.curPos.copy(parent.curPos).add(_fkOffsetTmp);
+
+    let rx = 0;
+    let ry = 0;
+    const fingerCurl =
+      b.fingerSlot === 1
+        ? pose.indexCurl
+        : b.fingerSlot === 2
+          ? pose.middleCurl
+          : b.fingerSlot === 3
+            ? pose.ringCurl
+            : b.fingerSlot === 4
+              ? pose.pinkyCurl
+              : pose.thumbCurl;
+
+    // WebXR bone convention: -X flexes palmar (inward), +Y splays radially
+    if (b.chainRole === 'thumb_mcp') {
+      rx = -pose.thumbCurl * 0.20;
+      ry = s * pose.thumbOpp * 0.40;
+    } else if (b.chainRole === 'thumb_prox') {
+      rx = -pose.thumbCurl * 0.50;
+    } else if (b.chainRole === 'thumb_dist') {
+      rx = -pose.thumbCurl * 0.66;
+    } else if (b.chainRole === 'finger_prox') {
+      rx = -fingerCurl * 0.92;
+      ry = -s * pose.splay * splayVals[b.fingerSlot] * 0.11;
+    } else if (b.chainRole === 'finger_mid') {
+      rx = -fingerCurl * 1.06;
+    } else if (b.chainRole === 'finger_dist') {
+      rx = -fingerCurl * 0.68;
+    }
+
+    if (rx !== 0 || ry !== 0) {
+      _fkDeltaEuler.set(rx, ry, 0, 'XYZ');
+      _fkDeltaQuat.setFromEuler(_fkDeltaEuler);
+      b.curQuat.copy(parent.curQuat).multiply(b.relRestQuat).multiply(_fkDeltaQuat);
+    } else {
+      b.curQuat.copy(parent.curQuat).multiply(b.relRestQuat);
+    }
+
+    b.bone.position.copy(b.curPos);
+    b.bone.quaternion.copy(b.curQuat);
+  }
+}
+
+/**
+ * Rasterizes a 512x512 UV-aligned anatomical PBR skin texture set (Albedo + Tangent Normal + Roughness)
+ * directly from the hand mesh geometry and skeleton ONCE per handedness and caches it module-wide.
+ * Zero per-frame CPU overhead; renders pixel-sharp palm lines, knuckle folds, tendons, pores & nails.
+ */
+function getOrBakeHandTextureSet(
+  geom: THREE.BufferGeometry,
+  bones: THREE.Bone[],
+  side: -1 | 1
+): AnatomicalSkinTexSet {
+  const existing = handTexSetCache.get(side);
+  if (existing) return existing;
+
+  const SIZE = 512;
+  const total = SIZE * SIZE;
+  const albedo = new Uint8Array(total * 4);
+  const heightBuf = new Float32Array(total);
+  const roughBuf = new Uint8Array(total * 4);
+  const covered = new Uint8Array(total);
+
+  // Warm Sudanese mid-skin fill background prevents mipmap black edge bleeding
+  for (let i = 0; i < total; i++) {
+    const p = i * 4;
+    albedo[p] = 170;
+    albedo[p + 1] = 114;
+    albedo[p + 2] = 82;
+    albedo[p + 3] = 255;
+    heightBuf[i] = 0.5;
+    roughBuf[p] = 184;
+    roughBuf[p + 1] = 184;
+    roughBuf[p + 2] = 184;
+    roughBuf[p + 3] = 255;
+  }
+
+  const posAttr = geom.getAttribute('position') as THREE.BufferAttribute;
+  const nrmAttr = geom.getAttribute('normal') as THREE.BufferAttribute;
+  const uvAttr = geom.getAttribute('uv') as THREE.BufferAttribute;
+  const indexAttr = geom.getIndex();
+
+  const boneMap = new Map<string, THREE.Bone>();
+  for (const b of bones) boneMap.set(b.name, b);
+
+  interface NailDesc {
+    dPos: THREE.Vector3;
+    dir: THREE.Vector3;
+    up: THREE.Vector3;
+    lat: THREE.Vector3;
+    startAlong: number;
+    endAlong: number;
+    halfWidth: number;
+  }
+
+  interface JointDesc {
+    pos: THREE.Vector3;
+    dir: THREE.Vector3;
+    up: THREE.Vector3;
+    kind: 'mcp' | 'pip' | 'dip';
+    radiusSq: number;
+  }
+
+  interface TendonRay {
+    ay: number;
+    az: number;
+    by: number;
+    bz: number;
+  }
+
+  const nailSpecDefs = [
+    { d: 'thumb-phalanx-distal', t: 'thumb-tip', s: 0.0046, e: 0.0216, hw: 0.0070 },
+    { d: 'index-finger-phalanx-distal', t: 'index-finger-tip', s: 0.0042, e: 0.0200, hw: 0.0050 },
+    { d: 'middle-finger-phalanx-distal', t: 'middle-finger-tip', s: 0.0056, e: 0.0224, hw: 0.0053 },
+    { d: 'ring-finger-phalanx-distal', t: 'ring-finger-tip', s: 0.0048, e: 0.0212, hw: 0.0047 },
+    { d: 'pinky-finger-phalanx-distal', t: 'pinky-finger-tip', s: 0.0034, e: 0.0186, hw: 0.0043 },
+  ];
+
+  const nailDescs: NailDesc[] = [];
+  for (const ns of nailSpecDefs) {
+    const db = boneMap.get(ns.d);
+    const tb = boneMap.get(ns.t);
+    if (!db || !tb) continue;
+    const dir = tb.position.clone().sub(db.position).normalize();
+    const rawUp = new THREE.Vector3(0, 1, 0).applyQuaternion(db.quaternion);
+    const up = rawUp.sub(dir.clone().multiplyScalar(rawUp.dot(dir))).normalize();
+    const lat = new THREE.Vector3().crossVectors(dir, up).normalize();
+    nailDescs.push({
+      dPos: db.position.clone(),
+      dir,
+      up,
+      lat,
+      startAlong: ns.s,
+      endAlong: ns.e,
+      halfWidth: ns.hw,
+    });
+  }
+
+  const jointDescs: JointDesc[] = [];
+  const tendonRays: TendonRay[] = [];
+  const wBone = boneMap.get('wrist');
+  const wristY = wBone ? wBone.position.y - 0.006 : 0.050;
+  const wristZ = wBone ? wBone.position.z + 0.004 : 0.012;
+
+  const digitSpecs = [
+    { prefix: 'thumb', isThumb: true, slot: 0 },
+    { prefix: 'index-finger', isThumb: false, slot: 1 },
+    { prefix: 'middle-finger', isThumb: false, slot: 2 },
+    { prefix: 'ring-finger', isThumb: false, slot: 3 },
+    { prefix: 'pinky-finger', isThumb: false, slot: 4 },
+  ];
+
+  for (const ds of digitSpecs) {
+    const mcp = boneMap.get(`${ds.prefix}-metacarpal`);
+    const prox = boneMap.get(`${ds.prefix}-phalanx-proximal`);
+    const mid = ds.isThumb ? null : boneMap.get(`${ds.prefix}-phalanx-intermediate`);
+    const dist = boneMap.get(`${ds.prefix}-phalanx-distal`);
+    const tip = boneMap.get(`${ds.prefix}-tip`);
+
+    if (prox && dist) {
+      if (!ds.isThumb && mcp && mid) {
+        const mcpDir = mid.position.clone().sub(mcp.position).normalize();
+        const mcpRawUp = new THREE.Vector3(0, 1, 0).applyQuaternion(prox.quaternion);
+        const mcpUp = mcpRawUp.sub(mcpDir.clone().multiplyScalar(mcpRawUp.dot(mcpDir))).normalize();
+        jointDescs.push({
+          pos: prox.position.clone(),
+          dir: mcpDir,
+          up: mcpUp,
+          kind: 'mcp',
+          radiusSq: 0.014 * 0.014,
+        });
+        tendonRays.push({
+          ay: wristY,
+          az: wristZ + (ds.slot - 2.4) * 0.0055,
+          by: prox.position.y + 0.005,
+          bz: prox.position.z,
+        });
+
+        const pipDir = dist.position.clone().sub(prox.position).normalize();
+        const pipRawUp = new THREE.Vector3(0, 1, 0).applyQuaternion(mid.quaternion);
+        const pipUp = pipRawUp.sub(pipDir.clone().multiplyScalar(pipRawUp.dot(pipDir))).normalize();
+        jointDescs.push({
+          pos: mid.position.clone(),
+          dir: pipDir,
+          up: pipUp,
+          kind: 'pip',
+          radiusSq: 0.012 * 0.012,
+        });
+
+        const dipDir = (tip ? tip.position : dist.position).clone().sub(mid.position).normalize();
+        const dipRawUp = new THREE.Vector3(0, 1, 0).applyQuaternion(dist.quaternion);
+        const dipUp = dipRawUp.sub(dipDir.clone().multiplyScalar(dipRawUp.dot(dipDir))).normalize();
+        jointDescs.push({
+          pos: dist.position.clone(),
+          dir: dipDir,
+          up: dipUp,
+          kind: 'dip',
+          radiusSq: 0.010 * 0.010,
+        });
+      } else if (ds.isThumb && mcp) {
+        const tPipDir = dist.position.clone().sub(mcp.position).normalize();
+        const tRawUp = new THREE.Vector3(0, 1, 0).applyQuaternion(prox.quaternion);
+        const tUp = tRawUp.sub(tPipDir.clone().multiplyScalar(tRawUp.dot(tPipDir))).normalize();
+        jointDescs.push({
+          pos: prox.position.clone(),
+          dir: tPipDir,
+          up: tUp,
+          kind: 'pip',
+          radiusSq: 0.014 * 0.014,
+        });
+        const tDipDir = (tip ? tip.position : dist.position).clone().sub(prox.position).normalize();
+        const tdRawUp = new THREE.Vector3(0, 1, 0).applyQuaternion(dist.quaternion);
+        const tdUp = tdRawUp.sub(tDipDir.clone().multiplyScalar(tdRawUp.dot(tDipDir))).normalize();
+        jointDescs.push({
+          pos: dist.position.clone(),
+          dir: tDipDir,
+          up: tdUp,
+          kind: 'dip',
+          radiusSq: 0.012 * 0.012,
+        });
+      }
+    }
+  }
+
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const p2 = new THREE.Vector3();
+  const n0 = new THREE.Vector3();
+  const n1 = new THREE.Vector3();
+  const n2 = new THREE.Vector3();
+
+  const triCount = indexAttr ? indexAttr.count / 3 : posAttr.count / 3;
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = indexAttr ? indexAttr.getX(t * 3) : t * 3;
+    const i1 = indexAttr ? indexAttr.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = indexAttr ? indexAttr.getX(t * 3 + 2) : t * 3 + 2;
+
+    const u0 = uvAttr.getX(i0) * SIZE;
+    const v0 = uvAttr.getY(i0) * SIZE;
+    const u1 = uvAttr.getX(i1) * SIZE;
+    const v1 = uvAttr.getY(i1) * SIZE;
+    const u2 = uvAttr.getX(i2) * SIZE;
+    const v2 = uvAttr.getY(i2) * SIZE;
+
+    const area = (u1 - u0) * (v2 - v0) - (v1 - v0) * (u2 - u0);
+    if (Math.abs(area) < 1e-4) continue;
+    const invArea = 1 / area;
+
+    p0.fromBufferAttribute(posAttr, i0);
+    p1.fromBufferAttribute(posAttr, i1);
+    p2.fromBufferAttribute(posAttr, i2);
+    n0.fromBufferAttribute(nrmAttr, i0);
+    n1.fromBufferAttribute(nrmAttr, i1);
+    n2.fromBufferAttribute(nrmAttr, i2);
+
+    const minX = Math.max(0, Math.floor(Math.min(u0, u1, u2) - 0.5));
+    const maxX = Math.min(SIZE - 1, Math.ceil(Math.max(u0, u1, u2) + 0.5));
+    const minY = Math.max(0, Math.floor(Math.min(v0, v1, v2) - 0.5));
+    const maxY = Math.min(SIZE - 1, Math.ceil(Math.max(v0, v1, v2) + 0.5));
+
+    for (let py = minY; py <= maxY; py++) {
+      const cy = py + 0.5;
+      for (let px = minX; px <= maxX; px++) {
+        const cx = px + 0.5;
+        let w0 = ((u1 - cx) * (v2 - cy) - (v1 - cy) * (u2 - cx)) * invArea;
+        let w1 = ((u2 - cx) * (v0 - cy) - (v2 - cy) * (u0 - cx)) * invArea;
+        let w2 = 1 - w0 - w1;
+
+        if (w0 < -0.025 || w1 < -0.025 || w2 < -0.025) continue;
+        w0 = Math.max(0, w0);
+        w1 = Math.max(0, w1);
+        w2 = Math.max(0, w2);
+        const wSum = w0 + w1 + w2 || 1;
+        w0 /= wSum;
+        w1 /= wSum;
+        w2 /= wSum;
+
+        const P_x = p0.x * w0 + p1.x * w1 + p2.x * w2;
+        const P_y = p0.y * w0 + p1.y * w1 + p2.y * w2;
+        const P_z = p0.z * w0 + p1.z * w1 + p2.z * w2;
+
+        let N_x = n0.x * w0 + n1.x * w1 + n2.x * w2;
+        let N_y = n0.y * w0 + n1.y * w1 + n2.y * w2;
+        let N_z = n0.z * w0 + n1.z * w1 + n2.z * w2;
+        const nLen = Math.hypot(N_x, N_y, N_z) || 1;
+        N_x /= nLen;
+        N_y /= nLen;
+        N_z /= nLen;
+
+        // Dorsal side (+1) vs Palmar side (-1) unified across Left (-1) & Right (+1)
+        const dorsalSide = N_x * side;
+        const palmT = THREE.MathUtils.smoothstep(-dorsalSide, -0.25, 0.35);
+        const dorsalT = THREE.MathUtils.smoothstep(dorsalSide, -0.15, 0.45);
+
+        // Multi-scale organic dermal noise & subtle pores (no synthetic grid cross-hatching)
+        const nCoarse = valueNoise3D(P_x * 65 + 4.1, P_y * 65 + 2.3, P_z * 65);
+        const nFine = valueNoise3D(P_x * 360, P_y * 360, P_z * 360);
+        const nPore = valueNoise3D(P_x * 840 + 7.4, P_y * 840 + 1.9, P_z * 840);
+        const poreDip = Math.max(0, 0.22 - nPore) * 0.065 * dorsalT;
+
+        // Warm deeper Sudanese caramel-brown dorsal tone -> lighter natural warm tan palm
+        let colR = THREE.MathUtils.lerp(130, 166, palmT);
+        let colG = THREE.MathUtils.lerp(79, 114, palmT);
+        let colB = THREE.MathUtils.lerp(51, 84, palmT);
+
+        // Subtle organic epidermal variation
+        const mottle = (nCoarse - 0.5) * 11 + (nFine - 0.5) * 6;
+        colR += mottle * 1.04 - poreDip * 14;
+        colG += mottle * 0.85 - poreDip * 11;
+        colB += mottle * 0.70 - poreDip * 9;
+
+        let heightVal = 0.5 + (nFine - 0.5) * 0.024 + (nCoarse - 0.5) * 0.014 - poreDip;
+        let roughVal = THREE.MathUtils.lerp(0.72, 0.66, palmT) + (nFine - 0.5) * 0.05;
+
+        // Soft healthy warmth on fingertip pads & thenar mound
+        const isTipPad = P_y < -0.070 || (P_z < -0.048 && P_y < -0.022);
+        if (isTipPad && palmT > 0.25) {
+          const padStrength = palmT * 0.55;
+          colR += 10 * padStrength;
+          colG += 2.5 * padStrength;
+          colB += 2 * padStrength;
+        }
+
+        // Wrist flexor edge matches forearm seamlessly
+        if (P_y > 0.052) {
+          const wBlend = THREE.MathUtils.clamp((P_y - 0.052) / 0.024, 0, 1);
+          colR = THREE.MathUtils.lerp(colR, THREE.MathUtils.lerp(129, 158, palmT), wBlend * 0.75);
+          colG = THREE.MathUtils.lerp(colG, THREE.MathUtils.lerp(78, 108, palmT), wBlend * 0.75);
+          colB = THREE.MathUtils.lerp(colB, THREE.MathUtils.lerp(50, 79, palmT), wBlend * 0.75);
+        }
+
+        // 1. Gentle Dorsal Metacarpal Tendons & Faint Sub-Dermal Veins (back of hand)
+        if (dorsalT > 0.18 && P_y > -0.030 && P_y < 0.056) {
+          let tendonBoost = 0;
+          for (let tr = 0; tr < tendonRays.length; tr++) {
+            const ray = tendonRays[tr];
+            const seg = distToSeg2D(P_y, P_z, ray.ay, ray.az, ray.by, ray.bz);
+            const g = Math.exp(-(seg.dist * seg.dist) / (2 * 0.0028 * 0.0028)) * Math.sin(seg.t * Math.PI);
+            if (g > tendonBoost) tendonBoost = g;
+          }
+          tendonBoost *= dorsalT;
+          heightVal += tendonBoost * 0.065;
+          colR += tendonBoost * 5.5;
+          colG += tendonBoost * 3.5;
+          colB += tendonBoost * 2.2;
+
+          // Subtle dorsal veins fading cleanly before knuckle web
+          const v1Dist = Math.abs(P_z - (0.003 + Math.sin((P_y - 0.01) * 34) * 0.004));
+          const v2Dist = Math.abs(P_z - (0.022 + Math.cos((P_y - 0.02) * 30) * 0.004));
+          const veinMask =
+            dorsalT *
+            THREE.MathUtils.smoothstep(P_y, -0.008, 0.010) *
+            (1 - THREE.MathUtils.smoothstep(P_y, 0.042, 0.056)) *
+            Math.max(
+              Math.exp(-(v1Dist * v1Dist) / (2 * 0.0018 * 0.0018)),
+              Math.exp(-(v2Dist * v2Dist) / (2 * 0.0016 * 0.0016))
+            );
+          colR -= veinMask * 5.5;
+          colG -= veinMask * 2.0;
+          colB += veinMask * 1.5;
+          heightVal += veinMask * 0.022;
+        }
+
+        // 2. Soft Organic Palm Creases & Wrist Flexion Lines (non-crossing, natural curvature)
+        if (palmT > 0.28 && P_y > -0.040 && P_y < 0.062) {
+          let creaseMask = 0;
+          const wobble = (nCoarse - 0.5) * 0.0022;
+          // Distal transverse palmar crease (pinky/ring/middle zone only, stops before crossing)
+          if (P_z > 0.002 && P_z < 0.044) {
+            const targetY = -0.011 - 0.24 * Math.max(0, 0.040 - P_z) + wobble;
+            const d = Math.abs(P_y - targetY);
+            const taper = THREE.MathUtils.smoothstep(P_z, 0.002, 0.012);
+            creaseMask = Math.max(creaseMask, taper * Math.exp(-(d * d) / (2 * 0.0013 * 0.0013)));
+          }
+          // Proximal transverse crease (stops cleanly near radial palm)
+          if (P_z > -0.020 && P_z < 0.022) {
+            const targetY = -0.006 + 0.26 * Math.max(0, P_z + 0.018) + wobble;
+            const d = Math.abs(P_y - targetY);
+            const taper = 1 - THREE.MathUtils.smoothstep(P_z, 0.012, 0.022);
+            creaseMask = Math.max(creaseMask, taper * Math.exp(-(d * d) / (2 * 0.0013 * 0.0013)));
+          }
+          // Smooth curved Thenar crease circling thumb base
+          if (P_y > -0.008 && P_y < 0.042 && P_z > -0.026 && P_z < 0.008) {
+            const rad = Math.hypot((P_y - 0.015) / 0.030, (P_z + 0.032) / 0.028);
+            const d = Math.abs(rad - 1.0) * 0.028 + wobble * 0.5;
+            creaseMask = Math.max(creaseMask, Math.exp(-(d * d) / (2 * 0.0013 * 0.0013)));
+          }
+          // Delicate wrist flexion line
+          if (P_z > -0.014 && P_z < 0.030) {
+            const dW1 = Math.abs(P_y - 0.048);
+            creaseMask = Math.max(creaseMask, 0.72 * Math.exp(-(dW1 * dW1) / (2 * 0.0012 * 0.0012)));
+          }
+
+          creaseMask *= palmT;
+          if (creaseMask > 0.02) {
+            colR *= 1 - creaseMask * 0.11;
+            colG *= 1 - creaseMask * 0.13;
+            colB *= 1 - creaseMask * 0.12;
+            heightVal -= creaseMask * 0.095;
+            roughVal += creaseMask * 0.05;
+          }
+        }
+
+        // 3. Soft Finger Knuckle Domes & Gentle Joint Skin Folds
+        for (let j = 0; j < jointDescs.length; j++) {
+          const jd = jointDescs[j];
+          const dx = P_x - jd.pos.x;
+          const dy = P_y - jd.pos.y;
+          const dz = P_z - jd.pos.z;
+          const dSq = dx * dx + dy * dy + dz * dz;
+          if (dSq > jd.radiusSq) continue;
+
+          const along = dx * jd.dir.x + dy * jd.dir.y + dz * jd.dir.z;
+          const jointDorsal = N_x * jd.up.x + N_y * jd.up.y + N_z * jd.up.z;
+
+          if (jd.kind === 'mcp' && jointDorsal > 0.25) {
+            const env = Math.exp(-dSq / (2 * 0.0068 * 0.0068)) * THREE.MathUtils.smoothstep(jointDorsal, 0.25, 0.68);
+            colR += env * 7.5;
+            colG += env * 2.0;
+            colB += env * 0.5;
+            heightVal += env * 0.045;
+          } else if (jd.kind === 'pip' || jd.kind === 'dip') {
+            if (jointDorsal > 0.30) {
+              // Two soft skin folds rather than hard striped ripples
+              const env = Math.exp(-(along * along) / (2 * 0.0038 * 0.0038)) * THREE.MathUtils.smoothstep(jointDorsal, 0.30, 0.72);
+              const ripple = Math.cos(along * 1650);
+              heightVal += env * ripple * 0.052;
+              colR -= env * Math.max(0, -ripple) * 6;
+              colG -= env * Math.max(0, -ripple) * 6;
+              colB -= env * Math.max(0, -ripple) * 5;
+            } else if (jointDorsal < -0.30) {
+              const pFade = THREE.MathUtils.smoothstep(-jointDorsal, 0.30, 0.72);
+              const c1 = Math.exp(-(along * along) / (2 * 0.0009 * 0.0009));
+              const fCrease = c1 * pFade;
+              colR *= 1 - fCrease * 0.11;
+              colG *= 1 - fCrease * 0.13;
+              colB *= 1 - fCrease * 0.12;
+              heightVal -= fCrease * 0.095;
+            }
+          }
+        }
+
+        // 4. Photorealistic Fingernails Harmonized with Rich Brown Skin
+        for (let k = 0; k < nailDescs.length; k++) {
+          const nd = nailDescs[k];
+          const rx = P_x - nd.dPos.x;
+          const ry = P_y - nd.dPos.y;
+          const rz = P_z - nd.dPos.z;
+          const dSq = rx * rx + ry * ry + rz * rz;
+          if (dSq > 0.028 * 0.028) continue;
+
+          const dd = N_x * nd.up.x + N_y * nd.up.y + N_z * nd.up.z;
+          if (dd < 0.24) continue;
+
+          const uAlong = rx * nd.dir.x + ry * nd.dir.y + rz * nd.dir.z;
+          const vLat = rx * nd.lat.x + ry * nd.lat.y + rz * nd.lat.z;
+
+          const nyRaw = (uAlong - nd.startAlong) / (nd.endAlong - nd.startAlong);
+          const nx = vLat / nd.halfWidth;
+          if (nyRaw < -0.14 || nyRaw > 1.12 || Math.abs(nx) > 1.22) continue;
+
+          const baseCurve = 0.14 * nx * nx;
+          const tipCurve = 1.0 - 0.18 * nx * nx;
+          const ny = (nyRaw - baseCurve) / Math.max(0.25, tipCurve - baseCurve);
+
+          const distFromSide = 1.0 - Math.abs(nx);
+          const distFromBase = ny;
+          const distFromTip = 1.0 - ny;
+          const edgeSigned = Math.min(distFromSide, distFromBase * 1.4, distFromTip * 1.4);
+
+          // Soft eponychium / lateral nail wall
+          if (edgeSigned > -0.26 && edgeSigned <= -0.05 && ny > -0.10 && ny < 0.96 && dd > 0.32) {
+            const wallT =
+              Math.exp(-((edgeSigned + 0.15) * (edgeSigned + 0.15)) / (2 * 0.065 * 0.065)) *
+              THREE.MathUtils.smoothstep(dd, 0.32, 0.56);
+            heightVal += wallT * 0.055;
+            colR += wallT * 4;
+            colG += wallT * 1.5;
+          }
+
+          // Subtle cuticle & lateral nail fold groove
+          if (edgeSigned > -0.18 && edgeSigned < 0.06 && dd > 0.32) {
+            const grooveT = Math.exp(-((edgeSigned + 0.025) * (edgeSigned + 0.025)) / (2 * 0.062 * 0.062));
+            const dorsalOk = THREE.MathUtils.smoothstep(dd, 0.32, 0.55);
+            const gAmt = grooveT * dorsalOk;
+            colR *= 1 - gAmt * 0.18;
+            colG *= 1 - gAmt * 0.21;
+            colB *= 1 - gAmt * 0.20;
+            heightVal -= gAmt * 0.22;
+          }
+
+          if (edgeSigned > 0 && dd > 0.34) {
+            const nailMask =
+              THREE.MathUtils.smoothstep(edgeSigned, 0.0, 0.095) *
+              THREE.MathUtils.smoothstep(dd, 0.34, 0.56);
+
+            // Pale warm lunula crescent near cuticle base
+            const lunulaDist = Math.hypot(nx * 0.90, (ny - 0.03) * 3.0);
+            const lunulaT = 1 - THREE.MathUtils.smoothstep(lunulaDist, 0.42, 0.68);
+
+            // Natural warm rose-mauve keratin nail bed
+            const stria = Math.sin(nx * 24) * 2.2;
+            let nR = 184 + stria;
+            let nG = 124 + stria * 0.7;
+            let nB = 110 + stria * 0.6;
+
+            // Subtle onychodermal band before free edge
+            const distalBand = Math.exp(-((ny - 0.74) * (ny - 0.74)) / (2 * 0.045 * 0.045));
+            nR -= distalBand * 13;
+            nG -= distalBand * 14;
+            nB -= distalBand * 13;
+
+            // Blend lunula
+            nR = THREE.MathUtils.lerp(nR, 214, lunulaT * 0.74);
+            nG = THREE.MathUtils.lerp(nG, 188, lunulaT * 0.74);
+            nB = THREE.MathUtils.lerp(nB, 174, lunulaT * 0.74);
+
+            // Clean natural warm ivory free tip (ny > 0.78)
+            const tipT = THREE.MathUtils.smoothstep(ny, 0.78, 0.91);
+            nR = THREE.MathUtils.lerp(nR, 224, tipT);
+            nG = THREE.MathUtils.lerp(nG, 210, tipT);
+            nB = THREE.MathUtils.lerp(nB, 194, tipT);
+
+            colR = THREE.MathUtils.lerp(colR, nR, nailMask);
+            colG = THREE.MathUtils.lerp(colG, nG, nailMask);
+            colB = THREE.MathUtils.lerp(colB, nB, nailMask);
+
+            // Smooth convex nail dome height & glossy keratin specular roughness
+            const nailDome = 0.22 * Math.max(0, 1 - nx * nx * 0.85);
+            heightVal = THREE.MathUtils.lerp(heightVal, 0.60 + nailDome, nailMask);
+            roughVal = THREE.MathUtils.lerp(roughVal, 0.20, nailMask);
+          }
+        }
+
+        const texIdx = py * SIZE + px;
+        const p4 = texIdx * 4;
+        albedo[p4] = THREE.MathUtils.clamp(Math.round(colR), 0, 255);
+        albedo[p4 + 1] = THREE.MathUtils.clamp(Math.round(colG), 0, 255);
+        albedo[p4 + 2] = THREE.MathUtils.clamp(Math.round(colB), 0, 255);
+        albedo[p4 + 3] = 255;
+
+        heightBuf[texIdx] = THREE.MathUtils.clamp(heightVal, 0, 1);
+
+        const roByte = THREE.MathUtils.clamp(Math.round(roughVal * 255), 24, 245);
+        roughBuf[p4] = roByte;
+        roughBuf[p4 + 1] = roByte;
+        roughBuf[p4 + 2] = roByte;
+        roughBuf[p4 + 3] = 255;
+
+        covered[texIdx] = 1;
+      }
+    }
+  }
+
+  dilateBakedBuffers(covered, albedo, heightBuf, roughBuf, SIZE, 3);
+
+  const albedoTex = finalizeDataTexture(albedo, SIZE, SIZE, true);
+  const normalTex = buildNormalMapFromHeight(heightBuf, SIZE, SIZE, 2.2);
+  const roughTex = finalizeDataTexture(roughBuf, SIZE, SIZE, false);
+
+  const set: AnatomicalSkinTexSet = { albedoTex, normalTex, roughTex };
+  handTexSetCache.set(side, set);
+  return set;
+}
+
+/**
+ * Generates a matching 256x256 seamless forearm & wrist skin texture set (Albedos, Normal, Roughness)
+ * with fine pores, gentle forearm veins, and ventral-wrist flexor creases matching the baked hand wrist seam.
+ */
+function getCachedForearmTextureSet(): AnatomicalSkinTexSet {
+  if (forearmTexSetCache) return forearmTexSetCache;
+
+  const SIZE = 256;
+  const total = SIZE * SIZE;
+  const albedo = new Uint8Array(total * 4);
+  const heightBuf = new Float32Array(total);
+  const roughBuf = new Uint8Array(total * 4);
+
+  for (let y = 0; y < SIZE; y++) {
+    const v = (y + 0.5) / SIZE; // 0 = tucked at wrist cuff, 1 = upper forearm
+    for (let x = 0; x < SIZE; x++) {
+      const u = (x + 0.5) / SIZE;
+      const theta = u * Math.PI * 2;
+      const ventralT = THREE.MathUtils.clamp((Math.cos(theta) * 0.5 + 0.5) * (1 - v * 0.48), 0, 1);
+
+      const nC = valueNoise3D(Math.cos(theta) * 5 + 1.2, Math.sin(theta) * 5 + 2.4, v * 12);
+      const nF = valueNoise3D(Math.cos(theta) * 28, Math.sin(theta) * 28, v * 58);
+
+      let colR = THREE.MathUtils.lerp(129, 158, ventralT) + (nC - 0.5) * 9 + (nF - 0.5) * 5;
+      let colG = THREE.MathUtils.lerp(78, 108, ventralT) + (nC - 0.5) * 7 + (nF - 0.5) * 4;
+      let colB = THREE.MathUtils.lerp(50, 79, ventralT) + (nC - 0.5) * 5 + (nF - 0.5) * 3;
+      let h = 0.5 + (nF - 0.5) * 0.024;
+      let rough = 0.72 + (nF - 0.5) * 0.05;
+
+      // Subtle inner-wrist flexor veins near anterior wrist
+      if (ventralT > 0.45 && v > 0.06 && v < 0.70) {
+        const vOff1 = Math.sin(theta - 0.18 - v * 0.25);
+        const vein = ventralT * Math.exp(-(vOff1 * vOff1) / (2 * 0.10 * 0.10));
+        colR -= vein * 5;
+        colG -= vein * 2;
+        colB += vein * 1.5;
+      }
+
+      // Soft wrist crease line near wrist junction
+      if (ventralT > 0.4 && v < 0.12) {
+        const cw = Math.exp(-((v - 0.045) * (v - 0.045)) / (2 * 0.014 * 0.014)) * ventralT;
+        colR *= 1 - cw * 0.09;
+        colG *= 1 - cw * 0.11;
+        colB *= 1 - cw * 0.10;
+        h -= cw * 0.08;
+      }
+
+      const idx = y * SIZE + x;
+      const p = idx * 4;
+      albedo[p] = THREE.MathUtils.clamp(Math.round(colR), 0, 255);
+      albedo[p + 1] = THREE.MathUtils.clamp(Math.round(colG), 0, 255);
+      albedo[p + 2] = THREE.MathUtils.clamp(Math.round(colB), 0, 255);
+      albedo[p + 3] = 255;
+
+      heightBuf[idx] = THREE.MathUtils.clamp(h, 0, 1);
+
+      const roByte = THREE.MathUtils.clamp(Math.round(rough * 255), 32, 240);
+      roughBuf[p] = roByte;
+      roughBuf[p + 1] = roByte;
+      roughBuf[p + 2] = roByte;
+      roughBuf[p + 3] = 255;
+    }
+  }
+
+  forearmTexSetCache = {
+    albedoTex: finalizeDataTexture(albedo, SIZE, SIZE, true),
+    normalTex: buildNormalMapFromHeight(heightBuf, SIZE, SIZE, 1.3),
+    roughTex: finalizeDataTexture(roughBuf, SIZE, SIZE, false),
+  };
+  return forearmTexSetCache;
+}
+
+/**
+ * Builds a side-matched tapered elliptical forearm mesh (z = +0.008 .. +0.34 in armRoot space)
+ * nested snugly INSIDE the GLB wrist cap at z = +0.008..+0.018 so zero wrist seams or intersections protrude.
+ */
+function createAnatomicalForearmGeometry(side: -1 | 1): THREE.BufferGeometry {
+  const segsZ = 12;
+  const segsR = 16;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let iz = 0; iz <= segsZ; iz++) {
+    const t = iz / segsZ;
+    const z = THREE.MathUtils.lerp(0.008, 0.34, t);
+    // Nest inside GLB wrist cuff at t=0..0.05 (z=0.008..0.024), then widen smoothly to forearm
+    const flareT = THREE.MathUtils.smoothstep(t, 0.02, 0.16);
+    const muscleSwell = Math.sin(Math.min(1, t * 1.15) * Math.PI) * 0.0042;
+    const rx = THREE.MathUtils.lerp(0.0138, 0.0172, flareT) + t * 0.0125 + muscleSwell * 0.72;
+    const ry = THREE.MathUtils.lerp(0.0190, 0.0230, flareT) + t * 0.0110 + muscleSwell;
+    // Align exact ellipse center with GLB wrist center at z=+0.012, relaxing to (0,0) up forearm
+    const centerDecay = 1 - THREE.MathUtils.smoothstep(t, 0.0, 0.30);
+    const cx = side * -0.0012 * centerDecay;
+    const cy = -0.0020 * centerDecay;
+
+    for (let ir = 0; ir <= segsR; ir++) {
+      const u = ir / segsR;
+      // theta=0 faces inward palmar side (+X on left, -X on right) so forearmTex ventral crease aligns cleanly
+      const theta = u * Math.PI * 2 + (side === 1 ? Math.PI : 0);
+      positions.push(cx + rx * Math.cos(theta), cy + ry * Math.sin(theta), z);
+      uvs.push(u, t);
+    }
+  }
+
+  const cols = segsR + 1;
+  for (let iz = 0; iz < segsZ; iz++) {
+    for (let ir = 0; ir < segsR; ir++) {
+      const a = iz * cols + ir;
+      const b = a + cols;
+      const c = b + 1;
+      const d = a + 1;
+      indices.push(a, d, b);
+      indices.push(b, d, c);
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+  return geom;
+}
+
+/**
+ * Builds an elliptical flared garment sleeve shell without end-cap overlap,
+ * ensuring >= 4mm clearance between inner forearm/cuff and outer abaya/coat layers.
+ */
+function createEllipticalSleeveGeometry(
+  zStart: number,
+  zEnd: number,
+  rxStart: number,
+  ryStart: number,
+  rxEnd: number,
+  ryEnd: number,
+  segsZ = 6,
+  segsR = 16
+): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let iz = 0; iz <= segsZ; iz++) {
+    const t = iz / segsZ;
+    const z = THREE.MathUtils.lerp(zStart, zEnd, t);
+    const rx = THREE.MathUtils.lerp(rxStart, rxEnd, t);
+    const ry = THREE.MathUtils.lerp(ryStart, ryEnd, t);
+    for (let ir = 0; ir <= segsR; ir++) {
+      const u = ir / segsR;
+      const theta = u * Math.PI * 2;
+      positions.push(rx * Math.cos(theta), ry * Math.sin(theta), z);
+      uvs.push(u * 2, t * 2);
+    }
+  }
+
+  const cols = segsR + 1;
+  for (let iz = 0; iz < segsZ; iz++) {
+    for (let ir = 0; ir < segsR; ir++) {
+      const a = iz * cols + ir;
+      const b = a + cols;
+      const c = b + 1;
+      const d = a + 1;
+      indices.push(a, d, b);
+      indices.push(b, d, c);
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+  return geom;
 }
 
 export function createFppClinicianHands3D(
@@ -796,31 +1911,35 @@ export function createFppClinicianHands3D(
     return m;
   };
 
-  const skinMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x8f5938,
-      map: textures.skinMicroMap,
-      roughnessMap: textures.skinRoughMap,
-      roughness: 0.58,
+  const forearmTexSet = getCachedForearmTextureSet();
+  const forearmSkinMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: forearmTexSet.albedoTex,
+      normalMap: forearmTexSet.normalTex,
+      normalScale: new THREE.Vector2(0.38, 0.38),
+      roughnessMap: forearmTexSet.roughTex,
+      roughness: 1.0,
       metalness: 0.0,
-      clearcoat: 0.06,
-      clearcoatRoughness: 0.62,
-      envMapIntensity: 0.95,
-      emissive: 0x2b170e,
-      emissiveIntensity: 0.14,
+      envMapIntensity: 0.34,
+      emissiveMap: forearmTexSet.albedoTex,
+      emissive: 0x451c0b,
+      emissiveIntensity: 0.10,
+      side: THREE.FrontSide,
     })
   );
 
-  const sleeveMat = trackMat(
+  const outerSleeveMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0xf2f4f7,
       bumpMap: textures.fabricWeaveBump,
-      bumpScale: 0.008,
-      roughness: 0.78,
+      bumpScale: 0.006,
+      roughness: 0.80,
       metalness: 0.02,
-      envMapIntensity: 0.85,
+      envMapIntensity: 0.55,
       emissive: 0x1e293b,
-      emissiveIntensity: 0.06,
+      emissiveIntensity: 0.07,
+      side: THREE.DoubleSide,
     })
   );
 
@@ -828,182 +1947,408 @@ export function createFppClinicianHands3D(
     new THREE.MeshStandardMaterial({
       color: 0xe2e8f0,
       bumpMap: textures.fabricWeaveBump,
-      bumpScale: 0.008,
-      roughness: 0.7,
-      metalness: 0.03,
-      envMapIntensity: 0.88,
+      bumpScale: 0.006,
+      roughness: 0.74,
+      metalness: 0.02,
+      envMapIntensity: 0.58,
       emissive: 0x1e293b,
-      emissiveIntensity: 0.06,
+      emissiveIntensity: 0.07,
+      side: THREE.DoubleSide,
+    })
+  );
+
+  const innerSleeveMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xf5f2eb,
+      bumpMap: textures.fabricWeaveBump,
+      bumpScale: 0.005,
+      roughness: 0.78,
+      metalness: 0.01,
+      envMapIntensity: 0.5,
+      side: THREE.DoubleSide,
     })
   );
 
   const watchStrapMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0x1e293b,
-      roughness: 0.68,
-      metalness: 0.08,
+      roughness: 0.65,
+      metalness: 0.1,
     })
   );
 
   const watchMetalMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0xcbd5e1,
-      roughness: 0.25,
-      metalness: 0.86,
+      roughness: 0.24,
+      metalness: 0.85,
     })
   );
 
   const watchDialMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0xf8fafc,
-      roughness: 0.2,
+      roughness: 0.18,
       metalness: 0.04,
       emissive: 0xe2e8f0,
-      emissiveIntensity: 0.1,
+      emissiveIntensity: 0.14,
     })
   );
 
-  // Shared anatomical finger geometries
-  const palmGeom = trackGeom(new THREE.BoxGeometry(0.072, 0.025, 0.082));
-  const wristGeom = trackGeom(new THREE.CylinderGeometry(0.025, 0.029, 0.054, 12));
-  wristGeom.rotateX(Math.PI / 2);
-  const sleeveGeom = trackGeom(new THREE.CylinderGeometry(0.035, 0.041, 0.18, 14));
-  sleeveGeom.rotateX(Math.PI / 2);
-  const cuffGeom = trackGeom(new THREE.CylinderGeometry(0.037, 0.037, 0.03, 14));
-  cuffGeom.rotateX(Math.PI / 2);
+  const buttonMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xf8fafc,
+      roughness: 0.35,
+      metalness: 0.08,
+    })
+  );
 
-  const fingerProxGeom = trackGeom(new THREE.CylinderGeometry(0.0072, 0.0082, 0.038, 8));
-  fingerProxGeom.rotateX(Math.PI / 2);
-  const fingerDistGeom = trackGeom(new THREE.CylinderGeometry(0.0059, 0.0071, 0.031, 8));
-  fingerDistGeom.rotateX(Math.PI / 2);
-  const fingerTipGeom = trackGeom(new THREE.SphereGeometry(0.006, 8, 6));
+  // Strictly separated radial/Z sleeve & side-matched forearm geometries (zero wrist cuff protrusion)
+  const leftForearmGeom = trackGeom(createAnatomicalForearmGeometry(-1));
+  const rightForearmGeom = trackGeom(createAnatomicalForearmGeometry(1));
+  // Long sleeve for lab_coat & shirt_pants: starts at z=+0.056 (behind cuff)
+  const longSleeveGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.056, 0.36, 0.032, 0.037, 0.044, 0.048)
+  );
+  // Crisp outer cuff collar: z = +0.034 .. +0.060 (wider by 3mm than inner wrist & ends cleanly before longSleeve)
+  const longCuffGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.034, 0.060, 0.0285, 0.0335, 0.0335, 0.0385)
+  );
+  // Short surgical scrubs sleeve: z = +0.182 .. +0.36 leaving forearm cleanly exposed
+  const shortSleeveGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.182, 0.36, 0.036, 0.040, 0.044, 0.048)
+  );
+  const shortHemGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.172, 0.184, 0.0365, 0.0405, 0.037, 0.041)
+  );
+  // Modest flared Abaya outer sleeve: generous bell drape z = +0.048 .. +0.36
+  const abayaSleeveGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.048, 0.36, 0.047, 0.051, 0.052, 0.055)
+  );
+  const abayaTrimGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.042, 0.050, 0.0465, 0.0505, 0.048, 0.052)
+  );
+  // Slim modest inner sleeve cuff inside wide Abaya bell: z = +0.026 .. +0.066 (20mm radial clearance!)
+  const abayaInnerCuffGeom = trackGeom(
+    createEllipticalSleeveGeometry(0.026, 0.066, 0.0245, 0.0305, 0.0285, 0.034)
+  );
 
-  const thumbProxGeom = trackGeom(new THREE.CylinderGeometry(0.0084, 0.0096, 0.034, 8));
-  thumbProxGeom.rotateX(Math.PI / 2);
-  const thumbDistGeom = trackGeom(new THREE.CylinderGeometry(0.0068, 0.0081, 0.028, 8));
-  thumbDistGeom.rotateX(Math.PI / 2);
+  interface ArmAssembly {
+    armRoot: THREE.Group;
+    handPivot: THREE.Group;
+    handHolder: THREE.Group;
+    forearmMesh: THREE.Mesh;
+    longSleeveMesh: THREE.Mesh;
+    longCuffMesh: THREE.Mesh;
+    cuffButtonMesh: THREE.Mesh;
+    shortSleeveMesh: THREE.Mesh;
+    shortHemMesh: THREE.Mesh;
+    abayaSleeveMesh: THREE.Mesh;
+    abayaTrimMesh: THREE.Mesh;
+    abayaInnerCuffMesh: THREE.Mesh;
+    watchGroup: THREE.Group | null;
+    handSkinMat: THREE.MeshStandardMaterial | null;
+    fkRig: HandSkeletonRig | null;
+    side: -1 | 1;
+  }
 
-  const buildArm = (side: -1 | 1): THREE.Group => {
-    const arm = new THREE.Group();
+  const attachGlbHand = (arm: ArmAssembly): boolean => {
+    if (arm.fkRig) return true;
+    const key = arm.side === -1 ? 'hand_left' : 'hand_right';
+    const template = glbRegistry.getModel(key);
+    if (!template) return false;
 
-    const sleeve = new THREE.Mesh(sleeveGeom, sleeveMat);
-    sleeve.position.set(0, 0, 0.12);
+    const clone = SkeletonUtils.clone(template);
+    let skinned: THREE.SkinnedMesh | null = null;
+    clone.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const m = child as THREE.Mesh;
+        m.castShadow = false;
+        m.receiveShadow = false;
+        m.frustumCulled = false;
+        m.renderOrder = 4;
+        if ((m as THREE.SkinnedMesh).isSkinnedMesh) {
+          skinned = m as THREE.SkinnedMesh;
+        }
+      }
+    });
 
-    const cuff = new THREE.Mesh(cuffGeom, cuffMat);
-    cuff.position.set(0, 0, 0.042);
+    if (!skinned) return false;
+    const sk = skinned as THREE.SkinnedMesh;
 
-    const wrist = new THREE.Mesh(wristGeom, skinMat);
-    wrist.position.set(0, -0.002, 0.016);
+    const bakedTexSet = getOrBakeHandTextureSet(sk.geometry, sk.skeleton.bones, arm.side);
+    const handSkinMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        map: bakedTexSet.albedoTex,
+        normalMap: bakedTexSet.normalTex,
+        normalScale: new THREE.Vector2(0.48, 0.48),
+        roughnessMap: bakedTexSet.roughTex,
+        roughness: 1.0,
+        metalness: 0.0,
+        envMapIntensity: 0.36,
+        emissiveMap: bakedTexSet.albedoTex,
+        emissive: 0x451c0b,
+        emissiveIntensity: 0.10,
+        side: THREE.FrontSide,
+      })
+    );
+    sk.material = handSkinMat;
+    arm.handSkinMat = handSkinMat;
 
+    const wristBone = sk.skeleton.bones.find((b) => b.name === 'wrist');
+    if (wristBone) {
+      clone.position.set(-wristBone.position.x, -wristBone.position.y, -wristBone.position.z);
+    }
+
+    arm.handHolder.add(clone);
+    arm.fkRig = buildFlatFkRig(sk, arm.side);
+    return true;
+  };
+
+  const buildArm = (side: -1 | 1): ArmAssembly => {
+    const armRoot = new THREE.Group();
+
+    const handPivot = new THREE.Group();
+    handPivot.position.set(0, 0, 0.010);
+    const handHolder = new THREE.Group();
+    handHolder.position.set(0, 0, -0.010);
+    // Orient WebXR hand (-Y fingers -> -Z forward, -Z thumb -> +Y up, palm inward)
+    handHolder.rotation.set(Math.PI / 2, 0, 0);
+    handPivot.add(handHolder);
+    armRoot.add(handPivot);
+
+    const forearmMesh = new THREE.Mesh(side === -1 ? leftForearmGeom : rightForearmGeom, forearmSkinMat);
+    const longSleeveMesh = new THREE.Mesh(longSleeveGeom, outerSleeveMat);
+    const longCuffMesh = new THREE.Mesh(longCuffGeom, cuffMat);
+
+    const cuffButtonMesh = new THREE.Mesh(
+      trackGeom(new THREE.CylinderGeometry(0.0044, 0.0044, 0.0032, 10)),
+      buttonMat
+    );
+    cuffButtonMesh.rotation.z = Math.PI / 2;
+    cuffButtonMesh.position.set(side * 0.0325, -0.004, 0.044);
+
+    const shortSleeveMesh = new THREE.Mesh(shortSleeveGeom, outerSleeveMat);
+    const shortHemMesh = new THREE.Mesh(shortHemGeom, cuffMat);
+
+    const abayaSleeveMesh = new THREE.Mesh(abayaSleeveGeom, outerSleeveMat);
+    const abayaTrimMesh = new THREE.Mesh(abayaTrimGeom, cuffMat);
+    const abayaInnerCuffMesh = new THREE.Mesh(abayaInnerCuffGeom, innerSleeveMat);
+
+    let watchGroup: THREE.Group | null = null;
     if (side === -1) {
-      // Clinical wristwatch on left wrist
+      watchGroup = new THREE.Group();
+      watchGroup.position.set(-0.0008, -0.0014, 0.032);
+
       const strap = new THREE.Mesh(
-        trackGeom(new THREE.TorusGeometry(0.0275, 0.0042, 6, 16)),
+        trackGeom(new THREE.TorusGeometry(0.0238, 0.0024, 6, 18)),
         watchStrapMat
       );
-      strap.position.set(0, -0.001, 0.02);
+      strap.scale.set(0.86, 1.12, 1.0);
       const bezel = new THREE.Mesh(
-        trackGeom(new THREE.CylinderGeometry(0.014, 0.014, 0.006, 14)),
+        trackGeom(new THREE.CylinderGeometry(0.0112, 0.0112, 0.0046, 14)),
         watchMetalMat
       );
-      bezel.position.set(0, 0.024, 0.02);
+      bezel.rotation.z = Math.PI / 2;
+      bezel.position.set(-0.0212, 0.005, 0);
       const dial = new THREE.Mesh(
-        trackGeom(new THREE.CylinderGeometry(0.011, 0.011, 0.007, 14)),
+        trackGeom(new THREE.CylinderGeometry(0.0090, 0.0090, 0.0052, 14)),
         watchDialMat
       );
-      dial.position.set(0, 0.0242, 0.02);
-      arm.add(strap, bezel, dial);
+      dial.rotation.z = Math.PI / 2;
+      dial.position.set(-0.0216, 0.005, 0);
+      watchGroup.add(strap, bezel, dial);
+      armRoot.add(watchGroup);
     }
 
-    const palm = new THREE.Mesh(palmGeom, skinMat);
-    palm.position.set(0, -0.004, -0.042);
-
-    // 4 main articulated fingers (Index, Middle, Ring, Pinky)
-    // Inner thumb side is x = -side * 0.026 (so left arm's thumb points +X inward, right arm's thumb points -X inward)
-    const fingerSpecs = [
-      { x: -side * 0.023, lenScale: 0.96, splay: -side * 0.05 },
-      { x: -side * 0.0075, lenScale: 1.04, splay: -side * 0.015 },
-      { x: side * 0.0085, lenScale: 0.98, splay: side * 0.025 },
-      { x: side * 0.0235, lenScale: 0.80, splay: side * 0.065 },
+    const meshes = [
+      forearmMesh,
+      longSleeveMesh,
+      longCuffMesh,
+      cuffButtonMesh,
+      shortSleeveMesh,
+      shortHemMesh,
+      abayaSleeveMesh,
+      abayaTrimMesh,
+      abayaInnerCuffMesh,
     ];
-    for (const f of fingerSpecs) {
-      const fRoot = new THREE.Group();
-      fRoot.position.set(f.x, -0.001, -0.078);
-      fRoot.rotation.set(-0.22, f.splay, 0);
-
-      const prox = new THREE.Mesh(fingerProxGeom, skinMat);
-      prox.scale.set(1, 1, f.lenScale);
-      prox.position.set(0, 0, -0.017 * f.lenScale);
-
-      const distJoint = new THREE.Group();
-      distJoint.position.set(0, 0, -0.034 * f.lenScale);
-      distJoint.rotation.x = -0.34;
-
-      const dist = new THREE.Mesh(fingerDistGeom, skinMat);
-      dist.scale.set(1, 1, f.lenScale);
-      dist.position.set(0, 0, -0.014 * f.lenScale);
-
-      const tip = new THREE.Mesh(fingerTipGeom, skinMat);
-      tip.position.set(0, 0, -0.028 * f.lenScale);
-
-      distJoint.add(dist, tip);
-      fRoot.add(prox, distJoint);
-      arm.add(fRoot);
+    for (const m of meshes) {
+      m.castShadow = false;
+      m.receiveShadow = false;
+      m.frustumCulled = false;
+      m.renderOrder = 3;
+      armRoot.add(m);
+    }
+    if (watchGroup) {
+      watchGroup.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          o.castShadow = false;
+          o.receiveShadow = false;
+          o.frustumCulled = false;
+          o.renderOrder = 4;
+        }
+      });
     }
 
-    // Articulated thumb facing inward toward center
-    const thumbRoot = new THREE.Group();
-    thumbRoot.position.set(-side * 0.032, -0.004, -0.026);
-    thumbRoot.rotation.set(-0.12, -side * 0.52, side * 0.25);
+    const assembly: ArmAssembly = {
+      armRoot,
+      handPivot,
+      handHolder,
+      forearmMesh,
+      longSleeveMesh,
+      longCuffMesh,
+      cuffButtonMesh,
+      shortSleeveMesh,
+      shortHemMesh,
+      abayaSleeveMesh,
+      abayaTrimMesh,
+      abayaInnerCuffMesh,
+      watchGroup,
+      handSkinMat: null,
+      fkRig: null,
+      side,
+    };
 
-    const tProx = new THREE.Mesh(thumbProxGeom, skinMat);
-    tProx.position.set(0, 0, -0.015);
-    const tDistJoint = new THREE.Group();
-    tDistJoint.position.set(0, 0, -0.029);
-    tDistJoint.rotation.set(-0.14, side * 0.18, 0);
-    const tDist = new THREE.Mesh(thumbDistGeom, skinMat);
-    tDist.position.set(0, 0, -0.012);
-    const tTip = new THREE.Mesh(fingerTipGeom, skinMat);
-    tTip.position.set(0, 0, -0.025);
-    tDistJoint.add(tDist, tTip);
-    thumbRoot.add(tProx, tDistJoint);
-
-    arm.add(sleeve, cuff, wrist, palm, thumbRoot);
-    return arm;
+    attachGlbHand(assembly);
+    return assembly;
   };
 
-  const leftArm = buildArm(-1);
-  const rightArm = buildArm(1);
-  group.add(leftArm, rightArm);
-  group.traverse((obj) => {
-    obj.frustumCulled = false;
-    if ((obj as THREE.Mesh).isMesh) {
-      obj.renderOrder = 3;
-    }
-  });
+  const leftAsm = buildArm(-1);
+  const rightAsm = buildArm(1);
+  group.add(leftAsm.armRoot, rightAsm.armRoot);
   group.visible = false;
 
+  let currentProfile: PlayerCharacterConfig | undefined = initialProfile;
+
   const updateAppearance = (profile?: PlayerCharacterConfig) => {
-    skinMat.color.set(PLAYER_DEFAULT_SKIN);
-    if (profile) {
-      const meta = resolvePlayerOutfitMeta(profile.outfitId);
-      if (meta.medicalWear === 'lab_coat') {
-        sleeveMat.color.setHex(0xf2f4f7);
-        cuffMat.color.setHex(0xe2e8f0);
-      } else {
-        sleeveMat.color.set(meta.shirtColor);
-        cuffMat.color.set(meta.shirtColor).lerp(new THREE.Color(0xffffff), 0.14);
+    currentProfile = profile;
+    const isFemale = profile?.gender === 'female';
+    const meta = resolvePlayerOutfitMeta(profile?.outfitId);
+
+    // Gender-authentic hand & forearm proportions with zero extra meshes or textures
+    // Female: narrower palm/thickness (0.83 x 0.85) with graceful elongated length (0.98) + tapered bones
+    const handScaleThick = isFemale ? 0.83 : 1.02;
+    const handScaleLen = isFemale ? 0.98 : 1.02;
+    const handScaleWidth = isFemale ? 0.85 : 1.02;
+
+    forearmSkinMat.normalScale.setScalar(isFemale ? 0.22 : 0.38);
+
+    for (const asm of [leftAsm, rightAsm]) {
+      asm.handHolder.scale.set(handScaleThick, handScaleLen, handScaleWidth);
+      asm.forearmMesh.scale.set(handScaleThick, handScaleWidth, 1.0);
+      if (asm.handSkinMat) {
+        asm.handSkinMat.normalScale.setScalar(isFemale ? 0.28 : 0.48);
       }
-    } else {
-      sleeveMat.color.setHex(0xf2f4f7);
+      if (asm.fkRig) {
+        applyGenderBoneTaper(asm.fkRig, isFemale);
+      }
+      if (asm.watchGroup) {
+        asm.watchGroup.scale.set(
+          isFemale ? 0.82 : 1.02,
+          isFemale ? 0.84 : 1.02,
+          isFemale ? 0.88 : 1.0
+        );
+      }
+    }
+
+    const isScrubs = meta.id === 'scrubs';
+    const isLabCoat = meta.id === 'lab_coat';
+    const isShirtPants = meta.id === 'shirt_pants';
+    const isAbayaClosed = meta.id === 'female_abaya_closed' || meta.id === 'female_abaya_niqab';
+    const isAbayaLight = meta.id === 'female_abaya_light';
+
+    if (isLabCoat) {
+      outerSleeveMat.color.setHex(0xf2f4f7);
       cuffMat.color.setHex(0xe2e8f0);
+      outerSleeveMat.emissive.setHex(0x1e293b);
+      outerSleeveMat.emissiveIntensity = 0.08;
+    } else if (isScrubs) {
+      outerSleeveMat.color.set(meta.shirtColor);
+      cuffMat.color.set(meta.pantsColor);
+      outerSleeveMat.emissive.setHex(0x0c4a6e);
+      outerSleeveMat.emissiveIntensity = 0.07;
+    } else if (isShirtPants) {
+      outerSleeveMat.color.set(meta.shirtColor);
+      cuffMat.color.set(meta.shirtColor).lerp(new THREE.Color(0xffffff), 0.24);
+      outerSleeveMat.emissive.setHex(0x1e293b);
+      outerSleeveMat.emissiveIntensity = 0.06;
+    } else if (isAbayaLight) {
+      outerSleeveMat.color.set(meta.shirtColor);
+      cuffMat.color.set(meta.shirtColor).lerp(new THREE.Color(0xffffff), 0.14);
+      innerSleeveMat.color.set(meta.pantsColor);
+      outerSleeveMat.emissive.setHex(0x2d241c);
+      outerSleeveMat.emissiveIntensity = 0.08;
+    } else {
+      // Closed Abaya / Abaya & Niqab
+      outerSleeveMat.color.set(meta.shirtColor);
+      cuffMat.color.setHex(0x282b34);
+      innerSleeveMat.color.setHex(0x1f2128);
+      outerSleeveMat.emissive.setHex(0x0f172a);
+      outerSleeveMat.emissiveIntensity = 0.12;
+    }
+
+    for (const asm of [leftAsm, rightAsm]) {
+      asm.forearmMesh.visible = true;
+      asm.longSleeveMesh.visible = isLabCoat || isShirtPants;
+      asm.longCuffMesh.visible = isLabCoat || isShirtPants;
+      asm.cuffButtonMesh.visible = isShirtPants;
+      asm.shortSleeveMesh.visible = isScrubs;
+      asm.shortHemMesh.visible = isScrubs;
+      asm.abayaSleeveMesh.visible = isAbayaClosed || isAbayaLight;
+      asm.abayaTrimMesh.visible = isAbayaClosed || isAbayaLight;
+      asm.abayaInnerCuffMesh.visible = isAbayaClosed || isAbayaLight;
+      if (asm.watchGroup) {
+        asm.watchGroup.visible = !isAbayaClosed;
+      }
     }
   };
+
+  // Ensure hands attach cleanly even if GLBs finish loading right after boot
+  const unsubGlbReady = glbRegistry.onReady(() => {
+    const attachedL = attachGlbHand(leftAsm);
+    const attachedR = attachGlbHand(rightAsm);
+    if (attachedL || attachedR) {
+      updateAppearance(currentProfile);
+    }
+  });
 
   updateAppearance(initialProfile);
 
+  // Pre-allocated kinematic & damping state (zero GC allocations per frame!)
   const halfHeightAtArm = 0.38 * Math.tan(THREE.MathUtils.degToRad(60 * 0.5));
   let holdBlend = 0;
+  let probeBlend = 0;
+  let tapSmooth = 0;
+  let swayX = 0;
+  let swayY = 0;
+  let prevUpdateTime = -1;
+
+  const curLeftPose: FingerPoseParams = {
+    indexCurl: 0.22,
+    middleCurl: 0.26,
+    ringCurl: 0.32,
+    pinkyCurl: 0.38,
+    thumbCurl: 0.18,
+    thumbOpp: 0.26,
+    splay: 0.22,
+  };
+  const curRightPose: FingerPoseParams = {
+    indexCurl: 0.22,
+    middleCurl: 0.26,
+    ringCurl: 0.32,
+    pinkyCurl: 0.38,
+    thumbCurl: 0.18,
+    thumbOpp: 0.26,
+    splay: 0.22,
+  };
+  const targetLeftPose: FingerPoseParams = { ...curLeftPose };
+  const targetRightPose: FingerPoseParams = { ...curRightPose };
+
+  const _gripEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  const _gripQuat = new THREE.Quaternion();
+  const _gripPocketVec = new THREE.Vector3();
+  const _gripOut = { posX: 0, posY: 0, posZ: 0, pitch: 0, yaw: 0, roll: 0 };
 
   const solveArmGripPose = (
     side: -1 | 1,
@@ -1013,30 +2358,46 @@ export function createFppClinicianHands3D(
     style: 'pole' | 'bar' | 'crate'
   ) => {
     const shX = side * 0.24;
-    const shY = -0.22;
+    const shY = -0.24;
     const shZ = 0.04;
     const dx = tx - shX;
     const dy = ty - shY;
     const dz = tz - shZ;
-    const horiz = Math.max(0.12, Math.hypot(dx, dz));
+    const horiz = Math.max(0.14, Math.hypot(dx, dz));
     const yaw = Math.atan2(-dx, -dz);
     const pitch = Math.atan2(dy, horiz);
 
-    // Offset arm origin slightly back toward shoulder so palm center (-0.055 Z) clamps directly on target
-    const invLen = 1 / Math.max(0.15, Math.hypot(dx, dy, dz));
-    const backDist = 0.056;
-    const posX = tx - dx * invLen * backDist;
-    const posY = ty - dy * invLen * backDist + 0.008;
-    const posZ = tz - dz * invLen * backDist;
-
+    // Palms face downward onto cart bar (`side * 1.35`), inward onto vertical pole or side crate handles
     const roll =
-      style === 'pole'
-        ? -side * 1.12
-        : style === 'crate'
-          ? -side * 0.88
-          : -side * 0.16;
+      style === 'bar'
+        ? side * 1.35
+        : style === 'pole'
+          ? side * 0.18
+          : side * 0.26;
 
-    return { posX, posY, posZ, pitch, yaw, roll };
+    // Exact grip pocket in handHolder space: between curled thumb + index tip (~ -side*0.045, +0.022, -0.095)
+    _gripPocketVec.set(-side * 0.045, 0.022, -0.095);
+    _gripEuler.set(pitch, yaw, roll, 'YXZ');
+    _gripQuat.setFromEuler(_gripEuler);
+    _gripPocketVec.applyQuaternion(_gripQuat);
+
+    _gripOut.posX = tx - _gripPocketVec.x;
+    _gripOut.posY = ty - _gripPocketVec.y;
+    _gripOut.posZ = tz - _gripPocketVec.z;
+    _gripOut.pitch = pitch;
+    _gripOut.yaw = yaw;
+    _gripOut.roll = roll;
+    return _gripOut;
+  };
+
+  const dampPose = (cur: FingerPoseParams, tgt: FingerPoseParams, dt: number) => {
+    cur.indexCurl = THREE.MathUtils.damp(cur.indexCurl, tgt.indexCurl, 14, dt);
+    cur.middleCurl = THREE.MathUtils.damp(cur.middleCurl, tgt.middleCurl, 14, dt);
+    cur.ringCurl = THREE.MathUtils.damp(cur.ringCurl, tgt.ringCurl, 14, dt);
+    cur.pinkyCurl = THREE.MathUtils.damp(cur.pinkyCurl, tgt.pinkyCurl, 14, dt);
+    cur.thumbCurl = THREE.MathUtils.damp(cur.thumbCurl, tgt.thumbCurl, 14, dt);
+    cur.thumbOpp = THREE.MathUtils.damp(cur.thumbOpp, tgt.thumbOpp, 14, dt);
+    cur.splay = THREE.MathUtils.damp(cur.splay, tgt.splay, 12, dt);
   };
 
   const updateMotion = (
@@ -1045,85 +2406,238 @@ export function createFppClinicianHands3D(
     timeSec: number,
     isSpeakingOrExam: boolean,
     aspect = 1.6,
-    gripTarget?: FppHandGripTarget
+    gripTarget?: FppHandGripTarget,
+    interaction?: FppHandInteractionContext
   ) => {
-    const visible = fppSmooth > 0.48;
+    const attachedLateL = !leftAsm.fkRig && attachGlbHand(leftAsm);
+    const attachedLateR = !rightAsm.fkRig && attachGlbHand(rightAsm);
+    if (attachedLateL || attachedLateR) {
+      updateAppearance(currentProfile);
+    }
+
+    // Keep hands visible across entire FPP session including focus close-ups (effectiveHandAlpha ~ 0.45)
+    const visible = fppSmooth > 0.12;
     group.visible = visible;
     if (!visible) {
       holdBlend = 0;
+      probeBlend = 0;
+      tapSmooth = 0;
+      swayX = 0;
+      swayY = 0;
+      prevUpdateTime = -1;
       return;
     }
 
-    const t = THREE.MathUtils.clamp((fppSmooth - 0.48) / 0.52, 0, 1);
+    const dt = prevUpdateTime < 0 ? 0.016 : THREE.MathUtils.clamp(timeSec - prevUpdateTime, 0.001, 0.05);
+    prevUpdateTime = timeSec;
+
+    const focusB = interaction?.focusBlend ?? 0;
+    const t = THREE.MathUtils.clamp((fppSmooth - 0.16) / 0.84, 0, 1);
     const easeIn = t * t * t * (t * (t * 6 - 15) + 10);
-    const dropY = (1 - easeIn) * -0.14;
+    // Lower slightly when examining bed close up instead of hiding off-screen
+    const focusDrop = focusB * -0.022;
+    const dropY = (1 - easeIn) * -0.055 + focusDrop;
 
     const halfWidth = halfHeightAtArm * Math.max(0.46, aspect);
-    const armX = Math.min(0.168, halfWidth * 0.65);
+    // Natural shoulder-spaced arm framing without squeezing toward viewport center
+    const armX = THREE.MathUtils.clamp(halfWidth * 0.72, 0.148, 0.208);
+    const portraitZPush = aspect < 0.9 ? THREE.MathUtils.clamp((0.9 - aspect) * 0.12, 0, 0.05) : 0;
 
-    const breath = Math.sin(timeSec * 1.75) * 0.0032;
+    // Inertia sway from camera turning & lateral strafing
+    const velYaw = interaction?.yawVel ?? 0;
+    const velPitch = interaction?.pitchVel ?? 0;
+    const velRight = interaction?.velRight ?? 0;
+    const targetSwayX = THREE.MathUtils.clamp(-velYaw * 0.012 - velRight * 0.010, -0.026, 0.026);
+    const targetSwayY = THREE.MathUtils.clamp(velPitch * 0.010, -0.020, 0.020);
+    swayX = THREE.MathUtils.damp(swayX, targetSwayX, 11, dt);
+    swayY = THREE.MathUtils.damp(swayY, targetSwayY, 11, dt);
+
+    const breath = Math.sin(timeSec * 1.75) * 0.0024;
     const walkSin = Math.sin(walkBob);
     const walkCos = Math.cos(walkBob * 2);
-    const examGesture = isSpeakingOrExam && !gripTarget?.active ? Math.sin(timeSec * 3.1) * 0.012 : 0;
+    const moveSpeedAmt = Math.min(1, Math.hypot(interaction?.velForward ?? 0, interaction?.velRight ?? 0) / 1.15);
+    const walkSwing = walkSin * 0.014 * (0.28 + moveSpeedAmt * 0.72);
+    const walkBobY = walkCos * 0.0038 * (0.28 + moveSpeedAmt * 0.72);
+    const examWave = isSpeakingOrExam && !gripTarget?.active ? Math.sin(timeSec * 3.1) * 0.008 : 0;
 
-    const targetHold = gripTarget?.active ? 1 : 0;
-    holdBlend += (targetHold - holdBlend) * 0.22;
+    holdBlend = THREE.MathUtils.damp(holdBlend, gripTarget?.active ? 1 : 0, 12, dt);
+    const probeActive = Boolean(
+      !gripTarget?.active &&
+        (interaction?.hasSelectedProbe || interaction?.isDraggingProbe)
+    );
+    probeBlend = THREE.MathUtils.damp(probeBlend, probeActive ? 1 : 0, 11, dt);
+    const tapActive = Boolean(!gripTarget?.active && (interaction?.consoleTapPulse ?? 0) > 0.02);
+    tapSmooth = THREE.MathUtils.damp(
+      tapSmooth,
+      tapActive ? Math.sin(Math.min(1, 1 - (interaction?.consoleTapPulse ?? 0)) * Math.PI) : 0,
+      18,
+      dt
+    );
 
-    const idleLX = -armX;
-    const idleLY = -0.106 + dropY + breath + walkCos * 0.0038;
-    const idleLZ = -0.38 + walkSin * 0.011;
-    const idleLPitch = 0.24 + breath * 1.6 + examGesture;
-    const idleLYaw = -0.28;
-    const idleLRoll = -0.16;
+    // Natural semi-pronated relaxed clinician posture (palms angled softly downward/inward, relaxed cascade)
+    let lPosX = -armX + swayX;
+    let lPosY = -0.168 + dropY + breath + walkBobY + swayY;
+    let lPosZ = -0.365 - portraitZPush + walkSwing;
+    let lPitch = 0.05 + breath * 1.4 + examWave;
+    let lYaw = -0.20 - velYaw * 0.02;
+    let lRoll = -0.92;
+    let lWristPitch = 0.02;
+    let lWristYaw = 0;
+    let lWristRoll = 0;
 
-    const idleRX = armX;
-    const idleRY = -0.106 + dropY + breath + walkCos * 0.0038 + Math.abs(examGesture) * 0.45;
-    const idleRZ = -0.38 - walkSin * 0.011 - (isSpeakingOrExam && !gripTarget?.active ? 0.014 : 0);
-    const idleRPitch = 0.26 + breath * 1.6 + examGesture * 1.3;
-    const idleRYaw = 0.30;
-    const idleRRoll = 0.16;
+    let rPosX = armX + swayX;
+    let rPosY = -0.168 + dropY + breath + walkBobY + swayY + Math.abs(examWave) * 0.4;
+    let rPosZ = -0.365 - portraitZPush - walkSwing - (isSpeakingOrExam && !gripTarget?.active ? 0.010 : 0);
+    let rPitch = 0.06 + breath * 1.4 + examWave * 1.2;
+    let rYaw = 0.20 - velYaw * 0.02;
+    let rRoll = 0.92;
+    let rWristPitch = 0.02;
+    let rWristYaw = 0;
+    let rWristRoll = 0;
 
+    // Relaxed anatomical finger cascade with minimal radial splay + subtle graceful female poise
+    const isFemaleNow = currentProfile?.gender === 'female';
+    const restCurlShift = (isSpeakingOrExam ? -0.05 : 0) + (isFemaleNow ? -0.025 : 0);
+    targetLeftPose.indexCurl = 0.24 + restCurlShift + Math.sin(timeSec * 1.4) * 0.015;
+    targetLeftPose.middleCurl = 0.30 + restCurlShift * 0.85;
+    targetLeftPose.ringCurl = 0.37 + restCurlShift * 0.55;
+    targetLeftPose.pinkyCurl = 0.44 + restCurlShift * 0.35;
+    targetLeftPose.thumbCurl = isFemaleNow ? 0.14 : 0.16;
+    targetLeftPose.thumbOpp = isFemaleNow ? 0.18 : 0.20;
+    targetLeftPose.splay = isSpeakingOrExam ? 0.14 : 0.08;
+
+    targetRightPose.indexCurl = 0.23 + restCurlShift;
+    targetRightPose.middleCurl = 0.29 + restCurlShift * 0.85;
+    targetRightPose.ringCurl = 0.36 + restCurlShift * 0.55;
+    targetRightPose.pinkyCurl = 0.43 + restCurlShift * 0.35;
+    targetRightPose.thumbCurl = isFemaleNow ? 0.14 : 0.16;
+    targetRightPose.thumbOpp = isFemaleNow ? 0.18 : 0.20;
+    targetRightPose.splay = isSpeakingOrExam ? 0.14 : 0.08;
+
+    // 1. Carrying / Rolling Device Grip (pole / cart handlebar / lifted tray)
     if (holdBlend > 0.01 && gripTarget) {
-      const lGrip = solveArmGripPose(-1, gripTarget.leftX, gripTarget.leftY, gripTarget.leftZ, gripTarget.style);
-      const rGrip = solveArmGripPose(1, gripTarget.rightX, gripTarget.rightY, gripTarget.rightZ, gripTarget.style);
-      const bobGripY = walkCos * 0.0028;
+      const lG = solveArmGripPose(
+        -1,
+        gripTarget.leftX,
+        gripTarget.leftY,
+        gripTarget.leftZ,
+        gripTarget.style
+      );
+      const bobG = walkCos * 0.0024;
+      lPosX = THREE.MathUtils.lerp(lPosX, lG.posX + swayX * 0.25, holdBlend);
+      lPosY = THREE.MathUtils.lerp(lPosY, lG.posY + bobG, holdBlend);
+      lPosZ = THREE.MathUtils.lerp(lPosZ, lG.posZ, holdBlend);
+      lPitch = THREE.MathUtils.lerp(lPitch, lG.pitch, holdBlend);
+      lYaw = THREE.MathUtils.lerp(lYaw, lG.yaw, holdBlend);
+      lRoll = THREE.MathUtils.lerp(lRoll, lG.roll, holdBlend);
 
-      leftArm.position.set(
-        THREE.MathUtils.lerp(idleLX, lGrip.posX, holdBlend),
-        THREE.MathUtils.lerp(idleLY, lGrip.posY + bobGripY, holdBlend),
-        THREE.MathUtils.lerp(idleLZ, lGrip.posZ, holdBlend)
+      const rG = solveArmGripPose(
+        1,
+        gripTarget.rightX,
+        gripTarget.rightY,
+        gripTarget.rightZ,
+        gripTarget.style
       );
-      leftArm.rotation.set(
-        THREE.MathUtils.lerp(idleLPitch, lGrip.pitch, holdBlend),
-        THREE.MathUtils.lerp(idleLYaw, lGrip.yaw, holdBlend),
-        THREE.MathUtils.lerp(idleLRoll, lGrip.roll, holdBlend)
-      );
+      rPosX = THREE.MathUtils.lerp(rPosX, rG.posX + swayX * 0.25, holdBlend);
+      rPosY = THREE.MathUtils.lerp(rPosY, rG.posY + bobG, holdBlend);
+      rPosZ = THREE.MathUtils.lerp(rPosZ, rG.posZ, holdBlend);
+      rPitch = THREE.MathUtils.lerp(rPitch, rG.pitch, holdBlend);
+      rYaw = THREE.MathUtils.lerp(rYaw, rG.yaw, holdBlend);
+      rRoll = THREE.MathUtils.lerp(rRoll, rG.roll, holdBlend);
 
-      rightArm.position.set(
-        THREE.MathUtils.lerp(idleRX, rGrip.posX, holdBlend),
-        THREE.MathUtils.lerp(idleRY, rGrip.posY + bobGripY, holdBlend),
-        THREE.MathUtils.lerp(idleRZ, rGrip.posZ, holdBlend)
-      );
-      rightArm.rotation.set(
-        THREE.MathUtils.lerp(idleRPitch, rGrip.pitch, holdBlend),
-        THREE.MathUtils.lerp(idleRYaw, rGrip.yaw, holdBlend),
-        THREE.MathUtils.lerp(idleRRoll, rGrip.roll, holdBlend)
-      );
-    } else {
-      leftArm.position.set(idleLX, idleLY, idleLZ);
-      leftArm.rotation.set(idleLPitch, idleLYaw, idleLRoll);
-      rightArm.position.set(idleRX, idleRY, idleRZ);
-      rightArm.rotation.set(idleRPitch, idleRYaw, idleRRoll);
+      const gripCurl = gripTarget.style === 'pole' ? 0.86 : 0.78;
+      const thumbGrip = gripTarget.style === 'pole' ? 0.78 : 0.68;
+      targetLeftPose.indexCurl = gripCurl;
+      targetLeftPose.middleCurl = gripCurl + 0.04;
+      targetLeftPose.ringCurl = gripCurl + 0.08;
+      targetLeftPose.pinkyCurl = gripCurl + 0.10;
+      targetLeftPose.thumbCurl = thumbGrip;
+      targetLeftPose.thumbOpp = 0.68;
+      targetLeftPose.splay = 0.06;
+
+      targetRightPose.indexCurl = gripCurl;
+      targetRightPose.middleCurl = gripCurl + 0.04;
+      targetRightPose.ringCurl = gripCurl + 0.08;
+      targetRightPose.pinkyCurl = gripCurl + 0.10;
+      targetRightPose.thumbCurl = thumbGrip;
+      targetRightPose.thumbOpp = 0.68;
+      targetRightPose.splay = 0.06;
     }
+
+    // 2. Bedside Probe / Pad Aiming & Dragging (Right hand guides cleanly in right peripheral zone, Left hand clears out)
+    if (probeBlend > 0.01 && interaction) {
+      const aimX = THREE.MathUtils.clamp(interaction.probeTargetCamX, 0.065, 0.24);
+      const aimY = THREE.MathUtils.clamp(interaction.probeTargetCamY, -0.21, -0.055);
+      const aimZ = THREE.MathUtils.clamp(interaction.probeTargetCamZ, -0.54, -0.35);
+
+      const pressDepth = interaction.isDraggingProbe ? 0.018 : 0.0;
+      rPosX = THREE.MathUtils.lerp(rPosX, aimX + 0.032, probeBlend);
+      rPosY = THREE.MathUtils.lerp(rPosY, aimY - 0.016 - pressDepth * 0.4, probeBlend);
+      rPosZ = THREE.MathUtils.lerp(rPosZ, aimZ + 0.095 - pressDepth, probeBlend);
+      rPitch = THREE.MathUtils.lerp(rPitch, 0.02 - pressDepth * 2.0, probeBlend);
+      rYaw = THREE.MathUtils.lerp(rYaw, 0.36, probeBlend);
+      rRoll = THREE.MathUtils.lerp(rRoll, 0.94, probeBlend);
+      rWristPitch = THREE.MathUtils.lerp(rWristPitch, -0.08, probeBlend);
+
+      // Left hand tucks cleanly out to lower-left so it never overlaps right working hand
+      lPosX = THREE.MathUtils.lerp(lPosX, -Math.max(armX, 0.155), probeBlend);
+      lPosY = THREE.MathUtils.lerp(lPosY, -0.185, probeBlend);
+
+      // Pincer/probe grip on right hand
+      targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.56, probeBlend);
+      targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.62, probeBlend);
+      targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.78, probeBlend);
+      targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.84, probeBlend);
+      targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.48, probeBlend);
+      targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.76, probeBlend);
+      targetRightPose.splay = 0.06;
+    }
+
+    // 3. Console Parameter / Start Screen Tap (Crisp extended right index press)
+    if (tapSmooth > 0.01) {
+      rPosX = THREE.MathUtils.lerp(rPosX, 0.115, tapSmooth);
+      rPosY = THREE.MathUtils.lerp(rPosY, -0.105, tapSmooth);
+      rPosZ = THREE.MathUtils.lerp(rPosZ, -0.455, tapSmooth);
+      rPitch = THREE.MathUtils.lerp(rPitch, -0.04, tapSmooth);
+      rYaw = THREE.MathUtils.lerp(rYaw, 0.24, tapSmooth);
+      rRoll = THREE.MathUtils.lerp(rRoll, 1.05, tapSmooth);
+      rWristPitch = THREE.MathUtils.lerp(rWristPitch, -0.09, tapSmooth);
+
+      targetRightPose.indexCurl = THREE.MathUtils.lerp(targetRightPose.indexCurl, 0.08, tapSmooth);
+      targetRightPose.middleCurl = THREE.MathUtils.lerp(targetRightPose.middleCurl, 0.78, tapSmooth);
+      targetRightPose.ringCurl = THREE.MathUtils.lerp(targetRightPose.ringCurl, 0.84, tapSmooth);
+      targetRightPose.pinkyCurl = THREE.MathUtils.lerp(targetRightPose.pinkyCurl, 0.88, tapSmooth);
+      targetRightPose.thumbCurl = THREE.MathUtils.lerp(targetRightPose.thumbCurl, 0.52, tapSmooth);
+      targetRightPose.thumbOpp = THREE.MathUtils.lerp(targetRightPose.thumbOpp, 0.64, tapSmooth);
+    }
+
+    dampPose(curLeftPose, targetLeftPose, dt);
+    dampPose(curRightPose, targetRightPose, dt);
+
+    if (leftAsm.fkRig) {
+      applyHandFkPose(leftAsm.fkRig, curLeftPose);
+    }
+    if (rightAsm.fkRig) {
+      applyHandFkPose(rightAsm.fkRig, curRightPose);
+    }
+
+    leftAsm.armRoot.position.set(lPosX, lPosY, lPosZ);
+    leftAsm.armRoot.rotation.set(lPitch, lYaw, lRoll, 'YXZ');
+    leftAsm.handPivot.rotation.set(lWristPitch, lWristYaw, lWristRoll, 'YXZ');
+
+    rightAsm.armRoot.position.set(rPosX, rPosY, rPosZ);
+    rightAsm.armRoot.rotation.set(rPitch, rYaw, rRoll, 'YXZ');
+    rightAsm.handPivot.rotation.set(rWristPitch, rWristYaw, rWristRoll, 'YXZ');
   };
 
   return {
     group,
-    leftArm,
-    rightArm,
+    leftArm: leftAsm.armRoot,
+    rightArm: rightAsm.armRoot,
     updateAppearance,
     updateMotion,
     dispose: () => {
+      unsubGlbReady();
       for (const d of disposables) d.dispose();
     },
   };

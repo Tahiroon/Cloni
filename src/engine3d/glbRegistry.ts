@@ -36,11 +36,13 @@ export interface GlbRegistry {
 const ASSET_CACHE_NAME = 'therason-clinic-assets-v1';
 
 const MODEL_PATHS: Record<string, string> = {
-  // Rigged Characters (active lineup only)
+  // Rigged Characters & FPP Clinician Hands (active lineup only)
   char_woman_suit: '/models/chars/woman_suit.glb',
   char_man2: '/models/chars/man_casual2.glb',
   char_suit: '/models/chars/man_suit.glb',
   char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
+  hand_left: '/models/chars/hand_left.glb',
+  hand_right: '/models/chars/hand_right.glb',
 
   // Furniture & Clinic Props (active lineup only)
   furn_bed_single: '/models/furn/bed_single.glb',
@@ -379,7 +381,7 @@ function getBaseResourceDir(url: string): string {
 
 function prewarmModelBounds(key: string, sceneObj: THREE.Object3D) {
   try {
-    if (key.startsWith('char_')) {
+    if (key.startsWith('char_') || key.startsWith('hand_')) {
       if (!skinnedBoundsCache.has(key)) {
         const probe = SkeletonUtils.clone(sceneObj);
         probe.updateMatrixWorld(true);
