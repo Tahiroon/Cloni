@@ -57,14 +57,6 @@ import {
   scheduleSilentCloudSync,
 } from './services/indexedDbStorage';
 import { soundFx } from './services/soundEffects';
-import { useViewportProfile } from './hooks/useViewportProfile';
-import {
-  applyNativeScreenOrientation,
-  computeFppViewportGeometry,
-  CssRotationContext,
-  FppOrientationMode,
-  toggleNativeFullscreen,
-} from './utils/screenOrientation';
 import {
   CatalogItem,
   ClinicRoom,
@@ -505,67 +497,6 @@ export default function App() {
   const fppBlinkTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const fppBlinkRafsRef = useRef<number[]>([]);
   const isFppSessionActive = Boolean(firstPersonPatientId);
-  const viewport = useViewportProfile();
-  const [fppOrientationMode, setFppOrientationMode] = useState<FppOrientationMode>('auto');
-  const [fppRightSplitActive, setFppRightSplitActive] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(() =>
-    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
-  );
-  const fppEnteredFullscreenRef = useRef(false);
-
-  const fppGeometry = useMemo(
-    () =>
-      computeFppViewportGeometry(
-        viewport.width,
-        viewport.height,
-        Boolean(firstPersonPatientId && !visitingFriend),
-        fppOrientationMode
-      ),
-    [viewport.width, viewport.height, firstPersonPatientId, visitingFriend, fppOrientationMode]
-  );
-
-  useEffect(() => {
-    const syncFs = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
-    };
-    document.addEventListener('fullscreenchange', syncFs);
-    document.addEventListener('webkitfullscreenchange', syncFs);
-    return () => {
-      document.removeEventListener('fullscreenchange', syncFs);
-      document.removeEventListener('webkitfullscreenchange', syncFs);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isFppSessionActive) return;
-    setFppOrientationMode('auto');
-    setFppRightSplitActive(false);
-    const shouldExitFs = fppEnteredFullscreenRef.current;
-    fppEnteredFullscreenRef.current = false;
-    void applyNativeScreenOrientation('auto', { exitFullscreen: shouldExitFs });
-  }, [isFppSessionActive]);
-
-  const handleToggleFppOrientation = useCallback(() => {
-    soundFx.tap();
-    const nextMode: FppOrientationMode = fppGeometry.isLandscape ? 'portrait' : 'landscape';
-    setFppOrientationMode(nextMode);
-    if (nextMode === 'landscape') {
-      if (!document.fullscreenElement) {
-        fppEnteredFullscreenRef.current = true;
-      }
-      void applyNativeScreenOrientation('landscape', { enterFullscreen: true });
-    } else {
-      const shouldExitFs = fppEnteredFullscreenRef.current;
-      fppEnteredFullscreenRef.current = false;
-      void applyNativeScreenOrientation('portrait', { exitFullscreen: shouldExitFs });
-    }
-  }, [fppGeometry.isLandscape]);
-
-  const handleToggleFullscreen = useCallback(() => {
-    soundFx.tap();
-    fppEnteredFullscreenRef.current = false;
-    void toggleNativeFullscreen(!isFullscreen);
-  }, [isFullscreen]);
 
   const clearFppBlinkTimers = useCallback(() => {
     for (const t of fppBlinkTimersRef.current) {
@@ -3880,43 +3811,11 @@ export default function App() {
     handleOrbitStepDelta,
   ]);
 
-  const mainOrientationStyle: React.CSSProperties | undefined =
-    fppGeometry.cssRotation === 90
-      ? {
-          position: 'fixed',
-          top: 0,
-          left: '100vw',
-          width: '100dvh',
-          height: '100vw',
-          transform: 'rotate(90deg)',
-          transformOrigin: 'top left',
-        }
-      : fppGeometry.cssRotation === -90
-        ? {
-            position: 'fixed',
-            top: '100dvh',
-            left: 0,
-            width: '100dvh',
-            height: '100vw',
-            transform: 'rotate(-90deg)',
-            transformOrigin: 'top left',
-          }
-        : undefined;
-
-  const computedFppSplitShift =
-    fppRightSplitActive && fppGeometry.isLandscape
-      ? fppActiveDevice
-        ? 0.17
-        : 0.21
-      : 0;
-
   return (
-    <CssRotationContext.Provider value={fppGeometry.cssRotation}>
     <main
-      style={mainOrientationStyle}
-      className={`overflow-hidden transition-colors duration-500 ${
-        fppGeometry.cssRotation === 0 ? 'relative w-screen h-[100dvh]' : ''
-      } ${lightingMode === 'night' ? 'bg-[#050a18]' : 'bg-[#5aa332]'}`}
+      className={`relative w-screen h-[100dvh] overflow-hidden transition-colors duration-500 ${
+        lightingMode === 'night' ? 'bg-[#050a18]' : 'bg-[#5aa332]'
+      }`}
     >
       {/* 2.5D Isometric Clinic Canvas */}
       <ClinicCanvas
@@ -3928,8 +3827,6 @@ export default function App() {
         showPlayerCharacter={!visitingFriend}
         floatingFeedbacks={floatingFeedbacks}
         firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
-        cssRotation={fppGeometry.cssRotation}
-        fppSplitShift={computedFppSplitShift}
         orbitStep={orbitStep}
         onOrbitStepDelta={handleOrbitStepDelta}
         shortcutsBlocked={isoShortcutsBlocked || Boolean(selectedWaitingPatientId || selectedBedPatientId)}
@@ -4222,12 +4119,6 @@ export default function App() {
           language={clinic.language}
           lightingMode={lightingMode}
           moveInputRef={fppMoveInputRef}
-          fppGeometry={fppGeometry}
-          orientationMode={fppOrientationMode}
-          isFullscreen={isFullscreen}
-          onToggleOrientation={handleToggleFppOrientation}
-          onToggleFullscreen={handleToggleFullscreen}
-          onRightSplitActiveChange={setFppRightSplitActive}
           onPatientSpeak={handlePatientSpeak}
           onRecenterCamera={() => {
             soundFx.tap();
@@ -4808,6 +4699,5 @@ export default function App() {
         />
       )}
     </main>
-    </CssRotationContext.Provider>
   );
 }

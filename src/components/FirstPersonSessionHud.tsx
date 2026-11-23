@@ -19,9 +19,7 @@ import {
   Handshake,
   Lock,
   LogOut,
-  Maximize,
   Maximize2,
-  Minimize,
   Minimize2,
   Minus,
   Move,
@@ -30,10 +28,8 @@ import {
   Play,
   Plus,
   RotateCcw,
-  RotateCw,
   ShieldAlert,
   SlidersHorizontal,
-  Smartphone,
   Sparkles,
   Star,
   Stethoscope,
@@ -72,13 +68,6 @@ import {
 } from '../types/clinic';
 import { PhysicalDeviceController } from './PhysicalDeviceController';
 import { useViewportProfile } from '../hooks/useViewportProfile';
-import {
-  FppOrientationMode,
-  FppViewportGeometry,
-  getRotatedPadDelta,
-  getRotatedSliderFraction,
-  useCssRotation,
-} from '../utils/screenOrientation';
 
 type SessionStep = 'subjective' | 'redflags' | 'objective' | 'diagnosis' | 'plan' | 'summary';
 
@@ -119,12 +108,6 @@ interface FirstPersonSessionHudProps {
   language: Language;
   lightingMode?: LightingMode;
   moveInputRef: React.MutableRefObject<{ x: number; y: number }>;
-  fppGeometry: FppViewportGeometry;
-  orientationMode: FppOrientationMode;
-  isFullscreen: boolean;
-  onToggleOrientation: () => void;
-  onToggleFullscreen: () => void;
-  onRightSplitActiveChange?: (occupied: boolean) => void;
   onPatientSpeak: (patientId: string, durationMs?: number) => void;
   onRecenterCamera?: () => void;
   onExit: () => void;
@@ -140,16 +123,14 @@ interface FirstPersonSessionHudProps {
 const VirtualJoystick: React.FC<{
   isAr: boolean;
   isNight: boolean;
-  compactLandscape?: boolean;
   moveInputRef: React.MutableRefObject<{ x: number; y: number }>;
-}> = ({ isAr, isNight, compactLandscape = false, moveInputRef }) => {
+}> = ({ isAr, isNight, moveInputRef }) => {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const knobRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
   const [isActive, setIsActive] = useState(false);
-  const cssRotation = useCssRotation();
-  const visualMaxR = compactLandscape ? 40 : 46;
-  const fullThrottleR = compactLandscape ? 30 : 34;
+  const visualMaxR = 46;
+  const fullThrottleR = 34;
   const deadzone = 0.05;
 
   useEffect(() => {
@@ -168,7 +149,10 @@ const VirtualJoystick: React.FC<{
     const el = trackRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const { dx: rawDx, dy: rawDy } = getRotatedPadDelta(clientX, clientY, rect, cssRotation);
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const rawDx = clientX - cx;
+    const rawDy = clientY - cy;
     const dist = Math.hypot(rawDx, rawDy);
 
     let visDx = rawDx;
@@ -235,9 +219,7 @@ const VirtualJoystick: React.FC<{
               resetStick();
             }
           }}
-          className={`relative ${
-            compactLandscape ? 'w-32 h-32' : 'w-36 h-36 sm:w-40 sm:h-40'
-          } rounded-full border-2 touch-none flex items-center justify-center shadow-2xl transition-colors cursor-grab active:cursor-grabbing ${
+          className={`relative w-36 h-36 sm:w-40 sm:h-40 rounded-full border-2 touch-none flex items-center justify-center shadow-2xl transition-colors cursor-grab active:cursor-grabbing ${
             isActive
               ? isNight
                 ? 'bg-slate-950/92 border-sky-400/80 ring-4 ring-sky-400/20'
@@ -264,9 +246,7 @@ const VirtualJoystick: React.FC<{
           <div
             ref={knobRef}
             style={{ transform: 'translate3d(0px, 0px, 0) scale(1)' }}
-            className={`${
-              compactLandscape ? 'w-14 h-14' : 'w-14 h-14 sm:w-16 sm:h-16'
-            } rounded-full bg-gradient-to-b from-sky-300 via-sky-500 to-sky-600 border-2 border-white/95 shadow-lg flex items-center justify-center pointer-events-none will-change-transform ${
+            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-gradient-to-b from-sky-300 via-sky-500 to-sky-600 border-2 border-white/95 shadow-lg flex items-center justify-center pointer-events-none will-change-transform ${
               isActive ? '' : 'transition-transform duration-100 ease-out'
             }`}
           >
@@ -302,7 +282,6 @@ const IrAimJoystick: React.FC<{
 
   const [stickPx, setStickPx] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
-  const cssRotation = useCssRotation();
   const maxR = 24;
 
   useEffect(() => {
@@ -375,7 +354,10 @@ const IrAimJoystick: React.FC<{
     const el = padRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    let { dx, dy } = getRotatedPadDelta(clientX, clientY, rect, cssRotation);
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = clientX - cx;
+    let dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
     if (dist > maxR) {
       dx = (dx / dist) * maxR;
@@ -501,7 +483,6 @@ const IrHardwareFader: React.FC<{
 }) => {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const pointerIdRef = useRef<number | null>(null);
-  const cssRotation = useCssRotation();
   const ratio = Math.max(0, Math.min(1, (value - min) / Math.max(1e-5, max - min)));
 
   const commitValue = (raw: number) => {
@@ -510,11 +491,11 @@ const IrHardwareFader: React.FC<{
     if (clamped !== value) onChange(clamped);
   };
 
-  const applyClientPoint = (clientX: number, clientY: number) => {
+  const applyClientX = (clientX: number) => {
     const el = trackRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const t = getRotatedSliderFraction(clientX, clientY, rect, cssRotation);
+    const t = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
     commitValue(min + t * (max - min));
   };
 
@@ -544,12 +525,12 @@ const IrHardwareFader: React.FC<{
               // ignore
             }
             pointerIdRef.current = e.pointerId;
-            applyClientPoint(e.clientX, e.clientY);
+            applyClientX(e.clientX);
           }}
           onPointerMove={(e) => {
             if (pointerIdRef.current !== e.pointerId) return;
             e.stopPropagation();
-            applyClientPoint(e.clientX, e.clientY);
+            applyClientX(e.clientX);
           }}
           onPointerUp={(e) => {
             if (pointerIdRef.current !== e.pointerId) return;
@@ -717,12 +698,6 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   language,
   lightingMode = 'day',
   moveInputRef,
-  fppGeometry,
-  orientationMode,
-  isFullscreen,
-  onToggleOrientation,
-  onToggleFullscreen,
-  onRightSplitActiveChange,
   onPatientSpeak,
   onRecenterCamera,
   onExit,
@@ -733,7 +708,6 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const isNight = lightingMode === 'night';
   const viewport = useViewportProfile();
   const showPcFppControls = viewport.isDesktopOrTablet && viewport.isKeyboardMouseActive;
-  const { isLandscape, isCompactLandscape, visualWidth } = fppGeometry;
 
   const defaultPrescription = useMemo(() => getRecommendedPrescription(c), [c]);
 
@@ -777,20 +751,6 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [entryReady, setEntryReady] = useState(false);
   const entryGreetedRef = useRef(false);
-
-  const rightSplitOccupied = Boolean(
-    isLandscape &&
-      !heldDevice &&
-      ((!activeDevice && !panelHidden) ||
-        (activeDevice &&
-          activeDevice.placementMode === 'bed' &&
-          !activeDevice.selectedProbeId &&
-          (activeDevice.sprite === 'infrared_lamp' || (activeDevice.hasScreen && screenExpanded))))
-  );
-
-  useEffect(() => {
-    onRightSplitActiveChange?.(rightSplitOccupied);
-  }, [rightSplitOccupied, onRightSplitActiveChange]);
 
   const completeActiveSession = () => {
     if (!evaluationResult) {
@@ -1179,32 +1139,22 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
 
   return (
     <div
-      className={`pointer-events-none fixed inset-0 z-30 flex flex-col justify-between transition-all duration-300 ease-out ${
-        isCompactLandscape ? 'p-1.5' : 'p-2 sm:p-3'
-      } ${entryReady ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1.5'}`}
+      className={`pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2 sm:p-3 transition-all duration-300 ease-out ${
+        entryReady ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1.5'
+      }`}
     >
-      {/* Top Patient Header Bar + Orientation & Fullscreen Controls */}
+      {/* Top Patient Header Bar */}
       <div className="flex flex-col gap-1.5">
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className={`pointer-events-auto flex items-center justify-between gap-2 rounded-2xl bg-slate-950/92 backdrop-blur-md border border-white/15 text-white shadow-lg ${
-            isCompactLandscape ? 'px-2.5 py-1 rounded-xl' : 'px-3 py-1.5'
-          }`}
+          className="pointer-events-auto flex items-center justify-between gap-2 rounded-2xl bg-slate-950/92 backdrop-blur-md border border-white/15 px-3 py-1.5 text-white shadow-lg"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <div
-              className={`${
-                isCompactLandscape ? 'w-6 h-6' : 'w-7 h-7'
-              } rounded-lg bg-sky-500/15 border border-sky-400/30 flex items-center justify-center shrink-0`}
-            >
-              <Stethoscope className={`${isCompactLandscape ? 'w-3.5 h-3.5' : 'w-4 h-4'} text-sky-400`} />
+            <div className="w-7 h-7 rounded-lg bg-sky-500/15 border border-sky-400/30 flex items-center justify-center shrink-0">
+              <Stethoscope className="w-4 h-4 text-sky-400" />
             </div>
             <div className="min-w-0">
-              <div
-                className={`flex items-center gap-1.5 flex-wrap ${
-                  isCompactLandscape ? 'text-[11.5px]' : 'text-xs sm:text-[13px]'
-                }`}
-              >
+              <div className="flex items-center gap-1.5 flex-wrap text-xs sm:text-[13px]">
                 <span className="font-black truncate max-w-[11rem] sm:max-w-none">
                   {isAr ? c.patientNameAr : c.patientNameEn}
                 </span>
@@ -1212,36 +1162,28 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 <span className="text-sky-300 font-bold tabular-nums shrink-0">
                   {c.age} {isAr ? 'سنة' : 'y'}
                 </span>
-                {visualWidth >= 600 && (
-                  <>
-                    <span className="text-slate-500" aria-hidden="true">·</span>
-                    <span className="text-slate-300 text-[11px] font-medium truncate">
-                      {isAr ? c.occupationAr : c.occupationEn}
-                    </span>
-                  </>
-                )}
+                <span className="hidden sm:inline text-slate-500" aria-hidden="true">·</span>
+                <span className="hidden sm:inline text-slate-300 text-[11px] font-medium truncate">
+                  {isAr ? c.occupationAr : c.occupationEn}
+                </span>
               </div>
-              {visualWidth >= 780 && !isCompactLandscape && (
-                <div className="text-[10.5px] text-slate-300/85 truncate max-w-[26rem]">
-                  {isAr ? c.chiefComplaintAr : c.chiefComplaintEn}
-                </div>
-              )}
+              <div className="hidden md:block text-[10.5px] text-slate-300/85 truncate max-w-[26rem]">
+                {isAr ? c.chiefComplaintAr : c.chiefComplaintEn}
+              </div>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {visualWidth >= 780 && (
-              <div
-                dir="ltr"
-                className="flex items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-300 pe-1"
-              >
-                <span>BP {c.vitals?.bp ?? '120/78'}</span>
-                <span className="text-slate-600">·</span>
-                <span>HR {c.vitals?.hr ?? 74}</span>
-                <span className="text-slate-600">·</span>
-                <span className="text-rose-400 font-bold">VAS {c.vasPain}/10</span>
-              </div>
-            )}
+            <div
+              dir="ltr"
+              className="hidden lg:flex items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-300 pe-1"
+            >
+              <span>BP {c.vitals?.bp ?? '120/78'}</span>
+              <span className="text-slate-600">·</span>
+              <span>HR {c.vitals?.hr ?? 74}</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-rose-400 font-bold">VAS {c.vasPain}/10</span>
+            </div>
 
             {onRecenterCamera && (
               <button
@@ -1249,67 +1191,10 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 onClick={onRecenterCamera}
                 aria-label={isAr ? 'توجيه الكاميرا نحو المريض' : 'Center on Patient'}
                 title={isAr ? 'التركيز على المريض' : 'Center on Patient'}
-                className={`${
-                  isCompactLandscape ? 'h-7 px-2' : 'h-8 px-2.5'
-                } rounded-xl bg-slate-800/90 hover:bg-sky-600 border border-white/10 text-slate-200 hover:text-white flex items-center gap-1 text-[11px] font-bold transition-colors cursor-pointer`}
+                className="h-8 px-2.5 rounded-xl bg-slate-800/90 hover:bg-sky-600 border border-white/10 text-slate-200 hover:text-white flex items-center gap-1 text-[11px] font-bold transition-colors cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                {visualWidth >= 760 && <span>{isAr ? 'التركيز' : 'Center'}</span>}
-              </button>
-            )}
-
-            {!showPcFppControls || orientationMode !== 'auto' ? (
-              <button
-                type="button"
-                onClick={onToggleOrientation}
-                aria-label={
-                  isLandscape
-                    ? isAr
-                      ? 'تدوير للوضع الطولي'
-                      : 'Switch to Portrait'
-                    : isAr
-                      ? 'تدوير الشاشة بالعرض'
-                      : 'Rotate Screen to Landscape'
-                }
-                title={
-                  isLandscape
-                    ? isAr
-                      ? 'تدوير للوضع الطولي'
-                      : 'Switch to Portrait'
-                    : isAr
-                      ? 'تدوير الشاشة بالعرض الكامل'
-                      : 'Rotate Screen to Landscape'
-                }
-                className={`relative ${
-                  isCompactLandscape ? 'w-7 h-7' : 'w-8 h-8'
-                } rounded-xl border flex items-center justify-center transition-colors cursor-pointer ${
-                  isLandscape
-                    ? 'bg-amber-400/20 hover:bg-amber-400/30 border-amber-300/50 text-amber-200'
-                    : 'bg-slate-800/90 hover:bg-sky-600/80 border-white/15 text-slate-100'
-                }`}
-              >
-                <Smartphone
-                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                    isLandscape ? 'rotate-90' : 'rotate-0'
-                  }`}
-                />
-                <RotateCw className="w-2.5 h-2.5 absolute -top-0.5 -right-0.5 text-sky-300 drop-shadow" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={onToggleFullscreen}
-                aria-label={isFullscreen ? (isAr ? 'إنهاء ملء الشاشة' : 'Exit Fullscreen') : isAr ? 'ملء الشاشة' : 'Fullscreen'}
-                title={isFullscreen ? (isAr ? 'إنهاء ملء الشاشة' : 'Exit Fullscreen') : isAr ? 'ملء الشاشة' : 'Fullscreen'}
-                className={`${
-                  isCompactLandscape ? 'w-7 h-7' : 'w-8 h-8'
-                } rounded-xl border flex items-center justify-center transition-colors cursor-pointer ${
-                  isFullscreen
-                    ? 'bg-sky-500/25 border-sky-400/45 text-sky-200 hover:bg-sky-500/35'
-                    : 'bg-slate-800/90 hover:bg-slate-700 border-white/10 text-slate-200'
-                }`}
-              >
-                {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
+                <span className="hidden md:inline">{isAr ? 'التركيز' : 'Center'}</span>
               </button>
             )}
 
@@ -1321,9 +1206,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               }}
               aria-label={panelHidden ? (isAr ? 'إظهار الملف السريري' : 'Show Chart') : isAr ? 'المشي والحركة 3D' : '3D Move'}
               title={panelHidden ? (isAr ? 'إظهار الملف السريري' : 'Show Chart') : isAr ? 'إخفاء للتحرك بحرية' : 'Hide Chart to Walk'}
-              className={`${
-                isCompactLandscape ? 'h-7 px-2' : 'h-8 px-2.5 sm:px-3'
-              } rounded-xl border flex items-center gap-1.5 text-[11px] font-black transition-colors cursor-pointer ${
+              className={`h-8 px-2.5 sm:px-3 rounded-xl border flex items-center gap-1.5 text-[11px] font-black transition-colors cursor-pointer ${
                 panelHidden
                   ? 'bg-sky-500 hover:bg-sky-400 border-sky-300 text-slate-950 shadow-md'
                   : 'bg-slate-800/90 hover:bg-slate-700 border-white/10 text-slate-200'
@@ -1333,9 +1216,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               <span>
                 {panelHidden
                   ? isAr
-                    ? isCompactLandscape
-                      ? `الملف · ${currentStepMeta.num}/6`
-                      : `الملف السريري · ${currentStepMeta.num}/6`
+                    ? `الملف السريري · ${currentStepMeta.num}/6`
                     : `Chart · ${currentStepMeta.num}/6`
                   : isAr
                     ? 'تحرك 3D'
@@ -1343,10 +1224,10 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               </span>
             </button>
 
-            {therapyStarted && visualWidth >= 600 && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 text-[10.5px] font-black whitespace-nowrap">
+            {therapyStarted && (
+              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 text-[10.5px] font-black whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                {isCompactLandscape ? (isAr ? 'نشطة' : 'Live') : isAr ? 'جلسة نشطة' : 'Therapy Active'}
+                {isAr ? 'جلسة نشطة' : 'Therapy Active'}
               </span>
             )}
 
@@ -1361,9 +1242,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               }}
               aria-label={isAr ? 'خروج من الجلسة' : 'Exit Session'}
               title={therapyStarted ? (isAr ? 'إنهاء أو خروج' : 'Finish or Exit') : isAr ? 'خروج' : 'Exit'}
-              className={`${
-                isCompactLandscape ? 'w-7 h-7' : 'w-8 h-8'
-              } rounded-xl bg-slate-800/90 hover:bg-rose-600 border border-white/15 text-slate-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer`}
+              className="w-8 h-8 rounded-xl bg-slate-800/90 hover:bg-rose-600 border border-white/15 text-slate-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
             </button>
@@ -1372,18 +1251,11 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
 
         {/* Smart Floating Patient Speech Reply — positioned in the clear 3D area without colliding with the chart */}
         {!activeDevice && !heldDevice && !nearbyDevice && speechCaption && (panelHidden || (!openQuestionId && revealedTests.length === 0)) && (
-          <div
-            dir="ltr"
-            className={`w-full flex ${
-              isLandscape && !panelHidden ? 'justify-start ps-0.5 pt-8' : 'justify-end'
-            }`}
-          >
+          <div dir="ltr" className="w-full flex justify-end">
             <div
               dir={isAr ? 'rtl' : 'ltr'}
               onPointerDown={(e) => e.stopPropagation()}
-              className={`pointer-events-auto rounded-2xl bg-slate-950/92 backdrop-blur-md border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2 ${
-                isLandscape && !panelHidden ? 'max-w-[46%]' : 'max-w-[18.5rem] sm:max-w-xs'
-              }`}
+              className="pointer-events-auto max-w-[18.5rem] sm:max-w-xs rounded-2xl bg-slate-950/92 backdrop-blur-md border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2"
             >
               <div className="min-w-0 text-xs leading-relaxed">
                 <div className="text-[10px] font-extrabold text-sky-300 mb-0.5">
@@ -1410,19 +1282,13 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           ref={postureDockRef}
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
-          className={`pointer-events-auto fixed z-35 flex flex-col items-start gap-1.5 ${
-            isCompactLandscape
-              ? 'left-2 top-[3.1rem]'
-              : 'left-2.5 sm:left-4 top-[3.75rem] sm:top-[4.15rem]'
-          }`}
+          className="pointer-events-auto fixed left-2.5 sm:left-4 top-[3.75rem] sm:top-[4.15rem] z-35 flex flex-col items-start gap-1.5"
         >
           <button
             type="button"
             onClick={() => setPostureOpen((v) => !v)}
             aria-expanded={postureOpen}
-            className={`${
-              isCompactLandscape ? 'h-7 px-2 text-[10.5px]' : 'h-8 px-2.5 text-[11px]'
-            } rounded-xl border shadow-lg flex items-center gap-1.5 font-extrabold backdrop-blur-md transition-colors cursor-pointer ${
+            className={`h-8 px-2.5 rounded-xl border shadow-lg flex items-center gap-1.5 text-[11px] font-extrabold backdrop-blur-md transition-colors cursor-pointer ${
               postureOpen
                 ? 'bg-sky-500 border-sky-300 text-slate-950'
                 : 'bg-slate-950/90 hover:bg-slate-900 border-white/15 text-slate-100'
@@ -1442,7 +1308,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           {postureOpen && (
             <div
               dir="ltr"
-              className="w-[15.5rem] max-h-[calc(100%-4.5rem)] overflow-y-auto rounded-2xl bg-slate-950/95 backdrop-blur-md border border-white/15 p-2 shadow-2xl text-white space-y-1.5"
+              className="w-[15.5rem] rounded-2xl bg-slate-950/95 backdrop-blur-md border border-white/15 p-2 shadow-2xl text-white space-y-1.5"
             >
               {stationNameEn && (
                 <div className="px-1 pb-1 border-b border-white/10 text-[10px] font-bold text-sky-400 truncate">
@@ -1594,12 +1460,8 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           onPointerDown={(e) => e.stopPropagation()}
           className={`pointer-events-auto fixed z-40 flex flex-wrap items-center gap-2 transition-all ${
             panelHidden
-              ? isLandscape
-                ? 'left-1/2 -translate-x-1/2 bottom-3'
-                : 'left-1/2 -translate-x-1/2 bottom-6 sm:bottom-8'
-              : isLandscape
-                ? 'left-2.5 bottom-2.5 max-w-[50%]'
-                : 'right-2.5 top-[3.75rem] sm:right-auto sm:top-auto sm:left-5 sm:bottom-48'
+              ? 'left-1/2 -translate-x-1/2 bottom-6 sm:bottom-8'
+              : 'right-2.5 top-[3.75rem] sm:right-auto sm:top-auto sm:left-5 sm:bottom-48'
           }`}
         >
           {handshakeReady && onHandshake && (
@@ -1653,14 +1515,8 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       {heldDevice && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className={`pointer-events-auto fixed z-40 flex flex-col items-center gap-1.5 transition-all ${
-            panelHidden
-              ? isLandscape
-                ? 'left-1/2 -translate-x-1/2 bottom-3'
-                : 'left-1/2 -translate-x-1/2 bottom-6 sm:bottom-8'
-              : isLandscape
-                ? 'left-[26%] -translate-x-1/2 bottom-2.5 max-w-[50%]'
-                : 'left-1/2 -translate-x-1/2 top-[3.75rem] sm:top-auto sm:bottom-8'
+          className={`pointer-events-auto fixed left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-1.5 transition-all ${
+            panelHidden ? 'bottom-6 sm:bottom-8' : 'top-[3.75rem] sm:top-auto sm:bottom-8'
           }`}
         >
           <div className="px-3 py-1 rounded-xl bg-slate-950/90 border border-white/15 text-[11px] font-bold text-slate-200 shadow-lg flex items-center gap-1.5 whitespace-nowrap">
@@ -1725,7 +1581,6 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         <PhysicalDeviceController
           device={activeDevice}
           language={language}
-          isLandscapeLayout={isLandscape}
           onUpdate={(next) => onUpdateActiveDevice?.(next)}
           onSelectProbeToPlace={(probeId) => {
             setScreenExpanded(false);
@@ -1757,11 +1612,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
-          className={`pointer-events-auto fixed z-40 rounded-[18px] bg-gradient-to-b from-[#2f3642] via-[#202630] to-[#141820] border-2 border-[#545f72] shadow-[0_14px_34px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.18)] p-2 text-white space-y-1.5 overflow-y-auto ${
-            isLandscape
-              ? 'right-2.5 bottom-2.5 max-h-[calc(100%-3.5rem)] w-[min(48%,25.5rem)]'
-              : 'left-1/2 -translate-x-1/2 bottom-2.5 w-[min(95%,25.5rem)] max-h-[46%]'
-          }`}
+          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-2.5 sm:bottom-4 z-40 w-[min(95vw,25.5rem)] rounded-[18px] bg-gradient-to-b from-[#2f3642] via-[#202630] to-[#141820] border-2 border-[#545f72] shadow-[0_14px_34px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.18)] p-2 text-white space-y-1.5"
         >
           {/* Steel Column Chassis Top Plate */}
           <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-white/10">
@@ -2197,25 +2048,16 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           {/* Virtual Joystick: hidden ONLY when keyboard+mouse PC mode is active; preserved on phones & touch tablets */}
           {!showPcFppControls ? (
             <div
-              className={`fixed z-30 transition-all ${
-                isLandscape
-                  ? isCompactLandscape
-                    ? 'right-4 bottom-4'
-                    : 'right-6 bottom-12'
-                  : 'right-4 bottom-24'
-              } ${panelHidden ? 'block' : 'hidden'}`}
+              className={`fixed right-4 bottom-24 sm:right-6 sm:bottom-28 z-30 transition-all ${
+                panelHidden ? 'block' : 'hidden'
+              }`}
             >
-              <VirtualJoystick
-                isAr={isAr}
-                isNight={isNight}
-                compactLandscape={isCompactLandscape}
-                moveInputRef={moveInputRef}
-              />
+              <VirtualJoystick isAr={isAr} isNight={isNight} moveInputRef={moveInputRef} />
             </div>
           ) : (
             <div
               onPointerDown={(e) => e.stopPropagation()}
-              className="pointer-events-auto fixed left-4 bottom-4 z-30 hidden md:flex flex-col gap-1.5 max-w-[min(42%,28rem)] rounded-2xl bg-slate-950/88 backdrop-blur-md border border-white/15 px-3.5 py-2.5 text-white shadow-2xl"
+              className="pointer-events-auto fixed left-4 bottom-4 z-30 hidden md:flex flex-col gap-1.5 max-w-[min(42vw,28rem)] rounded-2xl bg-slate-950/88 backdrop-blur-md border border-white/15 px-3.5 py-2.5 text-white shadow-2xl"
             >
               <div className="flex items-center justify-between gap-3 text-[11px] font-black text-sky-300">
                 <span className="flex items-center gap-1.5">
@@ -2244,30 +2086,20 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             </div>
           )}
 
-          {/* Spacious, Unified Clinical Chart Tablet — split right dock in Landscape, bottom sheet in Portrait */}
+          {/* Spacious, Unified Clinical Chart Tablet (replaces tiny multi-window cards) */}
           {!panelHidden && (
             <div
               dir={isAr ? 'rtl' : 'ltr'}
               onPointerDown={(e) => e.stopPropagation()}
-              className={`pointer-events-auto fixed z-35 rounded-2xl border shadow-2xl overflow-hidden flex flex-col transition-all duration-200 ${
-                isLandscape
-                  ? isCompactLandscape
-                    ? chartExpanded
-                      ? 'right-2 bottom-2 top-[3.1rem] w-[min(56%,38rem)]'
-                      : 'right-2 bottom-2 top-[3.1rem] w-[min(46%,32rem)]'
-                    : chartExpanded
-                      ? 'right-4 bottom-4 top-[4.15rem] w-[min(50%,44rem)]'
-                      : 'right-4 bottom-4 top-[4.15rem] w-[min(43%,38rem)]'
-                  : chartExpanded
-                    ? 'bottom-2 inset-x-2 max-h-[80%]'
-                    : 'bottom-2 inset-x-2 max-h-[62%]'
+              className={`pointer-events-auto fixed bottom-2 inset-x-2 sm:inset-x-auto sm:right-4 sm:bottom-4 z-35 rounded-2xl border shadow-2xl overflow-hidden flex flex-col transition-[max-height,width] duration-200 ${
+                chartExpanded
+                  ? 'sm:w-[min(calc(100vw-9.5rem),41rem)] lg:w-[min(45vw,42rem)] max-h-[80vh] sm:max-h-[86vh] lg:max-h-[calc(100vh-5.5rem)]'
+                  : 'sm:w-[min(calc(100vw-9.5rem),36rem)] lg:w-[min(41vw,37rem)] max-h-[62vh] sm:max-h-[70vh] lg:max-h-[74vh]'
               } ${surfaceCls}`}
             >
               {/* Crisp Chart Header */}
               <div
-                className={`${
-                  isCompactLandscape ? 'px-2.5 py-1.5' : 'px-3.5 py-2'
-                } border-b flex items-center justify-between gap-2 shrink-0 ${
+                className={`px-3.5 py-2 border-b flex items-center justify-between gap-2 shrink-0 ${
                   isNight ? 'border-slate-800 bg-slate-900/95' : 'border-slate-200 bg-slate-50/95'
                 }`}
               >
@@ -2295,7 +2127,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                     }`}
                   >
                     {chartExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                    <span className={visualWidth >= 600 ? 'inline' : 'hidden'}>
+                    <span className="hidden sm:inline">
                       {chartExpanded ? (isAr ? 'عادي' : 'Compact') : isAr ? 'توسيع' : 'Expand'}
                     </span>
                   </button>
@@ -2311,16 +2143,14 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                     }`}
                   >
                     <ChevronDown className="w-3.5 h-3.5" />
-                    <span>{isAr ? 'تحرك' : 'Walk'}</span>
+                    <span className="sm:hidden">{isAr ? 'تحرك' : 'Walk'}</span>
                   </button>
                 </div>
               </div>
 
-              {/* Integrated 6-Step Wizard Tabs — 1 crisp row in Landscape, 3x2 on Portrait */}
+              {/* Integrated 6-Step Wizard Tabs */}
               <div
-                className={`${
-                  isCompactLandscape ? 'px-2 py-1 grid-cols-6' : isLandscape ? 'px-2.5 py-1.5 grid-cols-6' : 'px-2.5 py-1.5 grid-cols-3'
-                } border-b shrink-0 grid gap-1 ${
+                className={`px-2.5 py-1.5 border-b shrink-0 grid grid-cols-3 sm:grid-cols-6 gap-1 ${
                   isNight ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-100/75'
                 }`}
               >
@@ -2335,9 +2165,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                         setStep(s.id);
                         setSpeechCaption(null);
                       }}
-                      className={`${
-                        isCompactLandscape ? 'px-1 py-1 text-[9.5px]' : 'px-1.5 py-1.5 text-[10.5px]'
-                      } rounded-lg font-extrabold border transition-all flex items-center justify-center gap-1 ${
+                      className={`px-1.5 py-1.5 rounded-lg text-[10.5px] font-extrabold border transition-all flex items-center justify-center gap-1 ${
                         active
                           ? 'bg-sky-500 border-sky-400 text-slate-950 shadow-sm'
                           : s.disabled
@@ -2353,47 +2181,31 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                                 : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 cursor-pointer'
                       }`}
                     >
-                      {!isCompactLandscape && (
-                        <span
-                          className={`w-3.5 h-3.5 rounded text-[9px] font-mono font-black flex items-center justify-center shrink-0 ${
-                            active
-                              ? 'bg-slate-950/20 text-slate-950'
-                              : s.done
-                                ? 'bg-emerald-500/20 text-emerald-500'
-                                : 'bg-slate-500/15'
-                          }`}
-                        >
-                          {s.done && !active ? <Check className="w-2.5 h-2.5" /> : s.num}
-                        </span>
-                      )}
-                      <span className="whitespace-nowrap leading-tight truncate">
-                        {isCompactLandscape
-                          ? isAr
-                            ? `${s.num}.${s.id === 'redflags' ? 'إنذار' : s.id === 'objective' ? 'فحص' : s.id === 'diagnosis' ? 'تشخيص' : s.tabAr}`
-                            : `${s.num}.${s.id === 'subjective' ? 'Hx' : s.id === 'redflags' ? 'RF' : s.id === 'diagnosis' ? 'Dx' : s.id === 'summary' ? 'End' : s.tabEn}`
-                          : isAr
-                            ? s.tabAr
-                            : s.tabEn}
+                      <span
+                        className={`w-3.5 h-3.5 rounded text-[9px] font-mono font-black flex items-center justify-center shrink-0 ${
+                          active
+                            ? 'bg-slate-950/20 text-slate-950'
+                            : s.done
+                              ? 'bg-emerald-500/20 text-emerald-500'
+                              : 'bg-slate-500/15'
+                        }`}
+                      >
+                        {s.done && !active ? <Check className="w-2.5 h-2.5" /> : s.num}
                       </span>
+                      <span className="whitespace-nowrap leading-tight truncate">{isAr ? s.tabAr : s.tabEn}</span>
                     </button>
                   );
                 })}
               </div>
 
               {/* Scrollable Clinical Stage Body */}
-              <div
-                className={`${
-                  isCompactLandscape ? 'p-2.5 space-y-2' : 'p-3 sm:p-3.5 space-y-3'
-                } overflow-y-auto custom-scroll flex-1`}
-              >
+              <div className="p-3 sm:p-3.5 overflow-y-auto custom-scroll space-y-3 flex-1">
                 {step === 'subjective' && (
                   <div className="space-y-2.5">
                     {/* History Type Category Segmented Selector (Light Clinical English + Arabic Cue) */}
                     <div
                       dir="ltr"
-                      className={`grid ${
-                        isLandscape ? 'grid-cols-4' : 'grid-cols-2'
-                      } gap-1.5 p-1 rounded-xl border ${
+                      className={`grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 rounded-xl border ${
                         isNight ? 'bg-slate-900 border-slate-800' : 'bg-slate-100 border-slate-200'
                       }`}
                     >
