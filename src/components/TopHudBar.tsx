@@ -73,17 +73,18 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
         : outfit.shirtColor;
 
   return (
-    <div className="pointer-events-none fixed top-0 left-0 right-0 z-30 flex flex-col gap-2 p-2 sm:p-3">
+    <div className="pointer-events-none fixed top-0 left-0 right-0 z-30 flex flex-col gap-2 p-2 sm:p-3 md:px-4 md:py-3">
       <header
         dir="ltr"
-        className="flex items-center justify-between gap-1.5 w-full max-w-full"
+        className="flex items-center justify-between gap-1.5 md:gap-3 w-full max-w-full"
       >
         {/* Top-Left Compact Student Profile Badge (tappable to open My Character modal) */}
         <button
           type="button"
           onClick={onOpenPlayerProfile}
           aria-label={isAr ? 'شخصيتي' : 'My Character'}
-          className={`pointer-events-auto flex items-center gap-1.5 sm:gap-2 border rounded-2xl px-2 py-1.5 text-white min-w-0 shrink transition-all text-left active:scale-95 hover:border-sky-300/60 ${pillSurface}`}
+          title={isAr ? 'شخصيتي في العيادة (U)' : 'My Clinic Character (U)'}
+          className={`pointer-events-auto flex items-center gap-1.5 sm:gap-2 border rounded-2xl px-2 md:px-2.5 py-1.5 text-white min-w-0 shrink transition-all text-left active:scale-95 hover:border-sky-300/60 cursor-pointer ${pillSurface}`}
         >
           <div className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gradient-to-br from-sky-400 to-blue-700 border-2 border-sky-200 flex items-center justify-center shrink-0 shadow">
             <svg viewBox="0 0 36 36" className="w-6 h-6 sm:w-7 sm:h-7" aria-hidden="true">
@@ -125,7 +126,7 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
 
           <div className="min-w-0 pr-0.5">
             <div className="flex items-center gap-1">
-              <span className="text-[11px] sm:text-xs font-extrabold truncate max-w-[78px] sm:max-w-[120px]">
+              <span className="text-[11px] sm:text-xs font-extrabold truncate max-w-[78px] sm:max-w-[120px] md:max-w-[160px]">
                 {displayName}
               </span>
               <span className="text-[10px] font-bold text-amber-300 flex items-center gap-0.5 tabular-nums shrink-0">
@@ -134,7 +135,7 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
               </span>
             </div>
             <div className="mt-1 flex items-center gap-1.5">
-              <div className="w-12 sm:w-20 h-1.5 rounded-full bg-slate-700/90 overflow-hidden shrink-0">
+              <div className="w-12 sm:w-20 md:w-24 h-1.5 rounded-full bg-slate-700/90 overflow-hidden shrink-0">
                 <div
                   className="h-full bg-gradient-to-r from-sky-400 to-emerald-400 rounded-full transition-all"
                   style={{ width: `${Math.max(12, levelProgress)}%` }}
@@ -148,13 +149,14 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
         </button>
 
         {/* Top-Right Cluster: Coins (∞) + Smart Waiting Queue + Colleagues + Settings */}
-        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 md:gap-2 shrink-0">
           {!visitingFriendName && onOpenWaitingQueue && (
             <button
               type="button"
               onClick={onOpenWaitingQueue}
               aria-label={isAr ? 'قائمة انتظار المرضى' : 'Waiting Queue'}
-              className={`pointer-events-auto h-8 sm:h-9 px-2 sm:px-2.5 rounded-xl border flex items-center gap-1.5 transition-all active:scale-95 ${
+              title={isAr ? 'قائمة انتظار المرضى (Tab)' : 'Waiting Queue (Tab)'}
+              className={`pointer-events-auto h-8 sm:h-9 px-2 sm:px-2.5 md:px-3 rounded-xl border flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
                 waitingCount > 0
                   ? isNight
                     ? 'bg-sky-950/94 border-sky-400/60 text-sky-100 hover:bg-sky-900/95 shadow-[0_8px_24px_rgba(2,132,199,0.28)]'
@@ -175,7 +177,8 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
             type="button"
             onClick={onOpenBonus}
             aria-label={isAr ? 'كسب عملات إضافية' : 'Earn bonus coins'}
-            className={`pointer-events-auto flex items-center gap-1 hover:bg-slate-900/95 rounded-xl pl-2 pr-1 py-1.5 border text-white active:scale-95 transition-all ${pillSurface}`}
+            title={isAr ? 'تحدي سريع لربح عملات إضافية' : 'Quick Clinical Quiz for Bonus Coins'}
+            className={`pointer-events-auto flex items-center gap-1 hover:bg-slate-900/95 rounded-xl pl-2 pr-1 py-1.5 border text-white active:scale-95 transition-all cursor-pointer ${pillSurface}`}
           >
             <Coins className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
             <span className="text-xs sm:text-sm font-extrabold tabular-nums">
@@ -190,7 +193,8 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
             type="button"
             onClick={onOpenFriends}
             aria-label={isAr ? 'زملاء العيادة' : 'Colleague Clinics'}
-            className={`pointer-events-auto h-8 sm:h-9 px-2 sm:px-2.5 rounded-xl hover:bg-slate-900/95 border flex items-center gap-1 text-white active:scale-95 transition-all ${pillSurface}`}
+            title={isAr ? 'عيادات الزملاء (K)' : 'Colleague Clinics (K)'}
+            className={`pointer-events-auto h-8 sm:h-9 px-2 sm:px-2.5 md:px-3 rounded-xl hover:bg-slate-900/95 border flex items-center gap-1 text-white active:scale-95 transition-all cursor-pointer ${pillSurface}`}
           >
             <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-300 shrink-0" />
             <span className="text-xs font-bold tabular-nums">{onlineFriends}</span>
@@ -200,7 +204,8 @@ export const TopHudBar: React.FC<TopHudBarProps> = React.memo(({
             type="button"
             onClick={onOpenSettings}
             aria-label={isAr ? 'الإعدادات' : 'Settings'}
-            className={`pointer-events-auto w-8 h-8 sm:w-9 sm:h-9 rounded-xl hover:bg-slate-900/95 border flex items-center justify-center text-white active:scale-95 transition-all ${pillSurface}`}
+            title={isAr ? 'الإعدادات' : 'Settings'}
+            className={`pointer-events-auto w-8 h-8 sm:w-9 sm:h-9 rounded-xl hover:bg-slate-900/95 border flex items-center justify-center text-white active:scale-95 transition-all cursor-pointer ${pillSurface}`}
           >
             <Settings className="w-4 h-4" />
           </button>

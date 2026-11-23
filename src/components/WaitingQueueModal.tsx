@@ -89,7 +89,7 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
         dir={isAr ? 'rtl' : 'ltr'}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-lg max-h-[82vh] flex flex-col rounded-3xl border shadow-2xl overflow-hidden ${
+        className={`w-full max-w-lg md:max-w-2xl max-h-[82vh] flex flex-col rounded-3xl border shadow-2xl overflow-hidden ${
           isNight
             ? 'bg-slate-900 border-slate-700 text-slate-100'
             : 'bg-white border-slate-200 text-slate-900'
@@ -121,7 +121,7 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label={isAr ? 'إغلاق' : 'Close'}
-            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
               isNight ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'
             }`}
           >
@@ -179,7 +179,7 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
                     : 'Waiting lounge is currently clear. New patients will arrive at reception shortly.'}
               </div>
             ) : (
-              <div className="space-y-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                 {readyQueue.map((p, idx) => {
                   const c = p.clinicalCase;
                   const specMeta = SPECIALTY_META[c.specialty];
@@ -333,7 +333,7 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
                 <Stethoscope className="w-3.5 h-3.5 text-emerald-500" />
                 <span>{isAr ? 'داخل قسم العلاج' : 'Inside Treatment Rooms'}</span>
               </h3>
-              <div className="space-y-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {inTreatmentWing.map((p) => {
                   const c = p.clinicalCase;
                   const statusLabel =

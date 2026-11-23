@@ -28,9 +28,13 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
   const isNight = lightingMode === 'night';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80"
+      onClick={onClose}
+    >
       <div
-        className={`w-full max-w-md rounded-3xl shadow-2xl border overflow-hidden flex flex-col max-h-[85vh] ${
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full max-w-md md:max-w-2xl rounded-3xl shadow-2xl border overflow-hidden flex flex-col max-h-[85vh] ${
           isNight ? 'bg-slate-950 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-200 text-slate-900'
         }`}
       >
@@ -48,7 +52,7 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center"
+            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -86,7 +90,7 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
           </div>
         </div>
 
-        <div className="p-3.5 space-y-2.5 overflow-y-auto custom-scroll">
+        <div className="p-3.5 grid grid-cols-1 md:grid-cols-2 gap-2.5 overflow-y-auto custom-scroll">
           {missions.map((m) => {
             const pct = Math.min(100, Math.round((m.progress / m.target) * 100));
             const ready = m.progress >= m.target && !m.claimed;

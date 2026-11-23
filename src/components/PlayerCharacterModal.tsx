@@ -136,7 +136,7 @@ export const PlayerCharacterModal: React.FC<PlayerCharacterModalProps> = ({
       onClick={onClose}
     >
       <div
-        className={`w-full max-w-3xl rounded-t-3xl sm:rounded-3xl shadow-2xl border flex flex-col max-h-[90vh] animate-in slide-in-from-bottom duration-200 overflow-hidden transition-colors ${
+        className={`w-full max-w-3xl lg:max-w-4xl rounded-t-3xl sm:rounded-3xl shadow-2xl border flex flex-col max-h-[90vh] animate-in slide-in-from-bottom duration-200 overflow-hidden transition-colors ${
           isNight
             ? 'bg-slate-950 border-slate-700/90 text-slate-100'
             : 'bg-[#f4f7f5] border-white/80 text-slate-900'
@@ -173,7 +173,7 @@ export const PlayerCharacterModal: React.FC<PlayerCharacterModalProps> = ({
               type="button"
               onClick={onClose}
               aria-label={isAr ? 'إغلاق' : 'Close'}
-              className="w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors shrink-0"
+              className="w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors shrink-0 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -346,7 +346,7 @@ export const PlayerCharacterModal: React.FC<PlayerCharacterModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {availableOutfits.map((outfit) => {
                 const selected = profile.outfitId === outfit.id;
                 return (

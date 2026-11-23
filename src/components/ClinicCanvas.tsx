@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCcw, RotateCw, ZoomIn, ZoomOut } from 'lucide-react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { useViewportProfile } from '../hooks/useViewportProfile';
 import {
   CATALOG_ITEMS,
   FPP_EXCLUDED_BED_SPRITES,
@@ -187,6 +189,8 @@ interface ClinicCanvasProps {
   onRotatePlacement: () => void;
   onSellMovingDraft?: (instanceId: string) => void;
   onReceptionCheckinDone?: (patientId: string) => void;
+  onOrbitStepDelta?: (delta: number) => void;
+  shortcutsBlocked?: boolean;
   hideInternalLoader?: boolean;
   onSceneReady?: () => void;
 }
@@ -314,17 +318,30 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
   onRotatePlacement,
   onSellMovingDraft,
   onReceptionCheckinDone,
+  onOrbitStepDelta,
+  shortcutsBlocked = false,
   hideInternalLoader = false,
   onSceneReady,
 }) => {
+  const viewport = useViewportProfile();
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pointerSurfaceRef = useRef<HTMLDivElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [glbsReady, setGlbsReady] = useState<boolean>(() => glbRegistry.coreReady);
+  const [fppPointerLocked, setFppPointerLocked] = useState(false);
   const hoveredEditItemIdRef = useRef<string | null>(null);
   const draggingDraftActiveRef = useRef(false);
   const liveDragDraftRef = useRef<PlacementDraft | null>(null);
-  const fppKeysRef = useRef({ w: false, a: false, s: false, d: false });
+  const fppKeysRef = useRef({ w: false, a: false, s: false, d: false, shift: false });
+  const isoKeysRef = useRef({
+    w: false,
+    a: false,
+    s: false,
+    d: false,
+    plus: false,
+    minus: false,
+    shift: false,
+  });
   const fppLastPointerRef = useRef({ x: 0, y: 0 });
   const fppCamRef = useRef({
     activeId: null as string | null,
@@ -690,6 +707,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     updateFppBedDevice: (next: FppActiveDeviceState) => void;
     openStationConsole: (deviceId: string) => void;
     triggerFppHandshake: () => void;
+    interactFppPrimary: () => void;
   } | null>(null);
 
   // Frame newly initiated placement drafts smoothly when placed in the rear solar zone or far perimeter
@@ -734,21 +752,50 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
   }, [fppRecenterNonce, firstPersonPatientId]);
 
   useEffect(() => {
-    fppKeysRef.current = { w: false, a: false, s: false, d: false };
+    fppKeysRef.current = { w: false, a: false, s: false, d: false, shift: false };
     if (!firstPersonPatientId) return;
     const updateKey = (e: KeyboardEvent, down: boolean) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (down && shortcutsBlocked) return;
       const k = e.key.toLowerCase();
+      fppKeysRef.current.shift = e.shiftKey;
       if (k === 'w' || e.key === 'ArrowUp') fppKeysRef.current.w = down;
       else if (k === 's' || e.key === 'ArrowDown') fppKeysRef.current.s = down;
       else if (k === 'a' || e.key === 'ArrowLeft') fppKeysRef.current.a = down;
       else if (k === 'd' || e.key === 'ArrowRight') fppKeysRef.current.d = down;
+
+      if (down && !e.repeat && !shortcutsBlocked) {
+        if (k === 'e') {
+          e.preventDefault();
+          sceneHooksRef.current?.interactFppPrimary();
+        } else if (k === 'f' && !latestRef.current.fppActiveDevice?.hasScreen) {
+          e.preventDefault();
+          const el = pointerSurfaceRef.current;
+          if (!el) return;
+          if (document.pointerLockElement === el) {
+            try {
+              document.exitPointerLock();
+            } catch {
+              // Ignore
+            }
+          } else {
+            try {
+              const res = el.requestPointerLock?.() as unknown as Promise<void> | undefined;
+              if (res && typeof res.catch === 'function') {
+                res.catch(() => {});
+              }
+            } catch {
+              // Ignore
+            }
+          }
+        }
+      }
     };
     const onKeyDown = (e: KeyboardEvent) => updateKey(e, true);
     const onKeyUp = (e: KeyboardEvent) => updateKey(e, false);
     const onBlur = () => {
-      fppKeysRef.current = { w: false, a: false, s: false, d: false };
+      fppKeysRef.current = { w: false, a: false, s: false, d: false, shift: false };
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -758,7 +805,148 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [firstPersonPatientId]);
+  }, [firstPersonPatientId, shortcutsBlocked]);
+
+  // Pointer Lock mouse look & centered crosshair raycasting for PC FPP sessions
+  useEffect(() => {
+    const syncLock = () => {
+      const locked = Boolean(
+        pointerSurfaceRef.current && document.pointerLockElement === pointerSurfaceRef.current
+      );
+      setFppPointerLocked(locked);
+    };
+    document.addEventListener('pointerlockchange', syncLock);
+    return () => {
+      document.removeEventListener('pointerlockchange', syncLock);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!firstPersonPatientId || fppActiveDevice?.hasScreen || shortcutsBlocked) {
+      if (pointerSurfaceRef.current && document.pointerLockElement === pointerSurfaceRef.current) {
+        try {
+          document.exitPointerLock();
+        } catch {
+          // Ignore
+        }
+      }
+      setFppPointerLocked(false);
+    }
+  }, [firstPersonPatientId, fppActiveDevice?.hasScreen, shortcutsBlocked]);
+
+  useEffect(() => {
+    if (!firstPersonPatientId || !fppPointerLocked) return;
+    let hoverQueued = false;
+    const onMouseMove = (e: MouseEvent) => {
+      if (document.pointerLockElement !== pointerSurfaceRef.current) return;
+      const ddx = e.movementX || 0;
+      const ddy = e.movementY || 0;
+      if (fppCamRef.current.focusBlend > 0.35) {
+        fppCamRef.current.focusTargetOrbitYaw = THREE.MathUtils.clamp(
+          fppCamRef.current.focusTargetOrbitYaw - ddx * 0.0024,
+          -1.45,
+          1.45
+        );
+        fppCamRef.current.focusTargetOrbitPitch = THREE.MathUtils.clamp(
+          fppCamRef.current.focusTargetOrbitPitch + ddy * 0.0020,
+          -0.28,
+          0.32
+        );
+      } else {
+        fppCamRef.current.targetYawOffset = THREE.MathUtils.clamp(
+          fppCamRef.current.targetYawOffset - ddx * 0.0024,
+          -2.6,
+          2.6
+        );
+        fppCamRef.current.targetPitch = THREE.MathUtils.clamp(
+          fppCamRef.current.targetPitch - ddy * 0.0020,
+          -0.38,
+          0.26
+        );
+      }
+      if (!hoverQueued && sceneHooksRef.current) {
+        hoverQueued = true;
+        requestAnimationFrame(() => {
+          hoverQueued = false;
+          sceneHooksRef.current?.hoverFppProbePlacement(
+            window.innerWidth / 2,
+            window.innerHeight / 2
+          );
+        });
+      }
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+    };
+  }, [firstPersonPatientId, fppPointerLocked]);
+
+  // PC Keyboard WASD / Arrows pan, +/- zoom, Space/Home recenter in Isometric Clinic View
+  useEffect(() => {
+    isoKeysRef.current = {
+      w: false,
+      a: false,
+      s: false,
+      d: false,
+      plus: false,
+      minus: false,
+      shift: false,
+    };
+    if (firstPersonPatientId) return;
+
+    const updateIsoKey = (e: KeyboardEvent, down: boolean) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (down && shortcutsBlocked) return;
+      const k = e.key.toLowerCase();
+      isoKeysRef.current.shift = e.shiftKey;
+      if (k === 'w' || e.key === 'ArrowUp') isoKeysRef.current.w = down;
+      else if (k === 's' || e.key === 'ArrowDown') isoKeysRef.current.s = down;
+      else if (k === 'a' || e.key === 'ArrowLeft') isoKeysRef.current.a = down;
+      else if (k === 'd' || e.key === 'ArrowRight') isoKeysRef.current.d = down;
+      else if (e.key === '+' || e.key === '=') isoKeysRef.current.plus = down;
+      else if (e.key === '-' || e.key === '_') isoKeysRef.current.minus = down;
+
+      if (
+        down &&
+        !e.repeat &&
+        !shortcutsBlocked &&
+        !placementDraft &&
+        (e.code === 'Space' || e.key === 'Home') &&
+        tag !== 'BUTTON'
+      ) {
+        e.preventDefault();
+        camStateRef.current.panVelX = 0;
+        camStateRef.current.panVelZ = 0;
+        camStateRef.current.targetX = 13.2;
+        camStateRef.current.targetZ = 12.8;
+        camStateRef.current.targetZoom = DEFAULT_ZOOM;
+      }
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => updateIsoKey(e, true);
+    const onKeyUp = (e: KeyboardEvent) => updateIsoKey(e, false);
+    const onBlur = () => {
+      isoKeysRef.current = {
+        w: false,
+        a: false,
+        s: false,
+        d: false,
+        plus: false,
+        minus: false,
+        shift: false,
+      };
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [firstPersonPatientId, shortcutsBlocked, placementDraft]);
 
   // Mount Three.js Perspective 3D Engine ONCE
   useEffect(() => {
@@ -786,7 +974,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const getTargetDpr = (w: number, h: number) => {
       if (isSoftwareGl) return 1;
       const rawDpr = window.devicePixelRatio || 1;
-      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.25) : Math.min(rawDpr, 1.5);
+      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.15) : Math.min(rawDpr, 2.0);
       return Math.min(baseDpr, maxSurfaceSize / Math.max(1, w, h));
     };
     const dpr = getTargetDpr(initW, initH);
@@ -862,7 +1050,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     let actorsOrEquipMoving = false;
 
     const maxAniso = renderer.capabilities.getMaxAnisotropy();
-    const textures: TextureBundle = createTextureBundle(maxAniso);
+    const effectiveAniso = isMobileGpu ? Math.min(2, maxAniso) : maxAniso;
+    const textures: TextureBundle = createTextureBundle(effectiveAniso, {
+      mobileOptimized: isMobileGpu,
+    });
     const pbrCharMaps = {
       contactShadowTex: textures.contactShadow,
       skinMicroMap: textures.skinMicroMap,
@@ -2310,7 +2501,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     fppHands.group.visible = false;
 
     // Pre-allocated PointLight Pool (wall-wash & lamp halos illuminate secondary fixtures at 0 shader cost)
-    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 2 : isMobileGpu ? 3 : 4;
+    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 2 : isMobileGpu ? 3 : 8;
+    const shadowIntervalMs = !isMobileGpu ? 24 : 115;
     const smartLightPool: THREE.PointLight[] = [];
     for (let i = 0; i < SMART_LIGHT_POOL_SIZE; i++) {
       const pl = new THREE.PointLight(0xffdfb0, 0, 14, 1.0);
@@ -2603,7 +2795,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const fog = scene.fog as THREE.Fog;
         fog.color.copy(_dayFog).lerp(_nightFog, nightBlend).lerp(_duskFog, duskFactor * 0.35);
         fog.near = THREE.MathUtils.lerp(55, 58, nightBlend);
-        fog.far = THREE.MathUtils.lerp(95, 108, nightBlend);
+        fog.far = THREE.MathUtils.lerp(!isMobileGpu ? 108 : 95, 114, nightBlend);
 
         if (worldHandle) {
           worldHandle.skyUniforms.uTopColor.value.copy(_dayTop).lerp(_nightTop, nightBlend);
@@ -3085,27 +3277,34 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     };
 
     let sceneAssetsInitialized = false;
+    let initStepRafId = 0;
     const initSceneAssets = () => {
       if (disposed || sceneAssetsInitialized || !glbRegistry.coreReady) return;
       sceneAssetsInitialized = true;
       rebuildWorld(latestRef.current.rooms, latestRef.current.removedTreeIds);
-      syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
-      syncDraft(latestRef.current.placementDraft);
-      updateCameraTransform();
-      shadowsDirty = true;
-      if (!isSoftwareGl && !isContextLost && !gl.isContextLost()) {
-        const wasBackdropVis = fppBackdrop.group.visible;
-        const wasHandsVis = fppHands.group.visible;
-        fppBackdrop.group.visible = true;
-        fppHands.group.visible = true;
-        renderer.compile(scene, camera);
-        fppBackdrop.group.visible = wasBackdropVis;
-        fppHands.group.visible = wasHandsVis;
-      }
-      setGlbsReady(true);
+      initStepRafId = requestAnimationFrame(() => {
+        if (disposed) return;
+        syncItems(latestRef.current.placedItems, latestRef.current.placementDraft?.movingInstanceId);
+        syncDraft(latestRef.current.placementDraft);
+        updateCameraTransform();
+        shadowsDirty = true;
+        initStepRafId = requestAnimationFrame(() => {
+          if (disposed) return;
+          if (!isSoftwareGl && !isContextLost && !gl.isContextLost()) {
+            const wasBackdropVis = fppBackdrop.group.visible;
+            const wasHandsVis = fppHands.group.visible;
+            fppBackdrop.group.visible = true;
+            fppHands.group.visible = true;
+            renderer.compile(scene, camera);
+            fppBackdrop.group.visible = wasBackdropVis;
+            fppHands.group.visible = wasHandsVis;
+          }
+          setGlbsReady(true);
+        });
+      });
     };
 
-    startPreloadGlbs(maxAniso);
+    startPreloadGlbs(effectiveAniso);
     const unsubGlb = glbRegistry.onCoreReady(() => {
       initSceneAssets();
     });
@@ -3228,8 +3427,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         projDirty = true;
       }
       const cs = camStateRef.current;
-      // Tighter architectural framing so zoom-out stays cleanly around the clinic grounds
-      const baseDist = aspect < 0.8 ? 41 : 30;
+      // Tighter architectural framing on phones, expansive panoramic framing on widescreen desktop/laptop
+      const baseDist = aspect < 0.8 ? 41 : aspect > 1.55 ? 28.5 : 30;
       const dist = baseDist / cs.curZoom;
       const pitch = 0.6;
       const horiz = Math.cos(pitch) * dist;
@@ -4304,6 +4503,35 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       }
     };
 
+    const interactFppPrimary = () => {
+      if (!fppCamRef.current.activeId) return;
+      if (latestRef.current.fppActiveDevice) return;
+      for (const eq of fppEquipBayMap.values()) {
+        if (eq.mode === 'held') {
+          placeFppHeldDevice();
+          return;
+        }
+      }
+      if (lastFppHandshakeReady) {
+        triggerFppHandshake();
+        return;
+      }
+      if (lastFppNearKey) {
+        if (lastFppNearKey.startsWith('mag_') && fppStationMagState.stationId) {
+          openStationConsole(fppStationMagState.stationId);
+          return;
+        }
+        if (lastFppNearKey.startsWith('tilt_') && fppStationTiltState.stationId) {
+          openStationConsole(fppStationTiltState.stationId);
+          return;
+        }
+        const nearId = lastFppNearKey.split('|')[0];
+        if (nearId) {
+          grabFppDevice(nearId);
+        }
+      }
+    };
+
     sceneHooksRef.current = {
       rebuildWorld,
       syncItems,
@@ -4333,6 +4561,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       updateFppBedDevice,
       openStationConsole,
       triggerFppHandshake,
+      interactFppPrimary,
     };
     if (fppCommandRef) {
       fppCommandRef.current = {
@@ -7966,7 +8195,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const prX = Math.cos(fpp.patientFacing);
         const prZ = -Math.sin(fpp.patientFacing);
 
-        const moveSpeed = 1.85;
+        const moveSpeed = keys.shift ? 2.65 : 1.85;
         const tgtFwdVel = mag > 0.03 ? inFwd * moveSpeed : 0;
         const tgtRightVel = mag > 0.03 ? inRight * moveSpeed : 0;
         fpp.velFwd = THREE.MathUtils.damp(fpp.velFwd, tgtFwdVel, mag > 0.03 ? 18 : 20, dt);
@@ -9425,7 +9654,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           _fppInteractionScratch
         );
         if (renderer.shadowMap.enabled) {
-          if (shadowsDirty || nowMs - lastShadowUpdateMs >= 100) {
+          if (shadowsDirty || nowMs - lastShadowUpdateMs >= shadowIntervalMs) {
             renderer.shadowMap.needsUpdate = true;
             lastShadowUpdateMs = nowMs;
             shadowsDirty = false;
@@ -9470,7 +9699,29 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           shadowsDirty = true;
         }
 
-        if (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005) {
+        const ik = isoKeysRef.current;
+        const isoMoveX = (ik.d ? 1 : 0) - (ik.a ? 1 : 0);
+        const isoMoveZ = (ik.w ? 1 : 0) - (ik.s ? 1 : 0);
+        if (isoMoveX !== 0 || isoMoveZ !== 0) {
+          const iMag = Math.hypot(isoMoveX, isoMoveZ);
+          const nx = isoMoveX / iMag;
+          const nz = isoMoveZ / iMag;
+          const fwdX = -Math.sin(cs.curYaw);
+          const fwdZ = -Math.cos(cs.curYaw);
+          const rightX = Math.cos(cs.curYaw);
+          const rightZ = -Math.sin(cs.curYaw);
+          const keyPanSpeed = ((ik.shift ? 18 : 11.5) * dt) / Math.max(0.85, cs.curZoom);
+          cs.targetX = Math.max(
+            PAN_MIN_X,
+            Math.min(PAN_MAX_X, cs.targetX + (rightX * nx + fwdX * nz) * keyPanSpeed)
+          );
+          cs.targetZ = Math.max(
+            PAN_MIN_Z,
+            Math.min(PAN_MAX_Z, cs.targetZ + (rightZ * nx + fwdZ * nz) * keyPanSpeed)
+          );
+          cs.panVelX = 0;
+          cs.panVelZ = 0;
+        } else if (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005) {
           cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + cs.panVelX * dt));
           cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + cs.panVelZ * dt));
           cs.panVelX = THREE.MathUtils.damp(cs.panVelX, 0, 6.5, dt);
@@ -9478,6 +9729,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         } else {
           cs.panVelX = 0;
           cs.panVelZ = 0;
+        }
+        if (ik.plus || ik.minus) {
+          const zDelta = ((ik.plus ? 1 : 0) - (ik.minus ? 1 : 0)) * 1.15 * dt;
+          cs.targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cs.targetZoom + zDelta));
         }
         cs.curX = THREE.MathUtils.damp(cs.curX, cs.targetX, 9.5, dt);
         cs.curZ = THREE.MathUtils.damp(cs.curZ, cs.targetZ, 9.5, dt);
@@ -9792,7 +10047,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
 
         if (renderer.shadowMap.enabled) {
-          if (shadowsDirty || (actorsOrEquipMoving && nowMs - lastShadowUpdateMs >= 95)) {
+          if (shadowsDirty || (actorsOrEquipMoving && nowMs - lastShadowUpdateMs >= shadowIntervalMs)) {
             renderer.shadowMap.needsUpdate = true;
             lastShadowUpdateMs = nowMs;
             shadowsDirty = false;
@@ -9828,6 +10083,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       unsubGlb();
       unsubFullGlb();
       unsubAssetLoaded();
+      if (initStepRafId) cancelAnimationFrame(initStepRafId);
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       sceneHooksRef.current = null;
@@ -10152,15 +10408,51 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (firstPersonPatientId) {
-      clearLongPress();
-      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pointersRef.current.size === 1) {
-        try {
-          e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {
-          // Ignore synthetic pointer events
+      if (
+        e.button === 2 &&
+        viewport.isKeyboardMouseActive &&
+        !latestRef.current.fppActiveDevice?.hasScreen
+      ) {
+        e.preventDefault();
+        const el = pointerSurfaceRef.current;
+        if (el) {
+          if (document.pointerLockElement === el) {
+            try {
+              document.exitPointerLock();
+            } catch {
+              // Ignore
+            }
+          } else {
+            try {
+              const res = el.requestPointerLock?.() as unknown as Promise<void> | undefined;
+              if (res && typeof res.catch === 'function') {
+                res.catch(() => {});
+              }
+            } catch {
+              // Ignore
+            }
+          }
         }
-        if (sceneHooksRef.current?.startFppProbeDrag(e.clientX, e.clientY)) {
+        return;
+      }
+
+      const lockedNow = Boolean(
+        pointerSurfaceRef.current && document.pointerLockElement === pointerSurfaceRef.current
+      );
+      const tapX = lockedNow ? window.innerWidth / 2 : e.clientX;
+      const tapY = lockedNow ? window.innerHeight / 2 : e.clientY;
+
+      clearLongPress();
+      pointersRef.current.set(e.pointerId, { x: tapX, y: tapY });
+      if (pointersRef.current.size === 1) {
+        if (!lockedNow) {
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // Ignore synthetic pointer events
+          }
+        }
+        if (sceneHooksRef.current?.startFppProbeDrag(tapX, tapY)) {
           if (pointerSurfaceRef.current) {
             pointerSurfaceRef.current.style.cursor = 'grabbing';
           }
@@ -10217,13 +10509,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     }
 
     const hooks = sceneHooksRef.current;
+    const isCameraMouseButton = e.pointerType === 'mouse' && (e.button === 1 || e.button === 2);
     let grabbingDraft = false;
     let pendingDragItem: PlacedItem | null = null;
     let hasGrabOffset = false;
     let grabOffX = 0;
     let grabOffZ = 0;
 
-    if (placementDraft && hooks) {
+    if (isCameraMouseButton) {
+      if (pointerSurfaceRef.current) {
+        pointerSurfaceRef.current.style.cursor = 'grabbing';
+      }
+    } else if (placementDraft && hooks) {
       const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
       const effW = placementDraft.rotation % 2 === 0 ? placementDraft.catalogItem.width : placementDraft.catalogItem.depth;
       const effD = placementDraft.rotation % 2 === 0 ? placementDraft.catalogItem.depth : placementDraft.catalogItem.width;
@@ -10264,7 +10561,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
     dragRef.current = {
       active: true,
-      moved: false,
+      moved: isCameraMouseButton,
       draggingDraft: grabbingDraft,
       pendingDragItem,
       startX: e.clientX,
@@ -10283,6 +10580,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     }
 
     if (firstPersonPatientId) {
+      if (document.pointerLockElement === pointerSurfaceRef.current) {
+        return;
+      }
       if (fppProbeDragRef.current.active) {
         sceneHooksRef.current?.moveFppProbeDrag(e.clientX, e.clientY);
         return;
@@ -10348,9 +10648,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
     const hooks = sceneHooksRef.current;
 
-    // Hover feedback ONLY when in editMode or placing draft — throttled to 1 raycast per rAF
+    // Hover feedback in editMode/placementDraft or desktop interactive cursors — throttled to 1 raycast per rAF
     if (!dragRef.current.active && hooks) {
-      if (editMode || placementDraft) {
+      if (editMode || placementDraft || (viewport.hasFinePointer && e.pointerType === 'mouse')) {
         pendingHoverRef.current = { x: e.clientX, y: e.clientY };
         if (hoverRafRef.current === null) {
           hoverRafRef.current = requestAnimationFrame(() => {
@@ -10368,6 +10668,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             } else if (placementDraft && pointerSurfaceRef.current) {
               const hoverGhost = curHooks.hitTestDraftGhost(pos.x, pos.y);
               pointerSurfaceRef.current.style.cursor = hoverGhost ? 'grab' : 'pointer';
+            } else if (pointerSurfaceRef.current) {
+              const hitInteractive = Boolean(
+                curHooks.hitTestPatient(pos.x, pos.y) ||
+                  curHooks.hitTestDeployedPatient(pos.x, pos.y) ||
+                  curHooks.hitTestLockedRoomDetail(pos.x, pos.y) ||
+                  curHooks.hitTestWorldTreeDetail(pos.x, pos.y) ||
+                  curHooks.hitTestPlacedItemDetail(pos.x, pos.y)
+              );
+              pointerSurfaceRef.current.style.cursor = hitInteractive ? 'pointer' : 'default';
             }
           });
         }
@@ -10506,23 +10815,29 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const activeDraft = liveDragDraftRef.current || placementDraft;
     liveDragDraftRef.current = null;
 
+    const lockedNow = Boolean(
+      pointerSurfaceRef.current && document.pointerLockElement === pointerSurfaceRef.current
+    );
+    const tapX = lockedNow ? window.innerWidth / 2 : e.clientX;
+    const tapY = lockedNow ? window.innerHeight / 2 : e.clientY;
+
     if (firstPersonPatientId) {
       dragRef.current.active = false;
       dragRef.current.draggingDraft = false;
       dragRef.current.pendingDragItem = null;
-      if (wasTap) {
+      if (wasTap && e.button === 0) {
         const placedProbe = sceneHooksRef.current?.tryPlaceSelectedProbeAtPointer(
-          e.clientX,
-          e.clientY
+          tapX,
+          tapY
         );
         if (!placedProbe) {
-          sceneHooksRef.current?.handleFppTap(e.clientX, e.clientY);
+          sceneHooksRef.current?.handleFppTap(tapX, tapY);
         }
       }
       return;
     }
 
-    if (wasTap) {
+    if (wasTap && e.button === 0) {
       handleTap(e.clientX, e.clientY);
     } else if (wasDraggingDraft && activeDraft) {
       const valid = isPlacementValid(activeDraft.hoverX, activeDraft.hoverY, activeDraft);
@@ -10569,6 +10884,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onContextMenu={(e) => {
+          if (viewport.isDesktopOrTablet) {
+            e.preventDefault();
+          }
+        }}
         onPointerCancel={(e) => {
           clearLongPress();
           pointersRef.current.delete(e.pointerId);
@@ -10599,10 +10919,24 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         )}
       </div>
 
-      {/* Minimal Corner Center-Camera Control (safely above Store button; hidden on mobile during active placement) */}
+      {/* Subtle PC Center Crosshair Reticle when FPP Mouse-Look Pointer Lock is active */}
+      {firstPersonPatientId && fppPointerLocked && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-25 flex items-center justify-center"
+        >
+          <div className="relative w-5 h-5 flex items-center justify-center">
+            <span className="absolute w-3.5 h-[1.5px] bg-white/85 rounded-full shadow-[0_0_4px_rgba(0,0,0,0.85)]" />
+            <span className="absolute h-3.5 w-[1.5px] bg-white/85 rounded-full shadow-[0_0_4px_rgba(0,0,0,0.85)]" />
+            <span className="w-1 h-1 rounded-full bg-sky-300 shadow-[0_0_6px_rgba(56,189,248,0.95)]" />
+          </div>
+        </div>
+      )}
+
+      {/* Minimal Phone Center-Camera Control (untouched mobile phone experience) */}
       {!firstPersonPatientId && (
         <div
-          className={`absolute left-3.5 z-20 flex-col gap-2 ${
+          className={`md:hidden absolute left-3.5 z-20 flex-col gap-2 ${
             placementDraft ? 'hidden sm:flex' : 'flex'
           } bottom-[calc(env(safe-area-inset-bottom,0px)+5.25rem)] sm:bottom-20`}
         >
@@ -10620,6 +10954,84 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             className="w-11 h-11 rounded-2xl bg-slate-900/80 hover:bg-slate-900 text-white font-bold text-sm border border-white/15 shadow-lg flex items-center justify-center active:scale-95 transition-transform"
           >
             ⌖
+          </button>
+        </div>
+      )}
+
+      {/* Desktop / Laptop / Tablet Isometric Camera & Orbit Strip */}
+      {!firstPersonPatientId && (
+        <div
+          dir="ltr"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="hidden md:flex absolute left-4 bottom-[5.35rem] z-20 items-center gap-1 rounded-2xl bg-slate-950/88 backdrop-blur-md border border-white/15 p-1 shadow-xl text-white"
+        >
+          {onOrbitStepDelta && (
+            <>
+              <button
+                type="button"
+                onClick={() => onOrbitStepDelta(-1)}
+                title={language === 'ar' ? 'تدوير لليسار (Q)' : 'Orbit Left (Q)'}
+                aria-label="Orbit Left"
+                className="w-9 h-9 rounded-xl hover:bg-slate-800 active:scale-95 flex items-center justify-center text-slate-200 hover:text-sky-300 transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onOrbitStepDelta(1)}
+                title={language === 'ar' ? 'تدوير لليمين (E)' : 'Orbit Right (E)'}
+                aria-label="Orbit Right"
+                className="w-9 h-9 rounded-xl hover:bg-slate-800 active:scale-95 flex items-center justify-center text-slate-200 hover:text-sky-300 transition-colors cursor-pointer"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+              <div className="w-px h-5 bg-white/15 mx-0.5" />
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              camStateRef.current.targetZoom = Math.max(
+                MIN_ZOOM,
+                camStateRef.current.targetZoom - 0.18
+              );
+            }}
+            title={language === 'ar' ? 'تصغير (-)' : 'Zoom Out (-)'}
+            aria-label="Zoom Out"
+            className="w-9 h-9 rounded-xl hover:bg-slate-800 active:scale-95 flex items-center justify-center text-slate-200 hover:text-sky-300 transition-colors cursor-pointer"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              camStateRef.current.targetZoom = Math.min(
+                MAX_ZOOM,
+                camStateRef.current.targetZoom + 0.18
+              );
+            }}
+            title={language === 'ar' ? 'تكبير (+)' : 'Zoom In (+)'}
+            aria-label="Zoom In"
+            className="w-9 h-9 rounded-xl hover:bg-slate-800 active:scale-95 flex items-center justify-center text-slate-200 hover:text-sky-300 transition-colors cursor-pointer"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <div className="w-px h-5 bg-white/15 mx-0.5" />
+          <button
+            type="button"
+            onClick={() => {
+              camStateRef.current.panVelX = 0;
+              camStateRef.current.panVelZ = 0;
+              camStateRef.current.targetX = 13.2;
+              camStateRef.current.targetZ = 12.8;
+              camStateRef.current.targetZoom = DEFAULT_ZOOM;
+            }}
+            title={language === 'ar' ? 'توسيط الكاميرا (Space)' : 'Center View (Space)'}
+            aria-label="Center clinic"
+            className="h-9 px-2.5 rounded-xl hover:bg-slate-800 active:scale-95 flex items-center gap-1 text-xs font-extrabold text-slate-100 hover:text-sky-300 transition-colors cursor-pointer"
+          >
+            <span className="text-sm leading-none">⌖</span>
+            <span className="hidden lg:inline">{language === 'ar' ? 'توسيط' : 'Center'}</span>
           </button>
         </div>
       )}

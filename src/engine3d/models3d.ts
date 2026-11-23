@@ -606,8 +606,8 @@ export function buildClinicWorld3D(
   );
   const aoPlaneGeom = trackGeom(new THREE.PlaneGeometry(1, 1));
 
-  // 1. Focused Clinic Yard Terrain (compact surrounding lawn blending smoothly into horizon fog)
-  const lawnGeom = trackGeom(new THREE.PlaneGeometry(96, 96, 36, 36));
+  // 1. Focused Clinic Yard Terrain (expansive surrounding lawn blending smoothly into widescreen horizon fog)
+  const lawnGeom = trackGeom(new THREE.PlaneGeometry(144, 144, 36, 36));
   lawnGeom.rotateX(-Math.PI / 2);
   const posAttr = lawnGeom.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < posAttr.count; i++) {

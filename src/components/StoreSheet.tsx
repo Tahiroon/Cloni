@@ -164,7 +164,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
       onClick={onClose}
     >
       <div
-        className={`w-full max-w-3xl rounded-t-3xl sm:rounded-3xl shadow-2xl border flex flex-col max-h-[86vh] animate-in slide-in-from-bottom duration-200 overflow-hidden transition-colors ${
+        className={`w-full max-w-3xl md:max-w-4xl lg:max-w-5xl rounded-t-3xl sm:rounded-3xl shadow-2xl border flex flex-col max-h-[86vh] animate-in slide-in-from-bottom duration-200 overflow-hidden transition-colors ${
           isNight
             ? 'bg-slate-950 border-slate-700/90 text-slate-100'
             : 'bg-[#f4f7f5] border-white/80 text-slate-900'
@@ -206,7 +206,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
                 type="button"
                 onClick={onClose}
                 aria-label="Close store"
-                className="w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors"
+                className="w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -234,7 +234,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
                     key={id}
                     type="button"
                     onClick={() => setFilter(id)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap shrink-0 transition-all ${
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
                       active
                         ? 'bg-emerald-400 text-slate-950 shadow-md'
                         : 'bg-white/12 text-sky-50 hover:bg-white/20'
@@ -258,7 +258,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
                 <Building2 className="w-4 h-4 text-sky-500" />
                 {isAr ? 'توسعة الأجنحة الجديدة' : 'Unlock Clinic Wings'}
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {lockedRooms.map((room) => {
                   const canAfford = infiniteCoins || coins >= room.unlockCost;
                   return (
@@ -315,7 +315,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
                 <Users className="w-4 h-4 text-teal-500" />
                 {isAr ? 'توظيف الطاقم الطبي والإداري' : 'Hire Clinic Staff'}
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {staff.map((member) => {
                   const canAfford = infiniteCoins || coins >= member.hireCost;
                   return (
@@ -386,7 +386,7 @@ export const StoreSheet: React.FC<StoreSheetProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                 {filteredItems.map((item) => {
                   const canAfford = infiniteCoins || coins >= item.priceCoins;
                   const specMeta =

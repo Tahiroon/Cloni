@@ -131,10 +131,11 @@ function drawTherasonMark(
 
 export function createTextureBundle(
   maxAnisotropy = 4,
-  opts?: { catalogOnly?: boolean }
+  opts?: { catalogOnly?: boolean; mobileOptimized?: boolean }
 ): TextureBundle {
   const aniso = Math.min(16, Math.max(1, maxAnisotropy));
   const catalogOnly = Boolean(opts?.catalogOnly);
+  const mobileOpt = Boolean(opts?.mobileOptimized);
   let disposed = false;
   const created: THREE.CanvasTexture[] = [];
   const track = (t: THREE.CanvasTexture) => {
@@ -152,17 +153,18 @@ export function createTextureBundle(
   // Photorealistic Architectural Porcelain / Carrara-Stone Medical Tiles (3x3 66.7cm module in 1024x1024)
   // Uses fast periodic multi-octave FBM + domain-warped stone veining per pixel so each tile looks like real kiln-fired stone.
   const TILE_COLS = 3;
-  const TILE_SIZE = 512;
-  const TILE_INSET = 2.1;
+  const TILE_SIZE = mobileOpt ? 384 : 512;
+  const TILE_INSET = mobileOpt ? 1.6 : 2.1;
 
   const worldStoneTextures = catalogOnly
     ? null
     : (() => {
-        // Precompute tileable 256x256 4-octave FBM lookup buffer (< 4ms) for ultra-detailed stone & marble synthesis
-        const STONE_N = 256;
+        // Precompute tileable 4-octave FBM lookup buffer (< 4ms) for ultra-detailed stone & marble synthesis
+        const STONE_N = mobileOpt ? 128 : 256;
+        const STONE_MASK = STONE_N - 1;
         const stoneFbm = (() => {
           const hash2 = (x: number, y: number, seed: number) => {
-            const h = Math.sin(((x & 255) * 127.1 + (y & 255) * 311.7 + seed * 74.7)) * 43758.5453;
+            const h = Math.sin(((x & STONE_MASK) * 127.1 + (y & STONE_MASK) * 311.7 + seed * 74.7)) * 43758.5453;
             return h - Math.floor(h);
           };
           const sampleGrid = (u: number, v: number, freq: number, seed: number) => {
@@ -201,10 +203,10 @@ export function createTextureBundle(
         const sampleStone = (u: number, v: number) => {
           const fu = ((u % 1) + 1) % 1 * STONE_N;
           const fv = ((v % 1) + 1) % 1 * STONE_N;
-          const x0 = Math.floor(fu) & 255;
-          const y0 = Math.floor(fv) & 255;
-          const x1 = (x0 + 1) & 255;
-          const y1 = (y0 + 1) & 255;
+          const x0 = Math.floor(fu) & STONE_MASK;
+          const y0 = Math.floor(fv) & STONE_MASK;
+          const x1 = (x0 + 1) & STONE_MASK;
+          const y1 = (y0 + 1) & STONE_MASK;
           const tx = fu - Math.floor(fu);
           const ty = fv - Math.floor(fv);
           const a = stoneFbm[y0 * STONE_N + x0];
@@ -481,7 +483,9 @@ export function createTextureBundle(
         });
 
         const courtyardPaver = (() => {
-          const [c, ctx] = makeCanvas(512, 512);
+          const pSz = mobileOpt ? 256 : 512;
+          const [c, ctx] = makeCanvas(pSz, pSz);
+          if (mobileOpt) ctx.scale(0.5, 0.5);
           ctx.fillStyle = '#9b8f80';
           ctx.fillRect(0, 0, 512, 512);
           const cols = 4;
@@ -501,7 +505,8 @@ export function createTextureBundle(
               ctx.strokeRect(px + 1, py + 1, cw - 8, ch - 8);
             }
           }
-          for (let i = 0; i < 3200; i++) {
+          const speckCount = mobileOpt ? 1200 : 3200;
+          for (let i = 0; i < speckCount; i++) {
             const px = (Math.sin(i * 41.3) * 0.5 + 0.5) * 512;
             const py = (Math.cos(i * 19.7) * 0.5 + 0.5) * 512;
             ctx.fillStyle = i % 3 === 0 ? 'rgba(92, 80, 68, 0.14)' : 'rgba(248, 240, 226, 0.12)';
@@ -521,25 +526,28 @@ export function createTextureBundle(
   const courtyardPaver = worldStoneTextures ? worldStoneTextures.courtyardPaver : dummyTex;
 
   const paverBump = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const pbSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(pbSz, pbSz);
     ctx.fillStyle = '#484848';
-    ctx.fillRect(0, 0, 512, 512);
+    ctx.fillRect(0, 0, pbSz, pbSz);
     ctx.fillStyle = '#dedede';
-    const cw = 128;
-    const ch = 128;
+    const cw = pbSz / 4;
+    const ch = pbSz / 4;
+    const inset = mobileOpt ? 2 : 3;
     for (let y = 0; y < 4; y++) {
       for (let x = 0; x < 4; x++) {
         const offset = y % 2 === 0 ? 0 : cw * 0.5;
-        ctx.fillRect(((x * cw + offset) % 512) + 3, y * ch + 3, cw - 6, ch - 6);
+        ctx.fillRect(((x * cw + offset) % pbSz) + inset, y * ch + inset, cw - inset * 2, ch - inset * 2);
       }
     }
-    const img = ctx.getImageData(0, 0, 512, 512);
+    const img = ctx.getImageData(0, 0, pbSz, pbSz);
     const pd = img.data;
-    for (let i = 0; i < 1600; i++) {
-      const px = ((Math.sin(i * 41.3) * 0.5 + 0.5) * 511) | 0;
-      const py = ((Math.cos(i * 19.7) * 0.5 + 0.5) * 511) | 0;
+    const gritCount = mobileOpt ? 600 : 1600;
+    for (let i = 0; i < gritCount; i++) {
+      const px = ((Math.sin(i * 41.3) * 0.5 + 0.5) * (pbSz - 1)) | 0;
+      const py = ((Math.cos(i * 19.7) * 0.5 + 0.5) * (pbSz - 1)) | 0;
       const tone = i % 2 === 0 ? 188 : 242;
-      const p = (py * 512 + px) * 4;
+      const p = (py * pbSz + px) * 4;
       pd[p] = tone;
       pd[p + 1] = tone;
       pd[p + 2] = tone;
@@ -552,7 +560,9 @@ export function createTextureBundle(
   const grass = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const gSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(gSz, gSz);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
     ctx.fillStyle = '#3f632e';
     ctx.fillRect(0, 0, 512, 512);
 
@@ -573,7 +583,8 @@ export function createTextureBundle(
       }
     };
 
-    for (let i = 0; i < 90; i++) {
+    const patchCount = mobileOpt ? 48 : 90;
+    for (let i = 0; i < patchCount; i++) {
       const px = (Math.sin(i * 19.7 + 1.2) * 0.5 + 0.5) * 512;
       const py = (Math.cos(i * 31.3 + 0.5) * 0.5 + 0.5) * 512;
       const r = 24 + (i % 7) * 14;
@@ -601,10 +612,11 @@ export function createTextureBundle(
       'rgba(44, 72, 28, 0.44)',
     ];
     ctx.lineWidth = 0.95;
+    const totalBlades = mobileOpt ? 2100 : 4200;
     for (let bucket = 0; bucket < bladeCols.length; bucket++) {
       ctx.strokeStyle = bladeCols[bucket];
       ctx.beginPath();
-      for (let i = bucket; i < 4200; i += 7) {
+      for (let i = bucket; i < totalBlades; i += 7) {
         const gx = (Math.sin(i * 91.3 + 0.7) * 0.5 + 0.5) * 512;
         const gy = (Math.cos(i * 47.9 + 1.4) * 0.5 + 0.5) * 512;
         const len = 3.5 + (i % 6) * 1.9;
@@ -621,11 +633,14 @@ export function createTextureBundle(
   const asphalt = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const aSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(aSz, aSz);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
     ctx.fillStyle = '#9b876a';
     ctx.fillRect(0, 0, 512, 512);
 
-    for (let i = 0; i < 72; i++) {
+    const stainCount = mobileOpt ? 40 : 72;
+    for (let i = 0; i < stainCount; i++) {
       const x = (Math.sin(i * 43.1 + 0.3) * 0.5 + 0.5) * 512;
       const y = (Math.cos(i * 29.7 + 1.1) * 0.5 + 0.5) * 512;
       const r = 24 + (i % 6) * 16;
@@ -674,7 +689,7 @@ export function createTextureBundle(
     for (let pass = 0; pass < 2; pass++) {
       ctx.strokeStyle = pass === 0 ? 'rgba(66, 102, 42, 0.65)' : 'rgba(104, 138, 60, 0.52)';
       ctx.beginPath();
-      for (let i = pass; i < 360; i += 2) {
+      for (let i = pass; i < (mobileOpt ? 200 : 360); i += 2) {
         const side = i % 2 === 0 ? 0 : 1;
         const gx = side === 0 ? (Math.sin(i * 19.3) * 0.5 + 0.5) * 44 : 468 + (Math.cos(i * 23.7) * 0.5 + 0.5) * 44;
         const gy = (Math.sin(i * 67.1) * 0.5 + 0.5) * 512;
@@ -685,12 +700,13 @@ export function createTextureBundle(
     }
 
     // Fast ImageData pebble & sand grain pass + sparse pebbles
-    const imgA = ctx.getImageData(0, 0, 512, 512);
+    const imgA = ctx.getImageData(0, 0, aSz, aSz);
     const ad = imgA.data;
-    for (let i = 0; i < 4200; i++) {
-      const px = ((Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 510) | 0;
-      const py = ((Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 510) | 0;
-      const idx = (py * 512 + px) * 4;
+    const grainCount = mobileOpt ? 1600 : 4200;
+    for (let i = 0; i < grainCount; i++) {
+      const px = ((Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * (aSz - 2)) | 0;
+      const py = ((Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * (aSz - 2)) | 0;
+      const idx = (py * aSz + px) * 4;
       const delta = i % 4 === 0 ? 22 : i % 3 === 0 ? -24 : 12;
       ad[idx] = Math.max(0, Math.min(255, ad[idx] + delta));
       ad[idx + 1] = Math.max(0, Math.min(255, ad[idx + 1] + delta));
@@ -703,21 +719,23 @@ export function createTextureBundle(
   const asphaltBump = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    const img = ctx.createImageData(512, 512);
+    const abSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(abSz, abSz);
+    const img = ctx.createImageData(abSz, abSz);
     const d = img.data;
     d.fill(255);
-    for (let i = 0; i < 512 * 512; i++) {
+    for (let i = 0; i < abSz * abSz; i++) {
       const p = i * 4;
       d[p] = 128;
       d[p + 1] = 128;
       d[p + 2] = 128;
     }
-    for (let i = 0; i < 5500; i++) {
-      const px = ((Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * 510) | 0;
-      const py = ((Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * 510) | 0;
+    const bumpGrains = mobileOpt ? 2000 : 5500;
+    for (let i = 0; i < bumpGrains; i++) {
+      const px = ((Math.sin(i * 37.2 + 0.3) * 0.5 + 0.5) * (abSz - 2)) | 0;
+      const py = ((Math.cos(i * 61.9 + 0.7) * 0.5 + 0.5) * (abSz - 2)) | 0;
       const v = i % 2 === 0 ? 168 : 88;
-      const p = (py * 512 + px) * 4;
+      const p = (py * abSz + px) * 4;
       d[p] = v;
       d[p + 1] = v;
       d[p + 2] = v;
@@ -730,7 +748,9 @@ export function createTextureBundle(
   const sidewalk = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const swSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(swSz, swSz);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
     ctx.fillStyle = '#7c7564';
     ctx.fillRect(0, 0, 512, 512);
 
@@ -763,12 +783,13 @@ export function createTextureBundle(
       }
     }
 
-    const imgS = ctx.getImageData(0, 0, 512, 512);
+    const imgS = ctx.getImageData(0, 0, swSz, swSz);
     const sd = imgS.data;
-    for (let i = 0; i < 2400; i++) {
-      const px = ((Math.sin(i * 23.4) * 0.5 + 0.5) * 511) | 0;
-      const py = ((Math.cos(i * 51.8) * 0.5 + 0.5) * 511) | 0;
-      const p = (py * 512 + px) * 4;
+    const grainCount = mobileOpt ? 900 : 2400;
+    for (let i = 0; i < grainCount; i++) {
+      const px = ((Math.sin(i * 23.4) * 0.5 + 0.5) * (swSz - 1)) | 0;
+      const py = ((Math.cos(i * 51.8) * 0.5 + 0.5) * (swSz - 1)) | 0;
+      const p = (py * swSz + px) * 4;
       const dVal = i % 2 === 0 ? 12 : -14;
       sd[p] = Math.max(0, Math.min(255, sd[p] + dVal));
       sd[p + 1] = Math.max(0, Math.min(255, sd[p + 1] + dVal));
@@ -841,11 +862,14 @@ export function createTextureBundle(
 
   // 8a. Deeply furrowed organic tree bark texture + companion normal-feel bump map
   const bark = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const bkSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(bkSz, bkSz);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
     ctx.fillStyle = '#4e3523';
     ctx.fillRect(0, 0, 512, 512);
     // Vertical fibrous grain gradient streaks
-    for (let i = 0; i < 620; i++) {
+    const streakCount = mobileOpt ? 340 : 620;
+    for (let i = 0; i < streakCount; i++) {
       const x = (Math.sin(i * 19.7 + 0.3) * 0.5 + 0.5) * 512;
       const y = (Math.cos(i * 31.1 + 0.9) * 0.5 + 0.5) * 512;
       const h = 38 + (i % 6) * 22;
@@ -863,7 +887,8 @@ export function createTextureBundle(
       ctx.fill();
     }
     // Fine horizontal bark lenticels & lichen flecks
-    for (let i = 0; i < 140; i++) {
+    const lenticelCount = mobileOpt ? 80 : 140;
+    for (let i = 0; i < lenticelCount; i++) {
       const lx = (Math.sin(i * 53.3) * 0.5 + 0.5) * 512;
       const ly = (Math.cos(i * 17.9) * 0.5 + 0.5) * 512;
       ctx.fillStyle = i % 3 === 0 ? 'rgba(98, 122, 74, 0.28)' : 'rgba(24, 14, 8, 0.45)';
@@ -941,11 +966,15 @@ export function createTextureBundle(
     ctx.stroke();
   };
 
-  // 8ab. High-resolution alpha-cutout botanical oak/broadleaf spray texture (1024x1024 crisp pointed veined leaves)
+  // 8ab. High-resolution alpha-cutout botanical oak/broadleaf spray texture (pointed veined leaves)
+  const foliageSz = mobileOpt ? 320 : 512;
+  const foliageScale = foliageSz / 512;
+
   const leafFoliage = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const [c, ctx] = makeCanvas(foliageSz, foliageSz);
+    if (foliageScale !== 1) ctx.scale(foliageScale, foliageScale);
     ctx.clearRect(0, 0, 512, 512);
     const tones: Array<[string, string]> = [
       ['#224c1a', '#3a7229'],
@@ -964,9 +993,10 @@ export function createTextureBundle(
       ctx.lineTo(256 + Math.cos(ba) * 145, 256 + Math.sin(ba) * 145);
       ctx.stroke();
     }
-    for (let i = 0; i < 120; i++) {
+    const leafCount = mobileOpt ? 96 : 120;
+    for (let i = 0; i < leafCount; i++) {
       const a = i * 2.39996;
-      const rad = Math.sqrt((i + 1) / 120) * 196;
+      const rad = Math.sqrt((i + 1) / leafCount) * 196;
       const lx = 256 + Math.cos(a) * rad;
       const ly = 256 + Math.sin(a) * rad;
       const lw = 24 + (i % 5) * 6;
@@ -981,14 +1011,16 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 8ac. Deep-green columnar cypress/pine needle scale spray texture (512x512)
+  // 8ac. Deep-green columnar cypress/pine needle scale spray texture
   const cypressFoliage = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const [c, ctx] = makeCanvas(foliageSz, foliageSz);
+    if (foliageScale !== 1) ctx.scale(foliageScale, foliageScale);
     ctx.clearRect(0, 0, 512, 512);
     const tones = ['#1a3c24', '#214d2c', '#2a5f35', '#15311d', '#34713f'];
-    for (let i = 0; i < 165; i++) {
+    const needleCount = mobileOpt ? 120 : 165;
+    for (let i = 0; i < needleCount; i++) {
       const a = i * 2.39996;
-      const rad = Math.sqrt((i + 1) / 165) * 204;
+      const rad = Math.sqrt((i + 1) / needleCount) * 204;
       const lx = 256 + Math.cos(a) * rad;
       const ly = 256 + Math.sin(a) * rad;
       ctx.save();
@@ -1007,9 +1039,10 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 8ad. Silvery Mediterranean olive-tree slender lanceolate leaf spray texture (512x512)
+  // 8ad. Silvery Mediterranean olive-tree slender lanceolate leaf spray texture
   const oliveFoliage = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const [c, ctx] = makeCanvas(foliageSz, foliageSz);
+    if (foliageScale !== 1) ctx.scale(foliageScale, foliageScale);
     ctx.clearRect(0, 0, 512, 512);
     const tones: Array<[string, string]> = [
       ['#465c42', '#7d9375'],
@@ -1017,9 +1050,10 @@ export function createTextureBundle(
       ['#3b4e38', '#687f62'],
       ['#637a5d', '#aec0a5'],
     ];
-    for (let i = 0; i < 140; i++) {
+    const leafCount = mobileOpt ? 105 : 140;
+    for (let i = 0; i < leafCount; i++) {
       const a = i * 2.39996;
-      const rad = Math.sqrt((i + 1) / 140) * 195;
+      const rad = Math.sqrt((i + 1) / leafCount) * 195;
       const lx = 256 + Math.cos(a) * rad;
       const ly = 256 + Math.sin(a) * rad;
       const [baseC, tipC] = tones[i % tones.length];
@@ -1056,14 +1090,17 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 3, 2, true));
   })();
 
-  // 9. Multi-layered architectural plaster & stucco PBR set (512x512 albedo + bump, 256x256 roughness)
+  // 9. Multi-layered architectural plaster & stucco PBR set
   const plasterAlbedo = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const plSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(plSz, plSz);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
     ctx.fillStyle = '#dcd6cb';
     ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 120; i++) {
+    const mottles = mobileOpt ? 64 : 120;
+    for (let i = 0; i < mottles; i++) {
       const px = (Math.sin(i * 29.7 + 0.3) * 0.5 + 0.5) * 512;
       const py = (Math.cos(i * 41.3 + 0.9) * 0.5 + 0.5) * 512;
       const r = 24 + (i % 6) * 16;
@@ -1075,12 +1112,13 @@ export function createTextureBundle(
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
     }
-    const imgP = ctx.getImageData(0, 0, 512, 512);
+    const imgP = ctx.getImageData(0, 0, plSz, plSz);
     const pd = imgP.data;
-    for (let i = 0; i < 3600; i++) {
-      const px = ((Math.sin(i * 17.1) * 0.5 + 0.5) * 511) | 0;
-      const py = ((Math.cos(i * 53.7) * 0.5 + 0.5) * 511) | 0;
-      const p = (py * 512 + px) * 4;
+    const pGrains = mobileOpt ? 1400 : 3600;
+    for (let i = 0; i < pGrains; i++) {
+      const px = ((Math.sin(i * 17.1) * 0.5 + 0.5) * (plSz - 1)) | 0;
+      const py = ((Math.cos(i * 53.7) * 0.5 + 0.5) * (plSz - 1)) | 0;
+      const p = (py * plSz + px) * 4;
       const d = i % 2 === 0 ? 10 : -10;
       pd[p] = Math.max(0, Math.min(255, pd[p] + d));
       pd[p + 1] = Math.max(0, Math.min(255, pd[p + 1] + d));
@@ -1093,10 +1131,13 @@ export function createTextureBundle(
   const stuccoBump = catalogOnly
     ? dummyTex
     : (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const sbSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(sbSz, sbSz);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 72; i++) {
+    const lumps = mobileOpt ? 40 : 72;
+    for (let i = 0; i < lumps; i++) {
       const px = (Math.sin(i * 23.1) * 0.5 + 0.5) * 512;
       const py = (Math.cos(i * 37.9) * 0.5 + 0.5) * 512;
       const r = 20 + (i % 5) * 14;
@@ -1108,12 +1149,13 @@ export function createTextureBundle(
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
     }
-    const imgB = ctx.getImageData(0, 0, 512, 512);
+    const imgB = ctx.getImageData(0, 0, sbSz, sbSz);
     const bd = imgB.data;
-    for (let i = 0; i < 5400; i++) {
-      const px = ((Math.sin(i * 17.1) * 0.5 + 0.5) * 511) | 0;
-      const py = ((Math.cos(i * 53.7) * 0.5 + 0.5) * 511) | 0;
-      const p = (py * 512 + px) * 4;
+    const sbGrains = mobileOpt ? 2000 : 5400;
+    for (let i = 0; i < sbGrains; i++) {
+      const px = ((Math.sin(i * 17.1) * 0.5 + 0.5) * (sbSz - 1)) | 0;
+      const py = ((Math.cos(i * 53.7) * 0.5 + 0.5) * (sbSz - 1)) | 0;
+      const p = (py * sbSz + px) * 4;
       const v = i % 2 === 0 ? 152 : 104;
       bd[p] = v;
       bd[p + 1] = v;
@@ -1197,9 +1239,9 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 2, 2, false));
   })();
 
-  // 9d. Anti-aliased linen/twill textile weave bump (512x512)
+  // 9d. Anti-aliased linen/twill textile weave bump
   const fabricWeaveBump = (() => {
-    const size = 512;
+    const size = mobileOpt ? 256 : 512;
     const [c, ctx] = makeCanvas(size, size);
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, size, size);
@@ -1369,16 +1411,17 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 11. Reception back wall THERASON architectural panel (2048x576 crisp hi-DPI print)
+  // 11. Reception back wall THERASON architectural panel (hi-DPI print)
   const therasonWall = catalogOnly
     ? dummyTex
     : (() => {
     const W = 2048;
     const H = 576;
-    const [c, ctx] = makeCanvas(W, H);
+    const [c, ctx] = makeCanvas(mobileOpt ? 1024 : W, mobileOpt ? 288 : H);
 
     const drawTherasonWall = () => {
       ctx.save();
+      if (mobileOpt) ctx.scale(0.5, 0.5);
       ctx.clearRect(0, 0, W, H);
 
       // Deep architectural midnight-navy panel so crisp white lettering pops cleanly off pale clinic plaster
@@ -1572,16 +1615,17 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 12b. Illuminated Main Entrance Facade Sign ("THERASON CLINIC", 1536x432 hi-DPI print)
+  // 12b. Illuminated Main Entrance Facade Sign ("THERASON CLINIC", hi-DPI print)
   const therasonFacadeSign = catalogOnly
     ? dummyTex
     : (() => {
     const W = 1536;
     const H = 432;
-    const [c, ctx] = makeCanvas(W, H);
+    const [c, ctx] = makeCanvas(mobileOpt ? 1024 : W, mobileOpt ? 288 : H);
 
     const drawFacadeSign = () => {
       ctx.save();
+      if (mobileOpt) ctx.scale(1024 / W, 288 / H);
       ctx.clearRect(0, 0, W, H);
       const grad = ctx.createLinearGradient(0, 0, W, H);
       grad.addColorStop(0, '#0c2348');
@@ -1894,10 +1938,11 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 18. Nesma evaporative water AC recessed honeycomb celdek cooling pad texture (512x512)
+  // 18. Nesma evaporative water AC recessed honeycomb celdek cooling pad texture
   const nesmaPad = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
-    ctx.scale(2, 2);
+    const npSz = mobileOpt ? 256 : 512;
+    const [c, ctx] = makeCanvas(npSz, npSz);
+    ctx.scale(mobileOpt ? 1 : 2, mobileOpt ? 1 : 2);
     ctx.fillStyle = '#4c3824';
     ctx.fillRect(0, 0, 256, 256);
     ctx.strokeStyle = '#755739';
@@ -1937,11 +1982,12 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 20. High-efficiency half-cut monocrystalline photovoltaic solar panel texture (512x768)
+  // 20. High-efficiency half-cut monocrystalline photovoltaic solar panel texture
   const solarCell = (() => {
-    const [c, ctx] = makeCanvas(512, 768);
     const w = 512;
     const h = 768;
+    const [c, ctx] = makeCanvas(mobileOpt ? 256 : w, mobileOpt ? 384 : h);
+    if (mobileOpt) ctx.scale(0.5, 0.5);
 
     ctx.fillStyle = '#dce4ee';
     ctx.fillRect(0, 0, w, h);
@@ -2058,9 +2104,10 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor (512x512)
+  // 22. Alpha-cutout lush climbing rose & leaf card for flower beds, rose trellis, and arbor
   const roseFoliage = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const [c, ctx] = makeCanvas(foliageSz, foliageSz);
+    if (foliageScale !== 1) ctx.scale(foliageScale, foliageScale);
     ctx.clearRect(0, 0, 512, 512);
     const leafTones: Array<[string, string]> = [
       ['#1f481b', '#38742c'],
@@ -2110,9 +2157,10 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 23. Alpha-cutout rich flowering courtyard & world blossom tree foliage card (512x512)
+  // 23. Alpha-cutout rich flowering courtyard & world blossom tree foliage card
   const blossomFoliage = (() => {
-    const [c, ctx] = makeCanvas(512, 512);
+    const [c, ctx] = makeCanvas(foliageSz, foliageSz);
+    if (foliageScale !== 1) ctx.scale(foliageScale, foliageScale);
     ctx.clearRect(0, 0, 512, 512);
     const leafTones: Array<[string, string]> = [
       ['#214b1e', '#37732c'],
@@ -2120,9 +2168,10 @@ export function createTextureBundle(
       ['#3b7831', '#64a64a'],
       ['#468838', '#78ba57'],
     ];
-    for (let i = 0; i < 110; i++) {
+    const blLeafCount = mobileOpt ? 84 : 110;
+    for (let i = 0; i < blLeafCount; i++) {
       const ang = i * 2.399;
-      const rad = Math.sqrt(i / 110) * 194;
+      const rad = Math.sqrt(i / blLeafCount) * 194;
       const lx = 256 + Math.cos(ang) * rad;
       const ly = 256 + Math.sin(ang) * rad;
       const [bCol, tCol] = leafTones[i % leafTones.length];

@@ -40,9 +40,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     : 'bg-slate-50 border-slate-200 text-slate-800';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80"
+      onClick={onClose}
+    >
       <div
-        className={`w-full max-w-sm rounded-3xl shadow-2xl border overflow-hidden transition-colors ${
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full max-w-sm md:max-w-md rounded-3xl shadow-2xl border overflow-hidden transition-colors ${
           isNight ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
         }`}
       >
@@ -59,7 +63,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center"
+            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>

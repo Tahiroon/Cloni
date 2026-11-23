@@ -7,6 +7,7 @@ import {
 } from '../engine3d/glbRegistry';
 import {
   CatalogThumbSpec,
+  disposeSharedThumbSession,
   getMissingCatalogThumbSpecs,
   hydrateThumbCacheFromIdb,
   renderThumbBatch,
@@ -205,45 +206,61 @@ export function initSmartBrowserCache(): void {
   }
 }
 
-let thumbsPrewarmed = false;
+let thumbsPrewarmPromise: Promise<void> | null = null;
 
 /**
  * Hydrates persisted WebP thumbnails from IndexedDB first, then pre-renders any missing
- * core clinic items cleanly in small 2-item frame slices so boot stays silky smooth.
+ * core clinic items cleanly in small frame slices and releases the temporary WebGL session.
  */
-export async function prewarmCoreCatalogThumbs(): Promise<void> {
-  await hydrateThumbCacheFromIdb();
-  if (thumbsPrewarmed || !glbRegistry.coreReady) return;
-  thumbsPrewarmed = true;
-  if (isSoftwareRenderer()) return;
+export function prewarmCoreCatalogThumbs(): Promise<void> {
+  if (thumbsPrewarmPromise) return thumbsPrewarmPromise;
+  thumbsPrewarmPromise = (async () => {
+    await hydrateThumbCacheFromIdb();
+    if (!glbRegistry.coreReady || isSoftwareRenderer()) {
+      thumbsPrewarmPromise = null;
+      return;
+    }
 
-  const priorityIds = [
-    'treatment_bed',
-    'tens_unit',
-    'ultrasound_unit',
-    'infrared_lamp',
-    'shockwave_eswt',
-    'laser_therapy',
-    'traction_table',
-    'parallel_bars',
-  ];
+    const priorityIds = [
+      'treatment_bed',
+      'tens_unit',
+      'ultrasound_unit',
+      'infrared_lamp',
+      'shockwave_eswt',
+      'laser_therapy',
+      'traction_table',
+      'parallel_bars',
+      'reception_desk',
+      'waiting_chair',
+      'biofeedback_trainer',
+      'exercise_bike',
+    ];
 
-  const specs: CatalogThumbSpec[] = priorityIds
-    .map((id) => CATALOG_ITEMS.find((c) => c.id === id))
-    .filter((c): c is NonNullable<typeof c> => Boolean(c))
-    .map((c) => ({
-      sprite: c.sprite,
-      width: c.width,
-      depth: c.depth,
-    }));
+    const specs: CatalogThumbSpec[] = priorityIds
+      .map((id) => CATALOG_ITEMS.find((c) => c.id === id))
+      .filter((c): c is NonNullable<typeof c> => Boolean(c))
+      .map((c) => ({
+        sprite: c.sprite,
+        width: c.width,
+        depth: c.depth,
+      }));
 
-  const missing = getMissingCatalogThumbSpecs(specs);
-  if (missing.length === 0) return;
+    const missing = getMissingCatalogThumbSpecs(specs);
+    if (missing.length === 0) return;
 
-  for (let i = 0; i < missing.length; i += 2) {
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    renderThumbBatch(missing.slice(i, i + 2));
-  }
+    const isMobile =
+      typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const stepSize = isMobile ? 1 : 2;
+    try {
+      for (let i = 0; i < missing.length; i += stepSize) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        renderThumbBatch(missing.slice(i, i + stepSize));
+      }
+    } finally {
+      disposeSharedThumbSession();
+    }
+  })();
+  return thumbsPrewarmPromise;
 }
 
 function waitForIdleSlice(delayMs = 140): Promise<void> {
@@ -261,40 +278,46 @@ function waitForIdleSlice(delayMs = 140): Promise<void> {
   });
 }
 
-async function cacheWebFontsBestEffort(): Promise<void> {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-  const cache = await openAssetCache();
-  if (!cache) return;
-  try {
-    let cssText = '';
-    const existingCss = await cache.match(FONT_STYLESHEET_URL);
-    if (existingCss && existingCss.ok) {
-      cssText = await existingCss.text();
-    } else {
-      const res = await fetch(FONT_STYLESHEET_URL, { cache: 'default' });
-      if (!res.ok) return;
-      cssText = await res.text();
-      await cache.put(
-        FONT_STYLESHEET_URL,
-        new Response(cssText, {
-          status: 200,
-          headers: { 'Content-Type': 'text/css; charset=utf-8' },
-        })
-      );
-    }
+let fontCachePromise: Promise<void> | null = null;
 
-    const matches = cssText.match(/https:\/\/fonts\.gstatic\.com\/[^)"']+\.woff2/g);
-    if (!matches) return;
-    const uniqueUrls = Array.from(new Set(matches)).slice(0, 24);
-    for (const fontUrl of uniqueUrls) {
-      const hit = await cache.match(fontUrl);
-      if (!hit) {
-        await cacheStaticAssetUrl(fontUrl, 'font/woff2');
+export function cacheWebFontsBestEffort(): Promise<void> {
+  if (fontCachePromise) return fontCachePromise;
+  fontCachePromise = (async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    const cache = await openAssetCache();
+    if (!cache) return;
+    try {
+      let cssText = '';
+      const existingCss = await cache.match(FONT_STYLESHEET_URL);
+      if (existingCss && existingCss.ok) {
+        cssText = await existingCss.text();
+      } else {
+        const res = await fetch(FONT_STYLESHEET_URL, { cache: 'default' });
+        if (!res.ok) return;
+        cssText = await res.text();
+        await cache.put(
+          FONT_STYLESHEET_URL,
+          new Response(cssText, {
+            status: 200,
+            headers: { 'Content-Type': 'text/css; charset=utf-8' },
+          })
+        );
       }
+
+      const matches = cssText.match(/https:\/\/fonts\.gstatic\.com\/[^)"']+\.woff2/g);
+      if (!matches) return;
+      const uniqueUrls = Array.from(new Set(matches)).slice(0, 24);
+      for (const fontUrl of uniqueUrls) {
+        const hit = await cache.match(fontUrl);
+        if (!hit) {
+          await cacheStaticAssetUrl(fontUrl, 'font/woff2');
+        }
+      }
+    } catch {
+      // Non-fatal font caching guard
     }
-  } catch {
-    // Non-fatal font caching guard
-  }
+  })();
+  return fontCachePromise;
 }
 
 let idlePrewarmStarted = false;

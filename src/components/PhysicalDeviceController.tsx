@@ -237,6 +237,17 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
   const timerStr = formatTimerMmSs(params);
   const running = device.isRunning;
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const renderHardwareTopTrim = (
     title: string,
     lightBody = false,

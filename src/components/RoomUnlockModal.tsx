@@ -36,9 +36,13 @@ export const RoomUnlockModal: React.FC<RoomUnlockModalProps> = ({
   const canAfford = coins >= room.unlockCost;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80"
+      onClick={onClose}
+    >
       <div
-        className={`w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border ${
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full max-w-md md:max-w-xl rounded-3xl shadow-2xl overflow-hidden border ${
           isNight ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
         }`}
       >
@@ -56,7 +60,7 @@ export const RoomUnlockModal: React.FC<RoomUnlockModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center"
+            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -69,7 +73,7 @@ export const RoomUnlockModal: React.FC<RoomUnlockModalProps> = ({
               : `Choose the clinical specialty for "${room.nameEn}" to unlock specialized patient cases:`}
           </p>
 
-          <div className="space-y-2 max-h-[45vh] overflow-y-auto custom-scroll">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[50vh] overflow-y-auto custom-scroll">
             {CHOICES.map((spec) => {
               const meta = SPECIALTY_META[spec];
               const active = selected === spec;

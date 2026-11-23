@@ -67,6 +67,7 @@ import {
   SpriteKind,
 } from '../types/clinic';
 import { PhysicalDeviceController } from './PhysicalDeviceController';
+import { useViewportProfile } from '../hooks/useViewportProfile';
 
 type SessionStep = 'subjective' | 'redflags' | 'objective' | 'diagnosis' | 'plan' | 'summary';
 
@@ -128,8 +129,8 @@ const VirtualJoystick: React.FC<{
   const knobRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
   const [isActive, setIsActive] = useState(false);
-  const visualMaxR = 34;
-  const fullThrottleR = 26;
+  const visualMaxR = 46;
+  const fullThrottleR = 34;
   const deadzone = 0.05;
 
   useEffect(() => {
@@ -191,7 +192,7 @@ const VirtualJoystick: React.FC<{
       onPointerMove={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
     >
-      <div className="p-2.5 -m-2.5 touch-none">
+      <div className="p-3 -m-3 touch-none">
         <div
           ref={trackRef}
           onPointerDown={(e) => {
@@ -218,7 +219,7 @@ const VirtualJoystick: React.FC<{
               resetStick();
             }
           }}
-          className={`relative w-26 h-26 sm:w-28 sm:h-28 rounded-full border-2 touch-none flex items-center justify-center shadow-2xl transition-colors cursor-grab active:cursor-grabbing ${
+          className={`relative w-36 h-36 sm:w-40 sm:h-40 rounded-full border-2 touch-none flex items-center justify-center shadow-2xl transition-colors cursor-grab active:cursor-grabbing ${
             isActive
               ? isNight
                 ? 'bg-slate-950/92 border-sky-400/80 ring-4 ring-sky-400/20'
@@ -228,32 +229,32 @@ const VirtualJoystick: React.FC<{
                 : 'bg-slate-900/72 border-white/30'
           }`}
         >
-          <div className="absolute inset-3 rounded-full border border-dashed border-white/20 pointer-events-none" />
-          <div className="absolute w-1.5 h-1.5 rounded-full bg-white/25 pointer-events-none" />
-          <span className="absolute top-1.5 text-[9px] font-black text-sky-300/80 pointer-events-none">
+          <div className="absolute inset-3.5 rounded-full border border-dashed border-white/20 pointer-events-none" />
+          <div className="absolute w-2 h-2 rounded-full bg-white/25 pointer-events-none" />
+          <span className="absolute top-2 text-[10px] font-black text-sky-300/85 pointer-events-none">
             ▲
           </span>
-          <span className="absolute bottom-1.5 text-[9px] font-black text-sky-300/80 pointer-events-none">
+          <span className="absolute bottom-2 text-[10px] font-black text-sky-300/85 pointer-events-none">
             ▼
           </span>
-          <span className="absolute left-2 text-[9px] font-black text-sky-300/80 pointer-events-none">
+          <span className="absolute left-2.5 text-[10px] font-black text-sky-300/85 pointer-events-none">
             ◀
           </span>
-          <span className="absolute right-2 text-[9px] font-black text-sky-300/80 pointer-events-none">
+          <span className="absolute right-2.5 text-[10px] font-black text-sky-300/85 pointer-events-none">
             ▶
           </span>
           <div
             ref={knobRef}
             style={{ transform: 'translate3d(0px, 0px, 0) scale(1)' }}
-            className={`w-11 h-11 rounded-full bg-gradient-to-b from-sky-300 via-sky-500 to-sky-600 border-2 border-white/95 shadow-lg flex items-center justify-center pointer-events-none will-change-transform ${
+            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-gradient-to-b from-sky-300 via-sky-500 to-sky-600 border-2 border-white/95 shadow-lg flex items-center justify-center pointer-events-none will-change-transform ${
               isActive ? '' : 'transition-transform duration-100 ease-out'
             }`}
           >
-            <div className="w-4 h-4 rounded-full border border-white/50 bg-white/20" />
+            <div className="w-5 h-5 rounded-full border border-white/50 bg-white/20" />
           </div>
         </div>
       </div>
-      <span className="text-[11px] font-extrabold text-white/95 drop-shadow">
+      <span className="text-xs font-extrabold text-white/95 drop-shadow">
         {isAr ? 'تحرك' : 'Move'}
       </span>
     </div>
@@ -705,6 +706,8 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const c = patient.clinicalCase;
   const isAr = language === 'ar';
   const isNight = lightingMode === 'night';
+  const viewport = useViewportProfile();
+  const showPcFppControls = viewport.isDesktopOrTablet && viewport.isKeyboardMouseActive;
 
   const defaultPrescription = useMemo(() => getRecommendedPrescription(c), [c]);
 
@@ -1056,6 +1059,84 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const currentStepMeta = stepDefs.find((s) => s.id === step) ?? stepDefs[0];
   const activePostureLabelEn = activePostureRule?.labelEn ?? POSTURE_LABELS[posture].en;
 
+  // PC Keyboard Shortcuts inside First-Person Examination & Therapy Bay
+  useEffect(() => {
+    const stepOrder: SessionStep[] = [
+      'subjective',
+      'redflags',
+      'objective',
+      'diagnosis',
+      'plan',
+      'summary',
+    ];
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === 'Escape') {
+        if (exitConfirmOpen) {
+          setExitConfirmOpen(false);
+          return;
+        }
+        if (postureOpen) {
+          setPostureOpen(false);
+          return;
+        }
+        if (screenExpanded && activeDevice) {
+          setScreenExpanded(false);
+          onUpdateActiveDevice?.({ ...activeDevice, screenTapped: false });
+          return;
+        }
+        if (activeDevice) {
+          onCloseActiveDevice?.();
+          return;
+        }
+        return;
+      }
+
+      if (e.repeat || exitConfirmOpen) return;
+      const k = e.key.toLowerCase();
+
+      if (k === 'h' && !activeDevice) {
+        e.preventDefault();
+        setPanelHidden((v) => !v);
+        setSpeechCaption(null);
+      } else if (k === 'c' && onRecenterCamera) {
+        e.preventDefault();
+        onRecenterCamera();
+      } else if (k === 'p' && !screenExpanded && !activeDevice?.selectedProbeId) {
+        e.preventDefault();
+        setPostureOpen((v) => !v);
+      } else if (
+        !activeDevice &&
+        e.key >= '1' &&
+        e.key <= '6'
+      ) {
+        const idx = Number(e.key) - 1;
+        const targetId = stepOrder[idx];
+        const targetDef = stepDefs.find((s) => s.id === targetId);
+        if (targetId && targetDef && !targetDef.disabled) {
+          e.preventDefault();
+          setStep(targetId);
+          setPanelHidden(false);
+          setSpeechCaption(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    exitConfirmOpen,
+    postureOpen,
+    screenExpanded,
+    activeDevice,
+    stepDefs,
+    onRecenterCamera,
+    onUpdateActiveDevice,
+    onCloseActiveDevice,
+  ]);
+
   return (
     <div
       className={`pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2 sm:p-3 transition-all duration-300 ease-out ${
@@ -1391,6 +1472,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             >
               <Handshake className="w-4 h-4 shrink-0" />
               <span>{isAr ? 'مصافحة' : 'Handshake'}</span>
+              {showPcFppControls && (
+                <kbd className="px-1.5 py-0.5 rounded bg-black/15 text-[10px] font-mono">E</kbd>
+              )}
             </button>
           )}
           {nearbyDevice && nearbyDevice.canDeploy && (
@@ -1404,6 +1488,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
                 {nearbyDevice.nameEn}
               </span>
+              {showPcFppControls && (
+                <kbd className="px-1.5 py-0.5 rounded bg-black/15 text-[10px] font-mono">E</kbd>
+              )}
             </button>
           )}
           {nearbyDevice && nearbyDevice.isStationConsole && (
@@ -1417,6 +1504,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               <span dir="ltr" className="text-[11px] font-bold opacity-85 whitespace-nowrap">
                 {nearbyDevice.nameEn}
               </span>
+              {showPcFppControls && (
+                <kbd className="px-1.5 py-0.5 rounded bg-black/15 text-[10px] font-mono">E</kbd>
+              )}
             </button>
           )}
         </div>
@@ -1469,6 +1559,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                     ? 'وضع'
                     : 'Place'}
               </span>
+              {showPcFppControls && (
+                <kbd className="px-1.5 py-0.5 rounded bg-black/15 text-[10px] font-mono">E</kbd>
+              )}
             </button>
 
             <button
@@ -1949,17 +2042,49 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         </div>
       )}
 
-      {/* Bottom Row: Ergonomic Left-Thumb Joystick + Spacious Clinical Chart (Physical LTR dock geometry) */}
+      {/* Bottom Row: Touch Joystick on Mobile/Touch Tablets OR Sleek PC Controls Bar + Spacious Clinical Chart */}
       {!activeDevice && (
         <div dir="ltr" className="relative w-full h-0">
-          {/* Virtual Joystick: raised ergonomic position on physical left */}
-          <div
-            className={`fixed left-4 bottom-12 sm:left-5 sm:bottom-14 z-30 transition-all ${
-              panelHidden ? 'block' : 'hidden sm:block'
-            }`}
-          >
-            <VirtualJoystick isAr={isAr} isNight={isNight} moveInputRef={moveInputRef} />
-          </div>
+          {/* Virtual Joystick: hidden ONLY when keyboard+mouse PC mode is active; preserved on phones & touch tablets */}
+          {!showPcFppControls ? (
+            <div
+              className={`fixed right-4 bottom-24 sm:right-6 sm:bottom-28 z-30 transition-all ${
+                panelHidden ? 'block' : 'hidden'
+              }`}
+            >
+              <VirtualJoystick isAr={isAr} isNight={isNight} moveInputRef={moveInputRef} />
+            </div>
+          ) : (
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto fixed left-4 bottom-4 z-30 hidden md:flex flex-col gap-1.5 max-w-[min(42vw,28rem)] rounded-2xl bg-slate-950/88 backdrop-blur-md border border-white/15 px-3.5 py-2.5 text-white shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-3 text-[11px] font-black text-sky-300">
+                <span className="flex items-center gap-1.5">
+                  <Crosshair className="w-3.5 h-3.5" />
+                  {isAr ? 'تحكم الحاسوب (FPP)' : 'PC First-Person Controls'}
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {isAr ? 'F أو كليك يمين: قفل الماوس' : 'F / Right-Click: Mouse Look'}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] font-bold text-slate-200">
+                <span><kbd className="font-mono text-cyan-300">WASD</kbd> {isAr ? 'مشي' : 'Walk'}</span>
+                <span className="text-slate-600">·</span>
+                <span><kbd className="font-mono text-cyan-300">Shift</kbd> {isAr ? 'سرعة' : 'Sprint'}</span>
+                <span className="text-slate-600">·</span>
+                <span><kbd className="font-mono text-cyan-300">E</kbd> {isAr ? 'تفاعل' : 'Interact'}</span>
+                <span className="text-slate-600">·</span>
+                <span><kbd className="font-mono text-cyan-300">1-6</kbd> {isAr ? 'الخطوات' : 'Steps'}</span>
+                <span className="text-slate-600">·</span>
+                <span><kbd className="font-mono text-cyan-300">H</kbd> {isAr ? 'الملف' : 'Chart'}</span>
+                <span className="text-slate-600">·</span>
+                <span><kbd className="font-mono text-cyan-300">P</kbd> {isAr ? 'الوضعية' : 'Posture'}</span>
+                <span className="text-slate-600">·</span>
+                <span><kbd className="font-mono text-cyan-300">C</kbd> {isAr ? 'توسيط' : 'Center'}</span>
+              </div>
+            </div>
+          )}
 
           {/* Spacious, Unified Clinical Chart Tablet with Integrated 6-Step Stepper */}
           {!panelHidden && (
@@ -1968,8 +2093,8 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
               onPointerDown={(e) => e.stopPropagation()}
               className={`pointer-events-auto fixed bottom-2 inset-x-2 sm:inset-x-auto sm:right-4 sm:bottom-4 z-35 rounded-2xl border shadow-2xl overflow-hidden flex flex-col transition-[max-height,width] duration-200 ${
                 chartExpanded
-                  ? 'sm:w-[min(calc(100vw-9.5rem),41rem)] max-h-[80vh] sm:max-h-[86vh]'
-                  : 'sm:w-[min(calc(100vw-9.5rem),36rem)] max-h-[62vh] sm:max-h-[70vh]'
+                  ? 'sm:w-[min(calc(100vw-9.5rem),41rem)] lg:w-[min(45vw,42rem)] max-h-[80vh] sm:max-h-[86vh] lg:max-h-[calc(100vh-5.5rem)]'
+                  : 'sm:w-[min(calc(100vw-9.5rem),36rem)] lg:w-[min(41vw,37rem)] max-h-[62vh] sm:max-h-[70vh] lg:max-h-[74vh]'
               } ${surfaceCls}`}
             >
               {/* Crisp Chart Header */}

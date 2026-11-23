@@ -40,8 +40,8 @@ export interface GlbRegistry {
   onAssetLoaded: (cb: (key: string) => void) => () => void;
 }
 
-const ASSET_CACHE_NAME = 'therason-clinic-assets-v2';
-const LEGACY_ASSET_CACHE_NAME = 'therason-clinic-assets-v1';
+const ASSET_CACHE_NAME = 'therason-clinic-assets-v3';
+const LEGACY_ASSET_CACHE_NAMES = ['therason-clinic-assets-v1', 'therason-clinic-assets-v2'];
 
 // Tier 1 (Priority Core): Small clinic furniture, world nature, textures & primary avatars
 const CORE_MODEL_PATHS: Record<string, string> = {
@@ -289,7 +289,9 @@ export async function openAssetCache(): Promise<Cache | null> {
     if (typeof window !== 'undefined' && 'caches' in window && window.caches) {
       if (!legacyCachePurged) {
         legacyCachePurged = true;
-        void window.caches.delete(LEGACY_ASSET_CACHE_NAME).catch(() => {});
+        for (const oldName of LEGACY_ASSET_CACHE_NAMES) {
+          void window.caches.delete(oldName).catch(() => {});
+        }
       }
       return await window.caches.open(ASSET_CACHE_NAME);
     }
@@ -346,6 +348,7 @@ export async function cacheStaticAssetUrl(url: string, contentType?: string): Pr
         headers: {
           'Content-Type': contentType || res.headers.get('Content-Type') || 'application/octet-stream',
           'Content-Length': String(buf.byteLength),
+          'X-Therason-Valid': '1',
         },
       })
     );
@@ -447,6 +450,7 @@ async function fetchAndCacheBinary(
           headers: {
             'Content-Type': contentType,
             'Content-Length': String(buffer.byteLength),
+            'X-Therason-Valid': '1',
           },
         })
       );
@@ -552,13 +556,19 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
           await new Promise<void>((r) => setTimeout(r, 260));
         }
         const buf = await fetchAndCacheBinary(key, url, 'model/gltf-binary', cache, forceReload);
-        if (yieldOnHeavy && buf.byteLength > 180_000) {
+        if (yieldOnHeavy && buf.byteLength > 55_000) {
           await yieldToUiFrame();
         }
         const sceneObj = await parseBuffer(buf, url);
+        if (yieldOnHeavy && buf.byteLength > 140_000) {
+          await yieldToUiFrame();
+        }
         refineGlbAssets(sceneObj);
         loadedTemplates.set(key, sceneObj);
         prewarmModelBounds(key, sceneObj);
+        if (yieldOnHeavy && buf.byteLength > 300_000) {
+          await yieldToUiFrame();
+        }
         failedModelQueue.delete(key);
         assetLoadedListeners.forEach((cb) => cb(key));
         loaded = true;
@@ -646,11 +656,13 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
     );
 
     // 2. Priority Tier 1 (Essential clinic furniture, world nature & core characters)
-    await runTier(coreEntries, 6, cache, true);
+    const isMobileDevice =
+      typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    await runTier(coreEntries, isMobileDevice ? 3 : 6, cache, true);
 
     // 3. Yield briefly so initial 3D clinic renders smoothly, then stream Tier 2 assets cleanly
     await yieldToUiFrame();
-    await runTier(extendedEntries, 3, cache, true);
+    await runTier(extendedEntries, isMobileDevice ? 2 : 3, cache, true);
 
     // 4. Automatically recover any failed GLB (e.g. during server reload or transient drop)
     if (failedModelQueue.size > 0) {

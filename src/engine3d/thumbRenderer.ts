@@ -181,7 +181,7 @@ interface SharedThumbSession {
 let sharedSession: SharedThumbSession | null = null;
 let sharedDisposeTimer: ReturnType<typeof setTimeout> | null = null;
 
-function disposeSharedThumbSession() {
+export function disposeSharedThumbSession() {
   if (sharedDisposeTimer) {
     clearTimeout(sharedDisposeTimer);
     sharedDisposeTimer = null;
@@ -241,8 +241,9 @@ function acquireSharedThumbSession(width: number, height: number): SharedThumbSe
     scene.add(hemi, keyLight, fillLight, rimLight);
 
     const camera = new THREE.PerspectiveCamera(28, width / height, 0.1, 40);
-    const textures = createTextureBundle(renderer.capabilities.getMaxAnisotropy(), {
+    const textures = createTextureBundle(Math.min(2, renderer.capabilities.getMaxAnisotropy()), {
       catalogOnly: true,
+      mobileOptimized: true,
     });
 
     sharedSession = {
@@ -276,7 +277,9 @@ export function renderThumbBatch(specs: CatalogThumbSpec[]): void {
   const missing = getMissingCatalogThumbSpecs(specs);
   if (missing.length === 0) return;
 
-  const size = 160;
+  const isMobileThumb =
+    typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const size = isMobileThumb ? 128 : 160;
   const sess = acquireSharedThumbSession(size, size);
   if (!sess) return;
 
@@ -395,18 +398,38 @@ export function renderMissingCatalogThumbsChunked(
   };
 }
 
+function flushThumbQueueSlice() {
+  flushScheduled = false;
+  if (pendingQueue.size === 0) return;
+  const slice: CatalogThumbSpec[] = [];
+  for (const [k, spec] of pendingQueue) {
+    pendingQueue.delete(k);
+    slice.push(spec);
+    if (slice.length >= 2) break;
+  }
+  if (slice.length > 0) {
+    renderThumbBatch(slice);
+  }
+  if (pendingQueue.size > 0 && !flushScheduled) {
+    flushScheduled = true;
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(flushThumbQueueSlice);
+    } else {
+      setTimeout(flushThumbQueueSlice, 16);
+    }
+  }
+}
+
 function scheduleThumbRender(spec: CatalogThumbSpec) {
   const key = getCatalogThumbKey(spec.sprite, spec.width, spec.depth);
   pendingQueue.set(key, spec);
   if (flushScheduled) return;
   flushScheduled = true;
-  queueMicrotask(() => {
-    flushScheduled = false;
-    if (pendingQueue.size === 0) return;
-    const batch = Array.from(pendingQueue.values());
-    pendingQueue.clear();
-    renderThumbBatch(batch);
-  });
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(flushThumbQueueSlice);
+  } else {
+    queueMicrotask(flushThumbQueueSlice);
+  }
 }
 
 export function useCatalogThumb(
@@ -472,8 +495,10 @@ function renderPlayerOutfitBatch(specs: PlayerThumbSpec[]): void {
   const missing = Array.from(deduped.values());
   if (missing.length === 0) return;
 
-  const width = 360;
-  const height = 460;
+  const isMobileThumb =
+    typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const width = isMobileThumb ? 256 : 360;
+  const height = isMobileThumb ? 328 : 460;
   const sess = acquireSharedThumbSession(width, height);
   if (!sess) return;
 

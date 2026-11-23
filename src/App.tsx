@@ -483,6 +483,7 @@ export default function App() {
   const [selectedWaitingPatientId, setSelectedWaitingPatientId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [placementDraft, setPlacementDraft] = useState<PlacementDraft | null>(null);
+  const [orbitStep, setOrbitStep] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const treatmentTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const receptionCheckedInIdsRef = useRef<Set<string>>(new Set());
@@ -3585,6 +3586,35 @@ export default function App() {
     () => friends.filter((f) => f.online).length,
     [friends]
   );
+  const missionsReadyCount = useMemo(
+    () => clinic.missions.filter((m) => m.progress >= m.target && !m.claimed).length,
+    [clinic.missions]
+  );
+  const isoShortcutsBlocked = Boolean(
+    !bootDismissed ||
+      storeOpen ||
+      missionsOpen ||
+      friendsOpen ||
+      settingsOpen ||
+      bonusOpen ||
+      characterModalOpen ||
+      waitingQueueOpen ||
+      unlockTargetRoom ||
+      selectedWorldTree
+  );
+
+  const handleOrbitStepDelta = useCallback((delta: number) => {
+    soundFx.tap();
+    setOrbitStep((s) => s + delta);
+  }, []);
+
+  const handleToggleLightingMode = useCallback(() => {
+    soundFx.tap();
+    setClinic((prev) => ({
+      ...prev,
+      lightingMode: prev.lightingMode === 'night' ? 'day' : 'night',
+    }));
+  }, []);
 
   const handleOpenBonus = useCallback(() => {
     soundFx.tap();
@@ -3634,6 +3664,153 @@ export default function App() {
     setEditMode((v) => !v);
   }, []);
 
+  // PC Keyboard Shortcuts & Escape Dismissal for Isometric Clinic View
+  useEffect(() => {
+    if (!bootDismissed || isFppSessionActive) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        if (e.key === 'Escape') {
+          (e.target as HTMLElement).blur();
+        }
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === 'Escape') {
+        if (unlockTargetRoom) {
+          setUnlockTargetRoom(null);
+          return;
+        }
+        if (selectedWorldTree) {
+          setSelectedWorldTree(null);
+          return;
+        }
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
+        if (bonusOpen) {
+          setBonusOpen(false);
+          return;
+        }
+        if (friendsOpen) {
+          setFriendsOpen(false);
+          return;
+        }
+        if (characterModalOpen) {
+          setCharacterModalOpen(false);
+          return;
+        }
+        if (waitingQueueOpen) {
+          setWaitingQueueOpen(false);
+          return;
+        }
+        if (missionsOpen) {
+          setMissionsOpen(false);
+          setActiveNavTab(null);
+          return;
+        }
+        if (storeOpen) {
+          setStoreOpen(false);
+          setActiveNavTab(null);
+          return;
+        }
+        if (selectedWaitingPatientId) {
+          setSelectedWaitingPatientId(null);
+          return;
+        }
+        if (selectedBedPatientId) {
+          setSelectedBedPatientId(null);
+          return;
+        }
+        if (placementDraft) {
+          setPlacementDraft(null);
+          return;
+        }
+        if (editMode) {
+          setEditMode(false);
+          return;
+        }
+        if (visitingFriend) {
+          setVisitingFriend(null);
+          return;
+        }
+        return;
+      }
+
+      if (e.repeat) return;
+      const k = e.key.toLowerCase();
+
+      if (k === 'k') {
+        e.preventDefault();
+        if (friendsOpen) {
+          setFriendsOpen(false);
+        } else if (!isoShortcutsBlocked) {
+          handleOpenFriends();
+        }
+        return;
+      }
+
+      if (isoShortcutsBlocked || visitingFriend) return;
+
+      if (k === 'b') {
+        e.preventDefault();
+        handleSelectNavTab('store');
+      } else if (k === 'm') {
+        e.preventDefault();
+        handleSelectNavTab('missions');
+      } else if (e.key === 'Tab' || k === 'n') {
+        e.preventDefault();
+        handleOpenWaitingQueue();
+      } else if (k === 'u') {
+        e.preventDefault();
+        handleOpenPlayerProfile();
+      } else if (k === 'v') {
+        e.preventDefault();
+        handleToggleEditMode();
+      } else if (k === 'l') {
+        e.preventDefault();
+        handleToggleLightingMode();
+      } else if (k === 'q' && !placementDraft) {
+        e.preventDefault();
+        handleOrbitStepDelta(-1);
+      } else if (k === 'e' && !placementDraft) {
+        e.preventDefault();
+        handleOrbitStepDelta(1);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    bootDismissed,
+    isFppSessionActive,
+    isoShortcutsBlocked,
+    visitingFriend,
+    unlockTargetRoom,
+    selectedWorldTree,
+    settingsOpen,
+    bonusOpen,
+    friendsOpen,
+    characterModalOpen,
+    waitingQueueOpen,
+    missionsOpen,
+    storeOpen,
+    selectedWaitingPatientId,
+    selectedBedPatientId,
+    placementDraft,
+    editMode,
+    handleSelectNavTab,
+    handleOpenWaitingQueue,
+    handleOpenFriends,
+    handleOpenPlayerProfile,
+    handleToggleEditMode,
+    handleToggleLightingMode,
+    handleOrbitStepDelta,
+  ]);
+
   return (
     <main
       className={`relative w-screen h-[100dvh] overflow-hidden transition-colors duration-500 ${
@@ -3650,6 +3827,9 @@ export default function App() {
         showPlayerCharacter={!visitingFriend}
         floatingFeedbacks={floatingFeedbacks}
         firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
+        orbitStep={orbitStep}
+        onOrbitStepDelta={handleOrbitStepDelta}
+        shortcutsBlocked={isoShortcutsBlocked || Boolean(selectedWaitingPatientId || selectedBedPatientId)}
         fppPosture={fppPosture}
         fppActiveDevice={visitingFriend ? null : fppActiveDevice}
         fppCommandRef={fppDeviceCmdRef}
@@ -3880,8 +4060,14 @@ export default function App() {
             lightingMode={lightingMode}
             storeAlert={canUnlockAnyRoom}
             disabled={Boolean(visitingFriend)}
+            waitingCount={waitingPatientsCount}
+            missionsReadyCount={missionsReadyCount}
+            onlineFriends={onlineFriendsCount}
             onSelectTab={handleSelectNavTab}
             onToggleEditMode={handleToggleEditMode}
+            onOpenWaitingQueue={!visitingFriend ? handleOpenWaitingQueue : undefined}
+            onOpenFriends={handleOpenFriends}
+            onToggleLightingMode={handleToggleLightingMode}
           />
         </>
       )}

@@ -1,10 +1,51 @@
 // THERASON CLINIC — Smart Browser-First Cache Service Worker
-const ASSET_CACHE = 'therason-clinic-assets-v2';
+const ASSET_CACHE = 'therason-clinic-assets-v3';
 const FONT_CACHE = 'therason-clinic-fonts-v1';
-const SHELL_CACHE = 'therason-clinic-shell-v1';
+const SHELL_CACHE = 'therason-clinic-shell-v2';
 
-self.addEventListener('install', () => {
+const PRECACHE_ASSETS = [
+  '/assets/aistudio/splash_cover.webp',
+  '/assets/aistudio/splash_backdrop.webp',
+  '/models/med/Textures/colormap.png',
+  '/models/furn/desk.glb',
+  '/models/furn/chair_desk.glb',
+  '/models/furn/monitor.glb',
+  '/models/furn/coffee_table.glb',
+  '/models/furn/bookshelf.glb',
+  '/models/furn/plant_1.glb',
+  '/models/furn/plant_ficus.glb',
+  '/models/med/wheelchair.glb',
+  '/models/kenney_furn/desk_corner.glb',
+  '/models/kenney_furn/lamp_wall.glb',
+  '/models/kenney_furn/med_cabinet.glb',
+  '/models/furn/trashcan.glb',
+  '/models/furn/lamp_floor.glb',
+  '/models/furn/lamp_desk.glb',
+  '/models/nature/bush_1.glb',
+  '/models/nature/bush_2.glb',
+  '/models/nature/grass_clump.glb',
+];
+
+self.addEventListener('install', (event) => {
   self.skipWaiting();
+  event.waitUntil(
+    caches.open(ASSET_CACHE).then(async (cache) => {
+      await Promise.allSettled(
+        PRECACHE_ASSETS.map(async (assetUrl) => {
+          try {
+            const hit = await cache.match(assetUrl);
+            if (hit) return;
+            const res = await fetch(assetUrl, { cache: 'default' });
+            if (await isValidAssetResponse(assetUrl, res, false)) {
+              await cache.put(assetUrl, res);
+            }
+          } catch {
+            // Non-fatal precache miss
+          }
+        })
+      );
+    })
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -35,16 +76,42 @@ function shouldBypass(url) {
   return false;
 }
 
-async function isValidAssetResponse(pathname, res) {
+async function isValidAssetResponse(pathname, res, isFromCache = false) {
   if (!res || !res.ok || res.status !== 200) return false;
   const ct = (res.headers.get('Content-Type') || '').toLowerCase();
   if (ct.includes('text/html')) return false;
+
+  // Fast-path: cached entries already validated when stored avoid cloning/reading multi-MB buffers
+  if (isFromCache && res.headers.get('X-Therason-Valid') === '1') {
+    return true;
+  }
+
   if (pathname.endsWith('.glb')) {
     try {
+      // Inspect only the first 4 bytes when readable stream is available instead of buffering MBs
+      if (res.body && typeof res.clone().body?.getReader === 'function') {
+        const reader = res.clone().body.getReader();
+        const head = new Uint8Array(4);
+        let filled = 0;
+        while (filled < 4) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          const take = Math.min(4 - filled, value.byteLength);
+          head.set(value.subarray(0, take), filled);
+          filled += take;
+        }
+        await reader.cancel().catch(() => {});
+        return (
+          filled >= 4 &&
+          head[0] === 0x67 &&
+          head[1] === 0x6c &&
+          head[2] === 0x54 &&
+          head[3] === 0x46
+        );
+      }
       const buf = await res.clone().arrayBuffer();
       if (buf.byteLength < 12) return false;
       const b = new Uint8Array(buf, 0, 4);
-      // Verify 'glTF' magic header (0x67, 0x6C, 0x54, 0x46)
       return b[0] === 0x67 && b[1] === 0x6c && b[2] === 0x54 && b[3] === 0x46;
     } catch {
       return false;
@@ -57,20 +124,37 @@ async function cacheFirst(request, cacheName) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   const cache = await caches.open(cacheName);
-  const cached = await cache.match(request);
+  const cached = (await cache.match(request)) || (await cache.match(pathname));
   if (cached) {
-    if (await isValidAssetResponse(pathname, cached)) {
+    if (await isValidAssetResponse(pathname, cached, true)) {
       return cached;
     }
     await cache.delete(request).catch(() => {});
+    await cache.delete(pathname).catch(() => {});
   }
 
   let networkRes = await fetch(request);
-  if (!(await isValidAssetResponse(pathname, networkRes))) {
+  if (!(await isValidAssetResponse(pathname, networkRes, false))) {
     networkRes = await fetch(new Request(request.url, { cache: 'reload' }));
   }
-  if (await isValidAssetResponse(pathname, networkRes)) {
-    cache.put(request, networkRes.clone()).catch(() => {});
+  if (await isValidAssetResponse(pathname, networkRes, false)) {
+    const cacheKey = pathname.startsWith('/models/') || pathname.startsWith('/assets/aistudio/') ? pathname : request;
+    const headers = new Headers(networkRes.headers);
+    headers.set('X-Therason-Valid', '1');
+    networkRes
+      .clone()
+      .arrayBuffer()
+      .then((buf) =>
+        cache.put(
+          cacheKey,
+          new Response(buf, {
+            status: networkRes.status,
+            statusText: networkRes.statusText,
+            headers,
+          })
+        )
+      )
+      .catch(() => {});
   }
   return networkRes;
 }
@@ -134,5 +218,10 @@ self.addEventListener('fetch', (event) => {
   if (pathname.startsWith('/assets/') && /\.(js|css|woff2|png|webp|svg|ico)$/i.test(pathname)) {
     event.respondWith(cacheFirst(req, SHELL_CACHE));
     return;
+  }
+
+  // App shell HTML navigation: fast Stale-While-Revalidate for instant mobile boot
+  if (req.mode === 'navigate' || pathname === '/') {
+    event.respondWith(staleWhileRevalidate(req, SHELL_CACHE, event));
   }
 });

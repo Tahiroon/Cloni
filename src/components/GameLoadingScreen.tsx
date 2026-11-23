@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { glbRegistry, GlbProgressInfo, startPreloadGlbs } from '../engine3d/glbRegistry';
 import {
+  cacheWebFontsBestEffort,
   decodeImageAsset,
   GAME_LOADING_TIPS,
   initSmartBrowserCache,
+  prewarmCoreCatalogThumbs,
   resolveAndCacheSplashArt,
   waitForWebFonts,
 } from '../services/gameBootLoader';
@@ -35,9 +37,11 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
   const [artFailed, setArtFailed] = useState(false);
   const [backdropFailed, setBackdropFailed] = useState(false);
   const [thumbsHydrated, setThumbsHydrated] = useState(false);
+  const [thumbsPrewarmed, setThumbsPrewarmed] = useState(false);
   const [warmDwellDone, setWarmDwellDone] = useState(false);
   const [coldDwellDone, setColdDwellDone] = useState(false);
   const [webglFallbackDone, setWebglFallbackDone] = useState(false);
+  const [tier2FallbackDone, setTier2FallbackDone] = useState(false);
   const [glbInfo, setGlbInfo] = useState<GlbProgressInfo>(() => glbRegistry.getProgressInfo());
 
   const [displayProgress, setDisplayProgress] = useState(0.08);
@@ -58,9 +62,10 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
     initSmartBrowserCache();
     startPreloadGlbs();
 
-    waitForWebFonts(450).then(() => {
+    waitForWebFonts(650).then(() => {
       if (active) setFontsReady(true);
     });
+    void cacheWebFontsBestEffort();
 
     hydrateThumbCacheFromIdb().finally(() => {
       if (active) setThumbsHydrated(true);
@@ -106,7 +111,34 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
     return () => clearTimeout(t);
   }, [glbInfo.coreReady, hydrated, sceneReady]);
 
+  // Safety guard for Tier-2 high-detail GLB assets so offline/2G never deadlocks boot
+  useEffect(() => {
+    if (!glbInfo.coreReady || glbInfo.ready || tier2FallbackDone) return;
+    const t = setTimeout(() => setTier2FallbackDone(true), 15000);
+    return () => clearTimeout(t);
+  }, [glbInfo.coreReady, glbInfo.ready, tier2FallbackDone]);
+
   const effectiveSceneReady = sceneReady || webglFallbackDone;
+  const effectiveAllGlbReady = glbInfo.ready || (glbInfo.coreReady && tier2FallbackDone);
+
+  // Pre-render core catalog thumbnails cleanly during boot once sceneReady finishes, disposing GPU session before gameplay
+  useEffect(() => {
+    if (!glbInfo.coreReady || !effectiveSceneReady) return;
+    let active = true;
+    const guard = setTimeout(() => {
+      if (active) setThumbsPrewarmed(true);
+    }, 2500);
+    prewarmCoreCatalogThumbs()
+      .catch(() => undefined)
+      .finally(() => {
+        clearTimeout(guard);
+        if (active) setThumbsPrewarmed(true);
+      });
+    return () => {
+      active = false;
+      clearTimeout(guard);
+    };
+  }, [glbInfo.coreReady, effectiveSceneReady]);
 
   // Crisp fast tip rotation (already visible on initial frame)
   useEffect(() => {
@@ -135,19 +167,41 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
   const isWarmCacheBoot = glbInfo.cacheHits >= Math.max(8, Math.floor(glbInfo.coreTotal * 0.65));
   const minDwellDone = isWarmCacheBoot ? warmDwellDone : coldDwellDone;
 
-  // Real weighted priority-first boot progress target (0..1)
+  // Real weighted priority-first boot progress target (0..1) across core, full avatars/hands, scene & thumbs
   const realTargetProgress = useMemo(() => {
-    const idbWeight = hydrated ? 0.1 : 0.04;
-    const thumbWeight = thumbsHydrated ? 0.06 : 0.02;
-    const fontWeight = fontsReady ? 0.08 : 0.03;
-    const artWeight = artReady ? 0.06 : 0.02;
-    const coreGlbWeight = glbInfo.coreProgress * 0.5;
-    const sceneWeight = effectiveSceneReady ? 0.2 : glbInfo.coreReady ? 0.08 : 0;
-    return Math.min(1, idbWeight + thumbWeight + fontWeight + artWeight + coreGlbWeight + sceneWeight);
-  }, [hydrated, thumbsHydrated, fontsReady, artReady, glbInfo.coreProgress, glbInfo.coreReady, effectiveSceneReady]);
+    const idbWeight = hydrated ? 0.05 : 0.02;
+    const fontWeight = fontsReady ? 0.03 : 0.01;
+    const artWeight = artReady ? 0.03 : 0.01;
+    const coreGlbWeight = glbInfo.coreProgress * 0.42;
+    const fullGlbWeight = (effectiveAllGlbReady ? 1 : glbInfo.progress) * 0.28;
+    const sceneWeight = effectiveSceneReady ? 0.14 : glbInfo.coreReady ? 0.05 : 0;
+    const thumbWeight = thumbsPrewarmed ? 0.05 : thumbsHydrated ? 0.02 : 0.01;
+    return Math.min(
+      1,
+      idbWeight + fontWeight + artWeight + coreGlbWeight + fullGlbWeight + sceneWeight + thumbWeight
+    );
+  }, [
+    hydrated,
+    fontsReady,
+    artReady,
+    glbInfo.coreProgress,
+    glbInfo.progress,
+    glbInfo.coreReady,
+    effectiveAllGlbReady,
+    effectiveSceneReady,
+    thumbsPrewarmed,
+    thumbsHydrated,
+  ]);
 
   const allWorkDone =
-    hydrated && thumbsHydrated && fontsReady && glbInfo.coreReady && effectiveSceneReady && minDwellDone;
+    hydrated &&
+    thumbsHydrated &&
+    thumbsPrewarmed &&
+    fontsReady &&
+    glbInfo.coreReady &&
+    effectiveAllGlbReady &&
+    effectiveSceneReady &&
+    minDwellDone;
 
   // Monotonic damped real progress bar animation (only commits React state when displayed % changes)
   useEffect(() => {
@@ -243,19 +297,19 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
           aria-hidden="true"
           decoding="async"
           onError={() => setBackdropFailed(true)}
-          className="hidden sm:block pointer-events-none absolute inset-x-0 top-0 w-full h-[78vh] object-cover object-center opacity-55 [mask-image:linear-gradient(to_bottom,black_0%,black_50%,transparent_96%)] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_50%,transparent_96%)]"
+          className="hidden sm:block pointer-events-none absolute inset-x-0 top-0 w-full h-[78vh] md:inset-0 md:h-full object-cover object-center opacity-55 md:opacity-90 [mask-image:linear-gradient(to_bottom,black_0%,black_50%,transparent_96%)] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_50%,transparent_96%)] md:[mask-image:none] md:[-webkit-mask-image:none]"
         />
       )}
 
-      {/* Subtle Sunbeam Halo & Lateral Depth Vignette for Wide Tablet/Laptop Viewports */}
+      {/* Subtle Sunbeam Halo & Lateral Depth Vignette for Wide Tablet/Laptop/Desktop Viewports */}
       <div
         aria-hidden="true"
-        className="hidden sm:block absolute inset-0 bg-[radial-gradient(ellipse_at_50%_24%,rgba(125,211,252,0.28),transparent_62%)] pointer-events-none"
+        className="hidden sm:block absolute inset-0 bg-[radial-gradient(ellipse_at_50%_24%,rgba(125,211,252,0.28),transparent_62%)] md:bg-[radial-gradient(ellipse_at_50%_38%,rgba(125,211,252,0.34),rgba(4,28,82,0.35)_70%,rgba(2,18,56,0.72)_100%)] pointer-events-none"
       />
 
       {/* Main Focal Clinic Cover Art Stage: Renders Immediately at Full Opacity & Adapts Cleanly to Mobile, Tablet & Laptop */}
       <div className="absolute inset-x-0 top-0 flex justify-center pointer-events-none">
-        <div className="relative w-full h-[76vh] min-h-[400px] sm:w-auto sm:h-[75vh] md:h-[76vh] lg:h-[77vh] sm:max-h-[720px] sm:aspect-[580/712] max-w-full sm:max-w-[92vw] shrink-0 sm:[mask-image:linear-gradient(to_right,transparent_0%,black_10%,black_90%,transparent_100%)] sm:[-webkit-mask-image:linear-gradient(to_right,transparent_0%,black_10%,black_90%,transparent_100%)]">
+        <div className="relative w-full h-[76vh] min-h-[400px] sm:w-auto sm:h-[75vh] md:h-[82vh] lg:h-[84vh] sm:max-h-[720px] md:max-h-[820px] sm:aspect-[580/712] md:aspect-[4/3] lg:aspect-[16/10] max-w-full sm:max-w-[92vw] md:w-[min(92vw,1080px)] shrink-0 sm:[mask-image:linear-gradient(to_right,transparent_0%,black_10%,black_90%,transparent_100%)] sm:[-webkit-mask-image:linear-gradient(to_right,transparent_0%,black_10%,black_90%,transparent_100%)] md:[mask-image:radial-gradient(ellipse_at_50%_46%,black_44%,rgba(0,0,0,0.88)_68%,transparent_96%)] md:[-webkit-mask-image:radial-gradient(ellipse_at_50%_46%,black_44%,rgba(0,0,0,0.88)_68%,transparent_96%)]">
           {!artFailed && (
             <img
               src={SPLASH_KEYART_SRC}
@@ -268,7 +322,7 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
                 setArtFailed(true);
                 setArtReady(true);
               }}
-              className="w-full h-full object-cover object-top [mask-image:linear-gradient(to_bottom,black_0%,black_74%,transparent_98%)] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_74%,transparent_98%)]"
+              className="w-full h-full object-cover object-top md:object-[50%_28%] [mask-image:linear-gradient(to_bottom,black_0%,black_74%,transparent_98%)] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_74%,transparent_98%)]"
             />
           )}
         </div>
@@ -277,12 +331,12 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
       {/* Seamless Lower Royal-Blue Deck Backing Behind Live Loading Bar & Auto-Tips */}
       <div
         aria-hidden="true"
-        className="absolute inset-x-0 bottom-0 h-[36vh] sm:h-[34vh] bg-gradient-to-t from-[#031f5c] via-[#093482]/90 to-transparent pointer-events-none"
+        className="absolute inset-x-0 bottom-0 h-[36vh] sm:h-[34vh] md:h-[32vh] bg-gradient-to-t from-[#031f5c] via-[#093482]/90 to-transparent pointer-events-none"
       />
 
       {/* Interactive Live Bottom HUD (Progress + Instant Fast-Rotating Tips) */}
       <div className="relative z-10 flex flex-col justify-end items-center w-full h-full px-4 sm:px-6 pb-7 sm:pb-9 md:pb-11">
-        <div className="w-full max-w-[540px] md:max-w-[600px] flex flex-col items-center gap-2.5 sm:gap-3.5">
+        <div className="w-full max-w-[540px] md:max-w-[680px] flex flex-col items-center gap-2.5 sm:gap-3.5">
           {/* Header Status Bar */}
           <div className="inline-flex items-center gap-2.5 px-7 py-1.5 rounded-full bg-[#13326e]/95 border border-sky-300/25 shadow-[0_8px_22px_rgba(3,18,54,0.45)]">
             <span className="text-base sm:text-xl font-extrabold text-white tracking-wide">
@@ -299,7 +353,7 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={pct}
-            className="w-full max-w-[460px] md:max-w-[500px] h-[18px] sm:h-[22px] rounded-full bg-[#031747]/92 border-2 border-[#2dd4ff]/90 p-[2.5px] overflow-hidden shadow-[0_0_20px_rgba(34,211,238,0.4)]"
+            className="w-full max-w-[460px] md:max-w-[560px] h-[18px] sm:h-[22px] rounded-full bg-[#031747]/92 border-2 border-[#2dd4ff]/90 p-[2.5px] overflow-hidden shadow-[0_0_20px_rgba(34,211,238,0.4)]"
           >
             <div
               className={`relative h-full rounded-full ${
@@ -393,6 +447,20 @@ export const GameLoadingScreen: React.FC<GameLoadingScreenProps> = ({
               </svg>
             </div>
           </button>
+
+          {/* Desktop / Large-Screen PC Control Hints Strip */}
+          <div
+            dir="ltr"
+            className="hidden md:flex items-center justify-center flex-wrap gap-3 text-[11px] font-bold text-sky-100/85 bg-[#061c4d]/80 border border-sky-300/20 rounded-2xl px-4 py-1.5 shadow-lg"
+          >
+            <span><kbd className="font-mono text-cyan-300">WASD</kbd> {isAr ? 'تحريك' : 'Move / Pan'}</span>
+            <span className="text-sky-400/40">·</span>
+            <span><kbd className="font-mono text-cyan-300">Q / E</kbd> {isAr ? 'تدوير الكاميرا' : 'Orbit'}</span>
+            <span className="text-sky-400/40">·</span>
+            <span><kbd className="font-mono text-cyan-300">Scroll</kbd> {isAr ? 'تقريب' : 'Zoom'}</span>
+            <span className="text-sky-400/40">·</span>
+            <span><kbd className="font-mono text-cyan-300">F</kbd> {isAr ? 'حركة الماوس في الجلسة' : 'FPP Mouse Look'}</span>
+          </div>
         </div>
       </div>
 
