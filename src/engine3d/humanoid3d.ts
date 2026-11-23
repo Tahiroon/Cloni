@@ -68,6 +68,9 @@ interface RealisticFppBehaviorState {
   nextSaccadeAt: number;
   sacYaw: number;
   sacPitch: number;
+  nextNodAt: number;
+  nodUntil: number;
+  nodStrength: number;
   curHeadYaw: number;
   curHeadPitch: number;
   curEyeYaw: number;
@@ -505,7 +508,9 @@ interface RealisticBodyMapPair {
   roughness: THREE.CanvasTexture;
 }
 const realisticBodyMapCache = new Map<string, RealisticBodyMapPair>();
-const sudaneseBodyMapCache = new Map<string, THREE.CanvasTexture>();
+const realisticMatCache = new Map<string, THREE.Material>();
+const sudaneseBodyMapCache = new Map<string, RealisticBodyMapPair>();
+const sudaneseMatCache = new Map<string, THREE.Material>();
 
 function getEnhancedRealisticBodyMaps(
   origMap: THREE.Texture | null | undefined,
@@ -520,7 +525,7 @@ function getEnhancedRealisticBodyMaps(
   const shirtHex = opts?.shirtHex ?? 0x5884b6;
   const pantsHex = opts?.pantsHex ?? 0xa28e6e;
   const shoeHex = opts?.shoeHex ?? 0x262220;
-  const skinMul = THREE.MathUtils.clamp(opts?.skinMul ?? 1.0, 0.80, 1.12);
+  const skinMul = THREE.MathUtils.clamp(opts?.skinMul ?? 1.0, 0.88, 1.12);
   const hairGrayAmt = THREE.MathUtils.clamp(opts?.hairGrayAmt ?? 0, 0, 0.75);
   const cacheKey = `${shirtHex.toString(16)}_${pantsHex.toString(16)}_${shoeHex.toString(16)}_${skinMul.toFixed(2)}_${hairGrayAmt.toFixed(2)}`;
   const cached = realisticBodyMapCache.get(cacheKey);
@@ -542,8 +547,8 @@ function getEnhancedRealisticBodyMaps(
   const shG = Math.round(shoeCol.g * 255);
   const shB = Math.round(shoeCol.b * 255);
 
-  const w = Math.min(256, img.width);
-  const h = Math.min(256, img.height);
+  const w = Math.min(512, img.width);
+  const h = Math.min(512, img.height);
   const cAlbedo = document.createElement('canvas');
   cAlbedo.width = w;
   cAlbedo.height = h;
@@ -573,14 +578,18 @@ function getEnhancedRealisticBodyMaps(
       const a = px[idx + 3];
 
       const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-      const isWarmSkin = r > g + 16 && g > b + 8 && r > 70;
+      const isHeadRegion = u < 0.31;
+      const isHeadBrightWhite = isHeadRegion && lum > 0.62 && Math.abs(r - b) < 28;
+      const isHeadHairDark = isHeadRegion && lum < 0.16 && r - b < 18;
+      const isWarmSkin = r > g + 6 && g > b + 2 && r >= 40 && r - b >= 12;
       const isShirtQuadrant = u >= 0.692 && v >= 0.445;
-      const isCollarOrCuff = u >= 0.648 && u < 0.768 && v >= 0.18 && v < 0.445 && !isWarmSkin && b >= r - 10 && lum > 0.36;
+      const isCollarOrCuff =
+        u >= 0.648 && u < 0.768 && v >= 0.18 && v < 0.445 && !isWarmSkin && b >= r - 10 && lum > 0.36;
       const isBeltStrip = u >= 0.652 && u < 0.692 && v >= 0.46 && v < 0.96;
       const isTrousersRegion = u >= 0.31 && u < 0.656 && v >= 0.45 && !isWarmSkin;
       const isShoesRegion = u >= 0.768 && v >= 0.08 && v < 0.43 && !isWarmSkin;
 
-      let roughByte = 188;
+      let roughByte = 166;
 
       if (isShirtQuadrant || isCollarOrCuff) {
         const cL = clamp((lum - 0.52) * 1.26 + 0.47, 0.08, 0.96);
@@ -589,15 +598,15 @@ function getEnhancedRealisticBodyMaps(
         r = Math.round(sR * cL + (244 - sR * cL) * bt);
         g = Math.round(sG * cL + (245 - sG * cL) * bt);
         b = Math.round(sB * cL + (242 - sB * cL) * bt);
-        roughByte = Math.round(214 + (86 - 214) * buttonBlend);
+        roughByte = Math.round(218 + (82 - 218) * buttonBlend);
       } else if (isBeltStrip) {
         if (lum > 0.55 && Math.abs(r - b) < 18) {
-          roughByte = 70;
+          roughByte = 68;
         } else {
           r = Math.round(r * 0.84);
           g = Math.round(g * 0.82);
           b = Math.round(b * 0.80);
-          roughByte = 112;
+          roughByte = 110;
         }
       } else if (isTrousersRegion) {
         const cL = clamp((lum - 0.50) * 1.24 + 0.44, 0.06, 0.94);
@@ -612,22 +621,35 @@ function getEnhancedRealisticBodyMaps(
           r = Math.round(clamp((shR * 0.82 + r * 0.25) * (0.65 + cL * 0.55), 0, 255));
           g = Math.round(clamp((shG * 0.82 + g * 0.25) * (0.65 + cL * 0.55), 0, 255));
           b = Math.round(clamp((shB * 0.82 + b * 0.25) * (0.65 + cL * 0.55), 0, 255));
-          roughByte = 116;
+          roughByte = 112;
         } else {
           roughByte = 175;
         }
-      } else if (isWarmSkin) {
-        r = Math.round(clamp(r * skinMul, 0, 255));
-        g = Math.round(clamp(g * (0.98 * skinMul + 0.02), 0, 255));
-        b = Math.round(clamp(b * (0.95 * skinMul + 0.04), 0, 255));
-      } else if (u < 0.31 && lum < 0.24) {
+      } else if (isHeadBrightWhite) {
+        roughByte = 78;
+      } else if (isHeadHairDark) {
         if (hairGrayAmt > 0.02) {
           const gray = 136 + Math.round((lum - 0.10) * 180);
           r = Math.round(r + (gray - r) * hairGrayAmt);
           g = Math.round(g + (gray - g) * hairGrayAmt);
           b = Math.round(b + (gray - b) * hairGrayAmt);
         }
-        roughByte = 198;
+        roughByte = 196;
+      } else if (isWarmSkin) {
+        // Preserve rich dark-to-medium melanin undertone & warm living subsurface radiance
+        const isLipTone = isHeadRegion && r > g + 18 && g - b <= 14 && lum >= 0.16 && lum <= 0.44;
+        r = Math.round(clamp(r * (skinMul * 1.015), 0, 255));
+        g = Math.round(clamp(g * (0.985 * skinMul + 0.015), 0, 255));
+        b = Math.round(clamp(b * (0.955 * skinMul + 0.03), 0, 255));
+        roughByte = isLipTone ? 104 : 126;
+      } else if (isHeadRegion && lum < 0.24) {
+        if (hairGrayAmt > 0.02) {
+          const gray = 136 + Math.round((lum - 0.10) * 180);
+          r = Math.round(r + (gray - r) * hairGrayAmt);
+          g = Math.round(g + (gray - g) * hairGrayAmt);
+          b = Math.round(b + (gray - b) * hairGrayAmt);
+        }
+        roughByte = 192;
       }
 
       px[idx] = clamp(r, 0, 255);
@@ -661,17 +683,22 @@ function getEnhancedRealisticBodyMaps(
   const pair = { albedo: albedoTex, roughness: roughTex };
   if (realisticBodyMapCache.size >= 18) {
     const firstKey = realisticBodyMapCache.keys().next().value;
-    if (firstKey) realisticBodyMapCache.delete(firstKey);
+    if (firstKey) {
+      const evicted = realisticBodyMapCache.get(firstKey);
+      evicted?.albedo.dispose();
+      evicted?.roughness.dispose();
+      realisticBodyMapCache.delete(firstKey);
+    }
   }
   realisticBodyMapCache.set(cacheKey, pair);
   return pair;
 }
 
-function getSudaneseBodyMap(
+function getSudaneseBodyMaps(
   origMap: THREE.Texture | null | undefined,
   clothHex: number,
   skinMul = 1.0
-): THREE.CanvasTexture | null {
+): RealisticBodyMapPair | null {
   const sMul = THREE.MathUtils.clamp(skinMul, 0.82, 1.12);
   const cacheKey = `${clothHex.toString(16)}_${sMul.toFixed(2)}`;
   const cached = sudaneseBodyMapCache.get(cacheKey);
@@ -685,16 +712,25 @@ function getSudaneseBodyMap(
   const cG = clothCol.g;
   const cB = clothCol.b;
 
+  // 256x256 reduces CPU pixel work 4x while generating calibrated skin vs. woven-cotton roughness contrast
   const w = Math.min(256, img.width);
   const h = Math.min(256, img.height);
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext('2d');
-  if (!ctx) return null;
-  ctx.drawImage(img, 0, 0, w, h);
-  const imgData = ctx.getImageData(0, 0, w, h);
+  const cAlbedo = document.createElement('canvas');
+  cAlbedo.width = w;
+  cAlbedo.height = h;
+  const ctxA = cAlbedo.getContext('2d');
+  if (!ctxA) return null;
+  ctxA.drawImage(img, 0, 0, w, h);
+  const imgData = ctxA.getImageData(0, 0, w, h);
   const px = imgData.data;
+
+  const cRough = document.createElement('canvas');
+  cRough.width = w;
+  cRough.height = h;
+  const ctxR = cRough.getContext('2d');
+  if (!ctxR) return null;
+  const roughImg = ctxR.createImageData(w, h);
+  const rpx = roughImg.data;
   const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
   for (let i = 0; i < px.length; i += 4) {
@@ -704,30 +740,58 @@ function getSudaneseBodyMap(
     const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     const chroma = Math.max(r, g, b) - Math.min(r, g, b);
     const isWarmSkin = r > g + 14 && g > b + 6 && r > 62;
+    let roughByte = 204;
+
     if (!isWarmSkin && chroma < 38 && lum > 0.48) {
-      px[i] = clamp(Math.round(r * cR), 0, 255);
-      px[i + 1] = clamp(Math.round(g * cG), 0, 255);
-      px[i + 2] = clamp(Math.round(b * cB), 0, 255);
+      // Preserve crisp cotton fold shading while tinting Jalabiya cleanly
+      const foldBoost = clamp((lum - 0.65) * 0.22, -0.06, 0.08);
+      const tMul = 1.0 + foldBoost;
+      px[i] = clamp(Math.round(r * cR * tMul), 0, 255);
+      px[i + 1] = clamp(Math.round(g * cG * tMul), 0, 255);
+      px[i + 2] = clamp(Math.round(b * cB * tMul), 0, 255);
+      roughByte = 220; // Matte woven cotton (~0.86)
     } else if (isWarmSkin) {
-      px[i] = clamp(Math.round(r * sMul), 0, 255);
+      px[i] = clamp(Math.round(r * (sMul * 1.03)), 0, 255);
       px[i + 1] = clamp(Math.round(g * (0.98 * sMul + 0.02)), 0, 255);
-      px[i + 2] = clamp(Math.round(b * (0.95 * sMul + 0.04)), 0, 255);
+      px[i + 2] = clamp(Math.round(b * (0.94 * sMul + 0.03)), 0, 255);
+      roughByte = 124; // Natural human skin luster (~0.49)
+    } else {
+      roughByte = 178; // Footwear / trim
+    }
+
+    rpx[i] = roughByte;
+    rpx[i + 1] = roughByte;
+    rpx[i + 2] = roughByte;
+    rpx[i + 3] = 255;
+  }
+  ctxA.putImageData(imgData, 0, 0);
+  ctxR.putImageData(roughImg, 0, 0);
+
+  const flipY = origMap?.flipY ?? false;
+  const albedoTex = new THREE.CanvasTexture(cAlbedo);
+  albedoTex.colorSpace = THREE.SRGBColorSpace;
+  albedoTex.flipY = flipY;
+  albedoTex.anisotropy = 4;
+  albedoTex.needsUpdate = true;
+
+  const roughTex = new THREE.CanvasTexture(cRough);
+  roughTex.colorSpace = THREE.NoColorSpace;
+  roughTex.flipY = flipY;
+  roughTex.anisotropy = 4;
+  roughTex.needsUpdate = true;
+
+  const pair = { albedo: albedoTex, roughness: roughTex };
+  if (sudaneseBodyMapCache.size >= 18) {
+    const firstKey = sudaneseBodyMapCache.keys().next().value;
+    if (firstKey) {
+      const evicted = sudaneseBodyMapCache.get(firstKey);
+      evicted?.albedo.dispose();
+      evicted?.roughness.dispose();
+      sudaneseBodyMapCache.delete(firstKey);
     }
   }
-  ctx.putImageData(imgData, 0, 0);
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.flipY = origMap?.flipY ?? false;
-  tex.anisotropy = 4;
-  tex.needsUpdate = true;
-
-  if (sudaneseBodyMapCache.size >= 14) {
-    const firstKey = sudaneseBodyMapCache.keys().next().value;
-    if (firstKey) sudaneseBodyMapCache.delete(firstKey);
-  }
-  sudaneseBodyMapCache.set(cacheKey, tex);
-  return tex;
+  sudaneseBodyMapCache.set(cacheKey, pair);
+  return pair;
 }
 function getIdBadgeTexture(): THREE.CanvasTexture {
   if (cachedIdBadgeTex) return cachedIdBadgeTex;
@@ -770,14 +834,16 @@ function getIdBadgeTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.54) {
+function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.50) {
   return new THREE.MeshStandardMaterial({
     color: hex,
     map: appearance.skinMicroMap ?? null,
+    bumpMap: appearance.skinMicroMap ?? null,
+    bumpScale: 0.0012,
     roughnessMap: appearance.skinRoughMap ?? null,
     roughness,
     metalness: 0.0,
-    envMapIntensity: 0.36,
+    envMapIntensity: 0.42,
   });
 }
 
@@ -785,19 +851,23 @@ function makeClothMat(
   hex: string | number,
   appearance: HumanoidAppearance,
   roughness = 0.84,
-  _sheen = 0.58,
+  sheenAmt = 0.58,
   doubleSide = false,
   vertexColors = false
 ) {
-  return new THREE.MeshStandardMaterial({
+  const sheenColor = new THREE.Color(hex).lerp(new THREE.Color(0xffffff), 0.38);
+  return new THREE.MeshPhysicalMaterial({
     color: hex,
     bumpMap: appearance.fabricWeaveBump ?? null,
-    bumpScale: 0.0026,
+    bumpScale: 0.0028,
     roughness,
-    metalness: 0.01,
+    metalness: 0.0,
+    sheen: THREE.MathUtils.clamp(sheenAmt, 0.18, 0.72),
+    sheenRoughness: 0.74,
+    sheenColor,
     side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
     vertexColors,
-    envMapIntensity: 0.46,
+    envMapIntensity: 0.48,
   });
 }
 
@@ -1348,34 +1418,82 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             });
           }
           const origMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          const robeHex = shirtCol.getHex();
+          const sMulKey = skinMul.toFixed(2);
           const tunedMats = origMats.map((m) => {
             const orig = m as THREE.MeshStandardMaterial;
             if (!orig) return orig;
             const mName = orig.name || '';
             const isEmamaMat = mName === 'sudanese_emama';
             const isHeadMat = mName === 'sudanese_head';
-            const isBodyMat = mName === 'sudanese_body' || (!isEmamaMat && !isHeadMat);
-            const customBodyMap = isBodyMat
-              ? getSudaneseBodyMap(orig.map, shirtCol.getHex(), skinMul)
-              : null;
-            return new THREE.MeshStandardMaterial({
-              name: mName,
-              color: isEmamaMat
-                ? new THREE.Color(emamaTintHex)
-                : isHeadMat
-                  ? new THREE.Color(skinMul, skinMul * 0.99, skinMul * 0.97)
-                  : new THREE.Color(0xffffff),
-              map: customBodyMap ?? orig.map ?? null,
-              normalMap: orig.normalMap ?? null,
-              normalScale: new THREE.Vector2(isEmamaMat ? 0.65 : 0.85, isEmamaMat ? -0.65 : -0.85),
-              roughness: isEmamaMat ? 0.88 : isHeadMat ? 0.72 : 0.78,
-              metalness: 0.0,
-              vertexColors: Boolean(orig.vertexColors),
-              side: THREE.DoubleSide,
-              envMapIntensity: isEmamaMat ? 0.22 : 0.28,
-            });
+            const matKey = isEmamaMat
+              ? `emama_${emamaTintHex.toString(16)}`
+              : isHeadMat
+                ? `head_${sMulKey}`
+                : `body_${robeHex.toString(16)}_${sMulKey}`;
+            const cachedMat = sudaneseMatCache.get(matKey);
+            if (cachedMat) return cachedMat;
+
+            let mat: THREE.Material;
+            if (isEmamaMat) {
+              mat = new THREE.MeshPhysicalMaterial({
+                name: mName,
+                color: new THREE.Color(emamaTintHex),
+                map: orig.map ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: new THREE.Vector2(0.75, -0.75),
+                roughness: 0.86,
+                metalness: 0.0,
+                sheen: 0.34,
+                sheenRoughness: 0.78,
+                sheenColor: new THREE.Color(emamaTintHex).lerp(new THREE.Color(0xffffff), 0.35),
+                vertexColors: Boolean(orig.vertexColors),
+                side: THREE.DoubleSide,
+                envMapIntensity: 0.28,
+              });
+            } else if (isHeadMat) {
+              mat = new THREE.MeshPhysicalMaterial({
+                name: mName,
+                color: new THREE.Color(skinMul * 1.03, skinMul * 0.99, skinMul * 0.96),
+                map: orig.map ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: new THREE.Vector2(0.95, -0.95),
+                roughness: 0.50,
+                metalness: 0.0,
+                clearcoat: 0.055,
+                clearcoatRoughness: 0.44,
+                sheen: 0.14,
+                sheenRoughness: 0.78,
+                sheenColor: new THREE.Color(0xd98e6b).multiplyScalar(skinMul),
+                vertexColors: Boolean(orig.vertexColors),
+                side: THREE.FrontSide,
+                envMapIntensity: 0.44,
+              });
+            } else {
+              const bodyMaps = getSudaneseBodyMaps(orig.map, robeHex, skinMul);
+              mat = new THREE.MeshStandardMaterial({
+                name: mName,
+                color: new THREE.Color(0xffffff),
+                map: bodyMaps?.albedo ?? orig.map ?? null,
+                roughnessMap: bodyMaps?.roughness ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: new THREE.Vector2(0.92, -0.92),
+                roughness: bodyMaps ? 1.0 : 0.78,
+                metalness: 0.0,
+                vertexColors: Boolean(orig.vertexColors),
+                side: THREE.FrontSide,
+                envMapIntensity: 0.38,
+              });
+            }
+
+            if (sudaneseMatCache.size >= 36) {
+              const firstMatKey = sudaneseMatCache.keys().next().value;
+              if (firstMatKey) sudaneseMatCache.delete(firstMatKey);
+            }
+            sudaneseMatCache.set(matKey, mat);
+            return mat;
           });
-          mesh.userData.sharedGlbMat = false;
+          mesh.userData.sharedGlbMat = true;
           mesh.material = tunedMats.length === 1 ? tunedMats[0] : tunedMats;
           return;
         }
@@ -1389,38 +1507,94 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             });
           }
           const isEyeMesh = mesh.name === 'h_L_eye' || mesh.name === 'h_R_eye';
+          const isGlandMesh = mesh.name === 'h_L_gland' || mesh.name === 'h_R_gland';
+          const isTeethMesh = mesh.name === 'h_TeethUp' || mesh.name === 'h_TeethDown';
           const origMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          const sHex = shirtCol.getHex();
+          const pHex = pantsCol.getHex();
+          const baseOutfitKey = `${sHex.toString(16)}_${pHex.toString(16)}_${shoeLeatherHex.toString(16)}_${skinMul.toFixed(2)}_${hairGrayAmt.toFixed(2)}`;
+          const roleTag = isEyeMesh ? 'eye' : isGlandMesh ? 'gland' : isTeethMesh ? 'teeth' : 'body';
           const tunedMats = origMats.map((m) => {
             const orig = m as THREE.MeshStandardMaterial;
             if (!orig) return orig;
+            const matKey = `${roleTag}_${baseOutfitKey}`;
+            const cachedMat = realisticMatCache.get(matKey);
+            if (cachedMat) return cachedMat;
+
             const bodyMaps = getEnhancedRealisticBodyMaps(orig.map, {
-              shirtHex: shirtCol.getHex(),
-              pantsHex: pantsCol.getHex(),
+              shirtHex: sHex,
+              pantsHex: pHex,
               shoeHex: shoeLeatherHex,
               skinMul,
               hairGrayAmt,
             });
+            let mat: THREE.Material;
             if (isEyeMesh) {
-              return new THREE.MeshStandardMaterial({
+              mat = new THREE.MeshPhysicalMaterial({
                 map: bodyMaps?.albedo ?? orig.map ?? null,
                 normalMap: orig.normalMap ?? null,
-                normalScale: orig.normalScale ? orig.normalScale.clone() : new THREE.Vector2(1, -1),
-                roughness: 0.12,
+                normalScale: orig.normalScale ? orig.normalScale.clone() : new THREE.Vector2(1, 1),
+                roughness: 0.06,
                 metalness: 0.0,
-                envMapIntensity: 0.45,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.03,
+                ior: 1.42,
+                side: THREE.FrontSide,
+                envMapIntensity: 0.92,
+              });
+            } else if (isGlandMesh) {
+              mat = new THREE.MeshPhysicalMaterial({
+                map: bodyMaps?.albedo ?? orig.map ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: orig.normalScale ? orig.normalScale.clone() : new THREE.Vector2(1, 1),
+                roughness: 0.16,
+                metalness: 0.0,
+                clearcoat: 0.82,
+                clearcoatRoughness: 0.08,
+                side: THREE.FrontSide,
+                envMapIntensity: 0.72,
+              });
+            } else if (isTeethMesh) {
+              mat = new THREE.MeshPhysicalMaterial({
+                color: 0xfbfaf6,
+                map: bodyMaps?.albedo ?? orig.map ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: orig.normalScale ? orig.normalScale.clone() : new THREE.Vector2(0.85, 0.85),
+                roughness: 0.24,
+                metalness: 0.0,
+                clearcoat: 0.55,
+                clearcoatRoughness: 0.18,
+                side: THREE.FrontSide,
+                envMapIntensity: 0.58,
+              });
+            } else {
+              mat = new THREE.MeshPhysicalMaterial({
+                map: bodyMaps?.albedo ?? orig.map ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: orig.normalScale
+                  ? orig.normalScale.clone().multiplyScalar(0.88)
+                  : new THREE.Vector2(0.88, 0.88),
+                roughnessMap: bodyMaps?.roughness ?? null,
+                roughness: bodyMaps ? 1.0 : 0.70,
+                metalness: 0.0,
+                clearcoat: 0.055,
+                clearcoatRoughness: 0.44,
+                sheen: 0.16,
+                sheenRoughness: 0.78,
+                sheenColor: new THREE.Color(0xc87d5a),
+                side: THREE.FrontSide,
+                envMapIntensity: 0.44,
               });
             }
-            return new THREE.MeshStandardMaterial({
-              map: bodyMaps?.albedo ?? orig.map ?? null,
-              normalMap: orig.normalMap ?? null,
-              normalScale: new THREE.Vector2(1.0, -1.0),
-              roughnessMap: bodyMaps?.roughness ?? null,
-              roughness: bodyMaps ? 1.0 : 0.74,
-              metalness: 0.0,
-              envMapIntensity: 0.28,
-            });
+
+            if (realisticMatCache.size >= 48) {
+              const firstMatKey = realisticMatCache.keys().next().value;
+              if (firstMatKey) realisticMatCache.delete(firstMatKey);
+            }
+            realisticMatCache.set(matKey, mat);
+            return mat;
           });
-          mesh.userData.sharedGlbMat = false;
+          mesh.userData.sharedGlbMat = true;
           mesh.material = tunedMats.length === 1 ? tunedMats[0] : tunedMats;
           return;
         }
@@ -3451,6 +3625,9 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             nextSaccadeAt: 1.4,
             sacYaw: 0,
             sacPitch: 0,
+            nextNodAt: 3.4,
+            nodUntil: 0,
+            nodStrength: 0,
             curHeadYaw: 0,
             curHeadPitch: 0,
             curEyeYaw: 0,
@@ -3904,6 +4081,23 @@ export function animateHumanoid3D(
       // Microsoft Rocketbox ARKit (AK_*) + Oculus Viseme (AA_VI_*) blendshapes
       dampMorphTarget(rig, 'AK_09_EyeBlinkLeft', blinkL, 42, frameDt);
       dampMorphTarget(rig, 'AK_10_EyeBlinkRight', blinkR, 42, frameDt);
+
+      // Authentic eyelid follow-through matched to live eye gaze (human upper lids droop slightly when looking down)
+      const eyePitchNow = fppBeh ? fppBeh.curEyePitch : 0;
+      const eyeYawNow = fppBeh ? fppBeh.curEyeYaw : 0;
+      const gazeDownAmt = THREE.MathUtils.clamp(eyePitchNow * 2.2, 0, 0.45);
+      const gazeUpAmt = THREE.MathUtils.clamp(-eyePitchNow * 2.2, 0, 0.42);
+      const gazeRightAmt = THREE.MathUtils.clamp(eyeYawNow * 2.1, 0, 0.45);
+      const gazeLeftAmt = THREE.MathUtils.clamp(-eyeYawNow * 2.1, 0, 0.45);
+      dampMorphTarget(rig, 'AK_11_EyeLookDownLeft', gazeDownAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_12_EyeLookDownRight', gazeDownAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_17_EyeLookUpLeft', gazeUpAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_18_EyeLookUpRight', gazeUpAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_13_EyeLookInLeft', gazeRightAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_16_EyeLookOutRight', gazeRightAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_15_EyeLookOutLeft', gazeLeftAmt, 20, frameDt);
+      dampMorphTarget(rig, 'AK_14_EyeLookInRight', gazeLeftAmt, 20, frameDt);
+
       dampMorphTarget(
         rig,
         'AK_19_EyeSquintLeft',
@@ -3934,10 +4128,11 @@ export function animateHumanoid3D(
       );
       dampMorphTarget(rig, 'AK_44_MouthSmileLeft', smileAmt * 0.85, 7, frameDt);
       dampMorphTarget(rig, 'AK_45_MouthSmileRight', smileAmt * 0.80, 7, frameDt);
+      const nodBrowBoost = fppBeh && timeSec < fppBeh.nodUntil ? 0.10 * calmFactor : 0;
       dampMorphTarget(
         rig,
         'AK_03_BrowInnerUp',
-        browTalkLift * (1 - winceWave * 0.5) + winceWave * 0.24 + effDiscomfort * 0.14,
+        browTalkLift * (1 - winceWave * 0.5) + winceWave * 0.24 + effDiscomfort * 0.14 + nodBrowBoost,
         9,
         frameDt
       );
@@ -3985,71 +4180,98 @@ export function animateHumanoid3D(
         dampMorphTarget(rig, 'AA_VI_01_PP', 0, 14, frameDt);
       }
     } else {
-      // Mixamo h_expressions.* & h_teeth.* blendshapes
-      dampMorphTarget(rig, 'h_expressions.LeyeClose_h', blinkL, 42, frameDt);
-      dampMorphTarget(rig, 'h_expressions.ReyeClose_h', blinkR, 42, frameDt);
+      // Mixamo FACS h_expressions.* & h_teeth.* blendshapes (eyelid-gaze follow-through, micro-expressions, consonant/vowel lip-sync)
+      const eyePitchNow = fppBeh ? fppBeh.curEyePitch : 0;
+      const gazeDownLid = THREE.MathUtils.clamp(eyePitchNow * 1.15, 0, 0.24);
+      const gazeUpOpen = THREE.MathUtils.clamp(-eyePitchNow * 1.6 + sSpike * 0.18, 0, 0.36);
+      const nodBrowBoost = fppBeh && timeSec < fppBeh.nodUntil ? 0.12 * calmFactor : 0;
+      const browExpr = browTalkLift * (1 - winceWave * 0.5) + nodBrowBoost;
+      const microAsym = 0.94 + 0.06 * Math.sin(timeSec * 0.7 + actorSeed);
+
+      dampMorphTarget(rig, 'h_expressions.LeyeClose_h', Math.min(1, Math.max(blinkL, gazeDownLid)), 42, frameDt);
+      dampMorphTarget(rig, 'h_expressions.ReyeClose_h', Math.min(1, Math.max(blinkR, gazeDownLid)), 42, frameDt);
+      dampMorphTarget(rig, 'h_expressions.LeyeOpen_h', gazeUpOpen * (1 - blinkL), 18, frameDt);
+      dampMorphTarget(rig, 'h_expressions.ReyeOpen_h', gazeUpOpen * (1 - blinkR), 18, frameDt);
       dampMorphTarget(
         rig,
         'h_expressions.LlowLid_h',
-        Math.min(0.9, 0.14 + blinkL * 0.2 + warmBaseline * 0.35 + effDiscomfort * 0.28 + hsSmile * 0.14),
+        Math.min(0.9, 0.14 + blinkL * 0.18 + warmBaseline * 0.36 + effDiscomfort * 0.30 + hsSmile * 0.18),
         16,
         frameDt
       );
       dampMorphTarget(
         rig,
         'h_expressions.RlowLid_h',
-        Math.min(0.9, 0.14 + blinkR * 0.2 + warmBaseline * 0.35 + effDiscomfort * 0.28 + hsSmile * 0.14),
+        Math.min(0.9, 0.14 + blinkR * 0.18 + warmBaseline * 0.36 + effDiscomfort * 0.30 + hsSmile * 0.18),
         16,
         frameDt
       );
       dampMorphTarget(
         rig,
         'h_expressions.Lsquint_h',
-        Math.min(0.95, warmBaseline * 0.45 + winceWave * 0.34 + stimSquintBoost + hsSmile * 0.20),
+        Math.min(0.95, warmBaseline * 0.48 + winceWave * 0.38 + stimSquintBoost + hsSmile * 0.24),
         12,
         frameDt
       );
       dampMorphTarget(
         rig,
         'h_expressions.Rsquint_h',
-        Math.min(0.95, warmBaseline * 0.45 + winceWave * 0.34 + stimSquintBoost + hsSmile * 0.20),
+        Math.min(0.95, warmBaseline * 0.48 + winceWave * 0.38 + stimSquintBoost + hsSmile * 0.24),
         12,
         frameDt
       );
 
-      dampMorphTarget(rig, 'h_expressions.LsmileClose_h', smileAmt, 7, frameDt);
-      dampMorphTarget(rig, 'h_expressions.RsmileClose_h', smileAmt * 0.94, 7, frameDt);
-      dampMorphTarget(rig, 'h_expressions.LbrowUp_h', browTalkLift * (1 - winceWave * 0.5), 8, frameDt);
-      dampMorphTarget(rig, 'h_expressions.RbrowUp_h', browTalkLift * 0.92 * (1 - winceWave * 0.5), 8, frameDt);
+      dampMorphTarget(rig, 'h_expressions.LsmileClose_h', smileAmt * microAsym, 7, frameDt);
+      dampMorphTarget(rig, 'h_expressions.RsmileClose_h', smileAmt * 0.95, 7, frameDt);
+      dampMorphTarget(rig, 'h_expressions.LbrowUp_h', browExpr, 8, frameDt);
+      dampMorphTarget(rig, 'h_expressions.RbrowUp_h', browExpr * 0.92, 8, frameDt);
+      dampMorphTarget(rig, 'h_expressions.LLbrowUp_h', browExpr * 0.65, 8, frameDt);
+      dampMorphTarget(rig, 'h_expressions.RRbrowUp_h', browExpr * 0.58, 8, frameDt);
       dampMorphTarget(
         rig,
         'h_expressions.LbrowDown_h',
-        Math.min(0.92, winceWave * 0.38 + effDiscomfort * 0.34 + sSpike * 0.24),
+        Math.min(0.92, winceWave * 0.40 + effDiscomfort * 0.36 + sSpike * 0.24),
         10,
         frameDt
       );
       dampMorphTarget(
         rig,
         'h_expressions.RbrowDown_h',
-        Math.min(0.92, winceWave * 0.38 + effDiscomfort * 0.34 + sSpike * 0.24),
+        Math.min(0.92, winceWave * 0.40 + effDiscomfort * 0.36 + sSpike * 0.24),
         10,
         frameDt
       );
-      dampMorphTarget(rig, 'h_expressions.Lsad_h', Math.min(0.85, winceWave * 0.28 + stimFrownBoost * 0.72), 9, frameDt);
-      dampMorphTarget(rig, 'h_expressions.Rsad_h', Math.min(0.85, winceWave * 0.28 + stimFrownBoost * 0.72), 9, frameDt);
+      const pityAmt = Math.min(0.65, painIntensity * 0.26 + winceWave * 0.28 + effDiscomfort * 0.24);
+      dampMorphTarget(rig, 'h_expressions.Lpityful_h', pityAmt, 9, frameDt);
+      dampMorphTarget(rig, 'h_expressions.Rpityful_h', pityAmt, 9, frameDt);
+      dampMorphTarget(rig, 'h_expressions.Lsad_h', Math.min(0.75, winceWave * 0.22 + stimFrownBoost * 0.52), 9, frameDt);
+      dampMorphTarget(rig, 'h_expressions.Rsad_h', Math.min(0.75, winceWave * 0.22 + stimFrownBoost * 0.52), 9, frameDt);
+      dampMorphTarget(rig, 'h_expressions.LmouthSad_h', Math.min(0.82, winceWave * 0.34 + stimFrownBoost * 0.65), 9, frameDt);
+      dampMorphTarget(rig, 'h_expressions.RmouthSad_h', Math.min(0.82, winceWave * 0.34 + stimFrownBoost * 0.65), 9, frameDt);
+      const winceGrimace = Math.min(0.45, winceWave * 0.20 + highDiscomfort * 0.22 + sSpike * 0.26);
+      dampMorphTarget(rig, 'h_expressions.Ldisgust_h', winceGrimace, 12, frameDt);
+      dampMorphTarget(rig, 'h_expressions.Rdisgust_h', winceGrimace * 0.9, 12, frameDt);
+      const nostrilFlare = Math.min(0.48, Math.max(0, breathWave) * (0.06 + painIntensity * 0.14) + effDiscomfort * 0.22 + sSpike * 0.24);
+      dampMorphTarget(rig, 'h_expressions.Lnostril_h', nostrilFlare, 12, frameDt);
+      dampMorphTarget(rig, 'h_expressions.Rnostril_h', nostrilFlare, 12, frameDt);
+      const neckClench = Math.min(0.55, effDiscomfort * 0.28 + sSpike * 0.30 + painIntensity * 0.18);
+      dampMorphTarget(rig, 'h_expressions.LneckTension_h', neckClench, 10, frameDt);
+      dampMorphTarget(rig, 'h_expressions.RneckTension_h', neckClench, 10, frameDt);
 
       if (speakingActive) {
-        const sylGate = THREE.MathUtils.clamp(0.65 + 0.55 * Math.sin(timeSec * 4.2 + 0.3), 0, 1);
-        const jaw = Math.max(0, Math.sin(timeSec * 11.4) * 0.48 + Math.sin(timeSec * 16.9) * 0.28 + 0.14) * sylGate;
-        const phPhase = (timeSec * 5.2) % 4;
-        const vAA = Math.max(0, 1 - Math.abs(phPhase - 0.6)) * 0.42 * sylGate;
-        const vAO = Math.max(0, 1 - Math.abs(phPhase - 1.6)) * 0.34 * sylGate;
-        const vAxE = Math.max(0, 1 - Math.abs(phPhase - 2.6)) * 0.38 * sylGate;
-        const vUH = Math.max(0, 1 - Math.abs(phPhase - 3.4)) * 0.28 * sylGate;
-        const vMpb = jaw < 0.12 ? 0.24 : 0;
+        const sylGate = THREE.MathUtils.clamp(0.62 + 0.56 * Math.sin(timeSec * 4.1 + 0.3) + 0.16 * Math.sin(timeSec * 1.9), 0, 1);
+        const jaw = Math.max(0, Math.sin(timeSec * 10.8) * 0.44 + Math.sin(timeSec * 16.4) * 0.26 + 0.12) * sylGate;
+        const phPhase = (timeSec * 5.6) % 6;
+        const vAA = Math.max(0, 1 - Math.abs(phPhase - 0.6)) * 0.40 * sylGate;
+        const vAO = Math.max(0, 1 - Math.abs(phPhase - 1.5)) * 0.32 * sylGate;
+        const vAxE = Math.max(0, 1 - Math.abs(phPhase - 2.4)) * 0.36 * sylGate;
+        const vUH = Math.max(0, 1 - Math.abs(phPhase - 3.3)) * 0.26 * sylGate;
+        const vS = Math.max(0, 1 - Math.abs(phPhase - 4.2)) * 0.32 * sylGate;
+        const vFV = Math.max(0, 1 - Math.abs(phPhase - 5.1)) * 0.28 * sylGate;
+        const vMpb = jaw < 0.11 ? 0.22 : 0;
 
-        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', jaw * 0.42, 24, frameDt);
-        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', jaw * 0.42, 24, frameDt);
+        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', jaw * 0.40, 24, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', jaw * 0.40, 24, frameDt);
         dampMorphTarget(rig, 'h_expressions.AE_AA_h', vAA, 22, frameDt);
         dampMorphTarget(rig, 'h_teeth.t_AE_AA_h', vAA, 22, frameDt);
         dampMorphTarget(rig, 'h_expressions.AO_a_h', vAO, 22, frameDt);
@@ -4057,13 +4279,24 @@ export function animateHumanoid3D(
         dampMorphTarget(rig, 'h_expressions.Ax_E_h', vAxE, 22, frameDt);
         dampMorphTarget(rig, 'h_teeth.t_Ax_E_h', vAxE, 22, frameDt);
         dampMorphTarget(rig, 'h_expressions.UH_OO_h', vUH, 22, frameDt);
+        dampMorphTarget(rig, 'h_expressions.S_h', vS, 24, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_S_h', vS, 24, frameDt);
+        dampMorphTarget(rig, 'h_expressions.FV_h', vFV, 24, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_FV_h', vFV, 24, frameDt);
+        dampMorphTarget(rig, 'h_expressions.TD_I_h', vAxE * 0.45, 22, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_TD_I_h', vAxE * 0.45, 22, frameDt);
         dampMorphTarget(rig, 'h_expressions.MPB_Up_h', vMpb, 24, frameDt);
         dampMorphTarget(rig, 'h_expressions.MPB_Down_h', vMpb, 24, frameDt);
-        dampMorphTarget(rig, 'h_expressions.LsmileOpen_h', jaw * 0.18, 18, frameDt);
-        dampMorphTarget(rig, 'h_expressions.RsmileOpen_h', jaw * 0.18, 18, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_MPB_h', vMpb, 24, frameDt);
+        dampMorphTarget(rig, 'h_expressions.LsmileOpen_h', jaw * 0.16, 18, frameDt);
+        dampMorphTarget(rig, 'h_expressions.RsmileOpen_h', jaw * 0.15, 18, frameDt);
+        dampMorphTarget(rig, 'h_expressions.JawCompress_h', 0, 14, frameDt);
       } else {
-        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', stimGaspJaw, 18, frameDt);
-        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', stimGaspJaw, 18, frameDt);
+        const restBreathPart = !hsSmile ? (0.018 + Math.max(0, breathWave) * 0.018 + painIntensity * 0.025) * (1 - hsSmile) : 0;
+        const clenchAmt = Math.min(0.42, highDiscomfort * 0.34 + sSpike * 0.25);
+        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', Math.max(stimGaspJaw, restBreathPart), 16, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', Math.max(stimGaspJaw, restBreathPart), 16, frameDt);
+        dampMorphTarget(rig, 'h_expressions.JawCompress_h', clenchAmt, 14, frameDt);
         dampMorphTarget(rig, 'h_expressions.AE_AA_h', stimGaspJaw * 0.42, 16, frameDt);
         dampMorphTarget(rig, 'h_teeth.t_AE_AA_h', stimGaspJaw * 0.42, 16, frameDt);
         dampMorphTarget(rig, 'h_expressions.AO_a_h', 0, 14, frameDt);
@@ -4071,10 +4304,34 @@ export function animateHumanoid3D(
         dampMorphTarget(rig, 'h_expressions.Ax_E_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_teeth.t_Ax_E_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_expressions.UH_OO_h', 0, 14, frameDt);
+        dampMorphTarget(rig, 'h_expressions.S_h', 0, 16, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_S_h', 0, 16, frameDt);
+        dampMorphTarget(rig, 'h_expressions.FV_h', 0, 16, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_FV_h', 0, 16, frameDt);
+        dampMorphTarget(rig, 'h_expressions.TD_I_h', 0, 16, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_TD_I_h', 0, 16, frameDt);
         dampMorphTarget(rig, 'h_expressions.MPB_Up_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_expressions.MPB_Down_h', 0, 14, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_MPB_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_expressions.LsmileOpen_h', 0, 12, frameDt);
         dampMorphTarget(rig, 'h_expressions.RsmileOpen_h', 0, 12, frameDt);
+      }
+    }
+  } else if (isRealScan && !isFppSession && rig.morphMeshes && rig.smoothedMorphs) {
+    // Smoothly relax any remaining FPP facial morphs back to zero outside FPP close-up
+    const morphKeys = Object.keys(rig.smoothedMorphs);
+    for (let k = 0; k < morphKeys.length; k++) {
+      const mName = morphKeys[k];
+      if ((rig.smoothedMorphs[mName] ?? 0) > 0.002) {
+        dampMorphTarget(rig, mName, 0, 10, frameDt);
+      } else if (rig.smoothedMorphs[mName] !== 0) {
+        rig.smoothedMorphs[mName] = 0;
+        for (let i = 0; i < rig.morphMeshes.length; i++) {
+          const idx = rig.morphMeshes[i].dict[mName];
+          if (idx !== undefined && rig.morphMeshes[i].mesh.morphTargetInfluences) {
+            rig.morphMeshes[i].mesh.morphTargetInfluences![idx] = 0;
+          }
+        }
       }
     }
   }
@@ -4459,9 +4716,10 @@ export function animateHumanoid3D(
     const breath = breathWave * 0.015;
     const standIdleAmt = (1 - activeBlend) * (1 - sit) * (1 - pushAmt) * (1 - lie);
 
-    // Organic multi-frequency standing weight shift & subtle opposite-knee soften
+    // Organic weight shift that settles gently on one leg before shifting to the other
+    const standWeightWave = Math.tanh(Math.sin(t * 0.34) * 2.1);
     const standWeight =
-      (Math.sin(t * 0.42) * 0.65 + Math.sin(t * 0.19 + 1.2) * 0.35) * standIdleAmt;
+      (standWeightWave * 0.68 + Math.sin(t * 0.15 + 1.2) * 0.32) * standIdleAmt;
 
     // Exact hip-joint world alignment: itemBase(0.08) + seatHeight + seatedThighPad - rootY(0.02) - hipHeight
     const hipH = rig.hipHeight ?? (isRealScan ? 0.833 : 0.63) * hScale;
@@ -4479,7 +4737,7 @@ export function animateHumanoid3D(
     const phase = gaitActive ? timeSec * 4.2 : walkPhase;
     const sinP = Math.sin(phase);
     const stride = sinP + 0.075 * Math.sin(phase * 2);
-    const armStride = Math.sin(phase - 0.16);
+    const armStride = Math.sin(phase - 0.22);
     const cosP = Math.cos(phase);
     const cos2 = Math.cos(phase * 2);
     const climbAmt = THREE.MathUtils.clamp(stairClimb, 0, 1) * activeBlend;
@@ -4523,8 +4781,8 @@ export function animateHumanoid3D(
       hipTargetZ - hipH * Math.sin(theta)
     );
 
-    const walkHipY = -stride * 0.070 * activeBlend + standWeight * 0.038;
-    const walkHipZ = stride * 0.032 * activeBlend + standWeight * 0.055;
+    const walkHipY = -stride * (isRocketbox ? 0.082 : 0.070) * activeBlend + standWeight * 0.040;
+    const walkHipZ = stride * (isRocketbox ? 0.036 : 0.032) * activeBlend + standWeight * 0.055;
     const sitHipSway = Math.sin(t * 0.33) * 0.014 * (seatedActivity === 'idle' ? 1 : 0.4);
     const baseHipX = isRealScan ? THREE.MathUtils.lerp(0.0, seatHeight <= 0.44 ? -0.08 : -0.04, sit) : 0;
     const baseHipY = walkHipY * (1 - sit);
@@ -4536,19 +4794,69 @@ export function animateHumanoid3D(
       THREE.MathUtils.lerp(baseHipZ, lieHipsZ, lie)
     );
 
+    // Subtle clinical guarding vs. visible post-treatment relaxation in FPP
+    const fppPainGuard =
+      isRealScan && isFppSession && lie < 0.25 && !hasRelief
+        ? THREE.MathUtils.clamp((vasPain - 3.5) / 6.5, 0, 1)
+        : 0;
+    const fppReliefEase = isRealScan && isFppSession && hasRelief && lie < 0.25 ? 1 : 0;
+
+    // Gentle torso/chest orientation toward the clinician when walking around the patient in FPP
+    let fppClinicianYawRaw = 0;
+    if (
+      isRealScan &&
+      isFppSession &&
+      lookTargetWorld &&
+      lie < 0.2 &&
+      !activeDrink &&
+      !activePickFile &&
+      !activePlaceFile
+    ) {
+      let dy = Math.atan2(lookTargetWorld.x - rig.root.position.x, lookTargetWorld.z - rig.root.position.z) - facingRad;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      fppClinicianYawRaw = THREE.MathUtils.clamp(dy, -0.78, 0.78);
+    }
+    const fppTorsoFollowYaw =
+      isRealScan && isFppSession && fppBeh
+        ? THREE.MathUtils.clamp(fppBeh.curHeadYaw * 0.24 + fppClinicianYawRaw * 0.08, -0.18, 0.18) * (1 - lie)
+        : 0;
+
+    // Subtle seated posture micro-adjustments while listening in FPP (~every 8-11s)
+    const fppSitMicro =
+      isRealScan && isFppSession && sit > 0.5 && lie < 0.1 && !speakingActive
+        ? Math.pow(Math.max(0, (Math.sin(t * 0.34 + 0.8) - 0.52) / 0.48), 2)
+        : 0;
+
     // Seated torso, arms & head targets based on natural activity
     let sitTorsoX = isRealScan
-      ? (seatHeight <= 0.44 ? -0.050 : 0.040) + Math.sin(t * 0.24) * 0.018 + breath * 0.35
+      ? (seatHeight <= 0.44 ? -0.050 : 0.040) +
+        (isFppSession ? (speakingActive ? 0.036 : 0.018) - fppPainGuard * 0.024 + fppReliefEase * 0.010 : 0) +
+        Math.sin(t * 0.24) * 0.018 +
+        breath * 0.38
       : -0.068 + Math.sin(t * 0.24) * 0.026 + breath * 0.4;
-    let sitTorsoY = Math.sin(t * 0.36) * 0.038;
-    let sitTorsoZ = Math.sin(t * 0.29) * 0.018;
-    let sitChestX = (isRealScan ? (seatHeight <= 0.44 ? 0.020 : -0.035) : -0.035) + breath * 0.85;
-    let sitArmLSwing = (isRealScan ? -0.18 : -0.12) + Math.sin(t * 0.37) * 0.018;
-    let sitArmRSwing = (isRealScan ? -0.20 : -0.12) + Math.cos(t * 0.33) * 0.018;
-    let sitElbowLFlex = (isRealScan ? 0.70 : 0.56) + Math.sin(t * 0.41) * 0.022;
-    let sitElbowRFlex = (isRealScan ? 0.73 : 0.56) + Math.cos(t * 0.39) * 0.022;
-    let sitLookYaw = Math.sin(t * 0.44) * 0.2 + Math.sin(t * 0.17 + 0.8) * 0.1;
-    let sitLookPitch = Math.sin(t * 0.61) * 0.04 + Math.sin(t * 0.23) * 0.025;
+    let sitTorsoY = Math.sin(t * 0.36) * (isFppSession ? 0.022 : 0.038) + fppTorsoFollowYaw * 0.55;
+    let sitTorsoZ = Math.sin(t * 0.29) * (isFppSession ? 0.014 : 0.018) + fppPainGuard * 0.018 * stimDir;
+    let sitChestX =
+      (isRealScan ? (seatHeight <= 0.44 ? 0.020 : -0.035) : -0.035) +
+      (isFppSession ? (speakingActive ? 0.020 : 0.010) - fppPainGuard * 0.012 : 0) +
+      breath * 0.88;
+    let sitArmLSwing = (isRealScan ? -0.18 : -0.12) + Math.sin(t * 0.37) * 0.018 - fppSitMicro * 0.04;
+    let sitArmRSwing =
+      (isRealScan ? -0.20 : -0.12) +
+      Math.cos(t * 0.33) * 0.018 -
+      fppSitMicro * 0.11 -
+      fppPainGuard * (isFppSession ? 0.08 : 0);
+    let sitElbowLFlex = (isRealScan ? 0.70 : 0.56) + Math.sin(t * 0.41) * 0.022 + fppSitMicro * 0.05;
+    let sitElbowRFlex =
+      (isRealScan ? 0.73 : 0.56) +
+      Math.cos(t * 0.39) * 0.022 +
+      fppSitMicro * 0.16 +
+      fppPainGuard * (isFppSession ? 0.18 : 0);
+    const rawSitGlance = Math.sin(t * 0.34);
+    const easedSitGlance = Math.pow(Math.abs(rawSitGlance), 2.1) * Math.sign(rawSitGlance);
+    let sitLookYaw = easedSitGlance * 0.22 + Math.sin(t * 0.14 + 0.8) * 0.06;
+    let sitLookPitch = Math.sin(t * 0.46) * 0.028 + Math.sin(t * 0.19) * 0.018;
 
     if (seatedActivity === 'typing') {
       sitTorsoX = 0.085 + breath * 0.35;
@@ -4610,20 +4918,26 @@ export function animateHumanoid3D(
 
     const pickTorsoLean = activePickFile ? THREE.MathUtils.lerp(0.095, 0.025, pickGrasp) * pickReach : 0;
     const placeTorsoLean = activePlaceFile ? 0.23 * placeReach : 0;
+    const fppStandEngageLean =
+      isRealScan && isFppSession && sit < 0.35 && lie < 0.15
+        ? (speakingActive ? 0.032 : 0.016) - fppPainGuard * 0.022 + fppReliefEase * 0.010
+        : 0;
     const torsoStandX =
-      (isRealScan ? 0.032 : 0.025 * activeBlend) +
+      (isRealScan ? 0.044 * activeBlend + 0.012 * (1 - activeBlend) : 0.038 * activeBlend) +
       0.13 * climbAmt -
       0.055 * descAmt -
       pushAmt * 0.065 +
       pickTorsoLean +
       placeTorsoLean +
       hsLeanX +
+      fppStandEngageLean +
       breath * 0.65;
     const torsoStandY =
-      stride * 0.052 * activeBlend -
+      stride * (isRocketbox ? 0.060 : 0.052) * activeBlend -
       pushAmt * 0.09 -
       standWeight * 0.05 +
       hsTurnY +
+      fppTorsoFollowYaw * 0.65 +
       (activePickFile ? -0.05 * pickReach * (1 - pickGrasp * 0.7) : 0) +
       (activePlaceFile ? -0.1 * placeReach : 0);
     const walkTurnLean = THREE.MathUtils.clamp(turnLean, -0.09, 0.09) * activeBlend * (1 - sit) * (1 - lie);
@@ -4667,8 +4981,12 @@ export function animateHumanoid3D(
       stimTorsoLean * 0.55;
     const baseChestY =
       THREE.MathUtils.lerp(
-        stride * 0.068 * activeBlend - pushAmt * 0.08 - standWeight * 0.03 + (activePlaceFile ? -0.06 * placeReach : 0),
-        sitTorsoY * 0.45,
+        stride * (isRocketbox ? 0.072 : 0.068) * activeBlend -
+          pushAmt * 0.08 -
+          standWeight * 0.03 +
+          fppTorsoFollowYaw * 0.55 +
+          (activePlaceFile ? -0.06 * placeReach : 0),
+        sitTorsoY * 0.45 + fppTorsoFollowYaw * 0.45,
         sit
       ) +
       stimTorsoTurn * 0.45;
@@ -4685,7 +5003,10 @@ export function animateHumanoid3D(
     );
 
     const restShrug = seatedActivity === 'rest' ? Math.sin(t * 1.1) * 0.022 * sit * (1 - lie) : 0;
-    const fppBreathShrug = isRealScan && isFppSession ? breathWave * 0.014 * (1 - lie) : 0;
+    const fppBreathShrug =
+      isRealScan && isFppSession
+        ? (breathWave * 0.014 + fppPainGuard * 0.016 - fppReliefEase * 0.014) * (1 - lie)
+        : 0;
     const stimShrugL = highDiscomfort * 0.042 + sSpike * 0.038 + absTwitch * twUpperL * 0.042;
     const stimShrugR = highDiscomfort * 0.042 + sSpike * 0.038 + absTwitch * twUpperR * 0.042;
     const baseShoulderLY = -stride * 0.05 * activeBlend * (1 - sit);
@@ -4744,7 +5065,7 @@ export function animateHumanoid3D(
     );
     const sitFootAngle = THREE.MathUtils.lerp(isRealScan ? 0.05 : 0.04, 0.28, lowMatFactor);
 
-    const swing = stride * (isRealScan ? 0.27 : 0.35) * activeBlend * (1 - 0.22 * descAmt);
+    const swing = stride * (isRocketbox ? 0.29 : isRealScan ? 0.33 : 0.36) * activeBlend * (1 - 0.22 * descAmt);
     const stairThighLiftL = Math.max(0, cosP) * 0.34 * climbAmt + Math.max(0, sinP) * 0.14 * climbAmt;
     const stairThighLiftR = Math.max(0, -cosP) * 0.34 * climbAmt + Math.max(0, -sinP) * 0.14 * climbAmt;
     const stairKneeL =
@@ -4754,11 +5075,11 @@ export function animateHumanoid3D(
     const stairFootL = -Math.max(0, cosP) * 0.16 * climbAmt + 0.14 * descAmt;
     const stairFootR = -Math.max(0, -cosP) * 0.16 * climbAmt + 0.14 * descAmt;
 
-    // Anatomical human gait knee flexion:
-    const swingClearL = Math.pow(Math.max(0, cosP), isRealScan ? 1.05 : 0.9) * (isRealScan ? 0.65 : 0.70);
-    const loadYieldL = Math.max(0, sinP) * Math.max(0, -cosP) * (isRealScan ? 0.24 : 0.26);
-    const swingClearR = Math.pow(Math.max(0, -cosP), isRealScan ? 1.05 : 0.9) * (isRealScan ? 0.65 : 0.70);
-    const loadYieldR = Math.max(0, -sinP) * Math.max(0, cosP) * (isRealScan ? 0.24 : 0.26);
+    // Anatomical human gait knee flexion: swing ground clearance + stance heel-strike loading yield
+    const swingClearL = Math.pow(Math.max(0, cosP), isRealScan ? 1.05 : 0.92) * (isRealScan ? 0.68 : 0.72);
+    const loadYieldL = Math.max(0, sinP) * Math.max(0, -cosP) * (isRealScan ? 0.22 : 0.24);
+    const swingClearR = Math.pow(Math.max(0, -cosP), isRealScan ? 1.05 : 0.92) * (isRealScan ? 0.68 : 0.72);
+    const loadYieldR = Math.max(0, -sinP) * Math.max(0, cosP) * (isRealScan ? 0.22 : 0.24);
 
     const idleKneeL = Math.max(0, -standWeight) * 0.13 + (isRealScan ? 0.05 : 0.04) * standIdleAmt;
     const idleKneeR = Math.max(0, standWeight) * 0.13 + (isRealScan ? 0.07 : 0.04) * standIdleAmt;
@@ -4898,6 +5219,15 @@ export function animateHumanoid3D(
     let idleLookPitchOff = 0;
     let idleLookYawOff = 0;
 
+    // Natural FPP standing attentive poise (gentle asymmetrical contrapposto + relaxed forearm ease)
+    const fppStandIdle = isRealScan && isFppSession && sit < 0.35 && lie < 0.1 ? standIdleAmt : 0;
+    const fppGuardBlend = fppStandIdle * fppPainGuard;
+    const fppCalmStandLSwing = fppStandIdle * (-0.06 - 0.04 * standWeight);
+    const fppCalmStandRSwing = fppStandIdle * (-0.08 - fppGuardBlend * 0.14);
+    const fppCalmStandLElbow = fppStandIdle * (0.24 + 0.04 * smoothStancePulse);
+    const fppCalmStandRElbow = fppStandIdle * (0.36 + fppGuardBlend * 0.38);
+    const fppCalmStandRAdduct = fppStandIdle * (0.04 + fppGuardBlend * 0.12);
+
     if (idleBiasAmt > 0.02) {
       if (rawStanceKind === 0) {
         // Stance 0: Hands loosely clasped / resting calmly in front of waist
@@ -4926,14 +5256,16 @@ export function animateHumanoid3D(
         idleLookPitchOff = 0.14 * checkSmooth;
         idleLookYawOff = -0.12 * checkSmooth;
       } else if (rawStanceKind === 3) {
-        // Stance 3: Arms loosely folded across midsection
-        const foldBlend = (0.6 + 0.4 * smoothStancePulse) * idleBiasAmt;
-        idleArmLSwingOff = -0.25 * foldBlend;
-        idleArmRSwingOff = -0.29 * foldBlend;
-        idleArmLAdductOff = -0.26 * foldBlend;
-        idleArmRAdductOff = 0.26 * foldBlend;
-        idleElbowLOff = 0.94 * foldBlend;
-        idleElbowROff = 1.02 * foldBlend;
+        // Stance 3: Arms loosely folded across midsection with safe torso clearance
+        const foldBlend = (0.55 + 0.45 * smoothStancePulse) * idleBiasAmt;
+        idleArmLSwingOff = -0.24 * foldBlend;
+        idleArmRSwingOff = -0.28 * foldBlend;
+        idleArmLDropOff = -0.05 * foldBlend;
+        idleArmRDropOff = -0.05 * foldBlend;
+        idleArmLAdductOff = -0.19 * foldBlend;
+        idleArmRAdductOff = 0.19 * foldBlend;
+        idleElbowLOff = 0.88 * foldBlend;
+        idleElbowROff = 0.96 * foldBlend;
       } else {
         // Stance 4: Relaxed conversational weight shift & occasional gentle open-hand gesture
         const gestWindow = Math.max(0, (Math.sin(t * 0.42 + 1.4) - 0.52) / 0.48);
@@ -4949,10 +5281,10 @@ export function animateHumanoid3D(
     const standArmGest = Math.max(0, (Math.sin(t * 0.31 + 0.9) - 0.62) / 0.38) * standIdleAmt;
     const smoothStandGest = standArmGest * standArmGest * (3 - 2 * standArmGest);
 
-    // Natural subtle conversational hand gesture during FPP speaking
+    // Expressive phrased human two-hand conversational gestures in FPP (both standing & seated)
     const fppSpeakHandLift =
-      isRealScan && isFppSession && speakingActive && sit > 0.4 && lie < 0.1
-        ? 0.18 + Math.sin(timeSec * 3.1) * 0.08
+      isRealScan && isFppSession && speakingActive && lie < 0.1 && !activeDrink && !hsActive
+        ? 0.22 + Math.sin(timeSec * 2.9) * 0.08
         : 0;
     if (fppBeh) {
       fppBeh.curGestureAmp = THREE.MathUtils.damp(
@@ -4963,13 +5295,32 @@ export function animateHumanoid3D(
       );
     }
     const gestFade = fppBeh ? fppBeh.curGestureAmp : 0;
+    const gestPhrase = THREE.MathUtils.clamp(
+      0.42 + 0.58 * Math.sin(timeSec * 1.45 + Math.cos(timeSec * 0.62 + actorSeed) * 1.15),
+      0.08,
+      1
+    );
+    const gestWaveR = (0.56 * Math.sin(timeSec * 3.2) + 0.44 * Math.sin(timeSec * 2.0 + 0.85)) * gestPhrase;
+    const gestWaveL = Math.sin(timeSec * 2.45 + 1.35) * (0.42 + 0.58 * gestPhrase);
 
-    const armSwing = armStride * (isRealScan ? 0.22 : 0.27) * activeBlend * (1 + 0.22 * stairEffort);
+    const armSwing = armStride * (isRocketbox ? 0.28 : isRealScan ? 0.31 : 0.33) * activeBlend * (1 + 0.20 * stairEffort);
     const carryFileArm = holdingFile && !activePickFile && !activePlaceFile && sit < 0.2 && lie < 0.05;
     const armStandL =
-      armSwing - 0.035 + breath * 0.65 * (1 - activeBlend) + standWeight * 0.03 + idleArmLSwingOff;
+      armSwing -
+      0.03 +
+      breath * 0.55 * (1 - activeBlend) +
+      standWeight * 0.025 +
+      idleArmLSwingOff +
+      fppCalmStandLSwing -
+      gestFade * (0.10 + 0.04 * gestWaveL);
     const armStandRBase =
-      -armSwing - 0.035 - breath * 0.65 * (1 - activeBlend) - smoothStandGest * 0.10 + idleArmRSwingOff;
+      -armSwing -
+      0.03 -
+      breath * 0.55 * (1 - activeBlend) -
+      smoothStandGest * 0.10 +
+      idleArmRSwingOff +
+      fppCalmStandRSwing -
+      gestFade * (0.28 + 0.08 * gestWaveR);
 
     const pickArmX = THREE.MathUtils.lerp(
       THREE.MathUtils.lerp(-0.18, -1.26, pickReach),
@@ -5010,11 +5361,11 @@ export function animateHumanoid3D(
     const drinkArmSipX = -1.14 - drinkSipAmt * 0.04;
     let rightArmSwingX = activeDrink
       ? THREE.MathUtils.lerp(drinkArmReadyX, drinkArmSipX, drinkRaise)
-      : THREE.MathUtils.lerp(armStandR, sitArmRSwing - gestFade * 0.24, sit);
+      : THREE.MathUtils.lerp(armStandR, sitArmRSwing - gestFade * (0.24 + 0.06 * gestWaveR), sit);
 
     const drinkAdductSip = isRealScan ? 0.62 : 0.49;
-    const realSitAdductR = isRealScan ? THREE.MathUtils.lerp(0.22, 0.10, gestFade) * sit : gestFade * 0.16 * sit;
-    const standAdductR = idleArmRAdductOff;
+    const realSitAdductR = isRealScan ? THREE.MathUtils.lerp(0.22, 0.08, gestFade) * sit : gestFade * 0.16 * sit;
+    const standAdductR = idleArmRAdductOff + fppCalmStandRAdduct - gestFade * 0.06;
     let rightArmAdductY = activeDrink
       ? THREE.MathUtils.lerp(0.14 * drinkFillReach + 0.14 * (1 - drinkFillReach), drinkAdductSip + drinkSipAmt * 0.03, drinkRaise)
       : activePickFile
@@ -5028,8 +5379,8 @@ export function animateHumanoid3D(
     let rightArmDropZ = (activeDrink
       ? THREE.MathUtils.lerp(1.45, 1.38, drinkRaise)
       : THREE.MathUtils.lerp(
-          (isRocketbox ? 1.37 : isRealScan ? 1.425 : 1.43) + idleArmRDropOff,
-          isRealScan ? 1.39 : 1.42,
+          (isRocketbox ? 1.35 : isRealScan ? 1.385 : 1.40) + idleArmRDropOff - gestFade * 0.05,
+          isRealScan ? 1.38 : 1.41,
           sit
         )) - rbArmOffset;
 
@@ -5043,7 +5394,9 @@ export function animateHumanoid3D(
               (isRealScan ? 0.22 : 0.24) +
                 smoothStandGest * 0.24 +
                 idleElbowROff +
-                Math.max(0, armStride) * 0.22 * activeBlend,
+                fppCalmStandRElbow +
+                gestFade * (0.72 + gestWaveR * 0.14) +
+                (Math.max(0, armStride) * 0.28 + Math.max(0, -armStride) * 0.07) * activeBlend,
               0.46,
               pushAmt
             );
@@ -5070,13 +5423,18 @@ export function animateHumanoid3D(
     const stimArmBraceL = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperL * 0.08;
     const stimArmBraceR = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperR * 0.08;
     const baseArmDropL = THREE.MathUtils.lerp(
-      (isRocketbox ? -1.37 : isRealScan ? -1.425 : -1.43) - idleArmLDropOff,
-      isRealScan ? -1.39 : -1.42,
+      (isRocketbox ? -1.35 : isRealScan ? -1.385 : -1.40) - idleArmLDropOff + gestFade * 0.02,
+      isRealScan ? -1.38 : -1.41,
       sit
     ) + rbArmOffset;
     const baseArmSwingL =
-      THREE.MathUtils.lerp(armStandL, sitArmLSwing, sit) - stimArmBraceL * 0.45;
-    const baseArmAdductL = THREE.MathUtils.lerp(idleArmLAdductOff, isRealScan ? -0.22 : 0, sit);
+      THREE.MathUtils.lerp(armStandL, sitArmLSwing - gestFade * (0.09 + 0.03 * gestWaveL), sit) -
+      stimArmBraceL * 0.45;
+    const baseArmAdductL = THREE.MathUtils.lerp(
+      idleArmLAdductOff + gestFade * 0.03,
+      isRealScan ? THREE.MathUtils.lerp(-0.22, -0.14, gestFade * 0.6) : 0,
+      sit
+    );
 
     applyArmSagittal(
       b['UpperArmL'],
@@ -5093,10 +5451,13 @@ export function animateHumanoid3D(
 
     const elbowStandL =
       (isRealScan ? 0.20 : 0.24) +
-      Math.max(0, -armStride) * 0.26 * activeBlend +
-      Math.sin(t * 0.47) * 0.03 * standIdleAmt +
-      idleElbowLOff;
-    const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowLFlex, sit) + stimArmBraceL;
+      (Math.max(0, -armStride) * 0.28 + Math.max(0, armStride) * 0.07) * activeBlend +
+      Math.sin(t * 0.47) * 0.025 * standIdleAmt +
+      idleElbowLOff +
+      fppCalmStandLElbow +
+      gestFade * (0.28 + gestWaveL * 0.07);
+    const sitElbowConversationalL = sitElbowLFlex + gestFade * (0.18 + gestWaveL * 0.06);
+    const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowConversationalL, sit) + stimArmBraceL;
     applyLocalElbowFlex(
       b['LowerArmL'],
       true,
@@ -5112,15 +5473,17 @@ export function animateHumanoid3D(
       isRocketbox
     );
 
-    // Right wrist & finger curl for genuine file grasp, carry, drinking, handshake, thigh resting, and relaxed natural fingers
+    // Right wrist & finger curl for genuine file grasp, carry, drinking, handshake, thigh resting, and conversational gestures
     let handExtX = 0;
     let handPronY = 0;
     let handLatZ = 0;
     const lieHandPronGoal = supineW * 1.05 + proneW * 0.25 + rightW * 0.35 - leftW * 0.35;
-    if (isRealScan && gestFade > 0.02) {
-      handPronY = THREE.MathUtils.lerp(-1.15 * sit, -0.35, gestFade);
-      handExtX = THREE.MathUtils.lerp(-0.16 * sit, Math.sin(timeSec * 3.1) * 0.10, gestFade);
-      handLatZ = THREE.MathUtils.lerp(-0.08 * sit, 0, gestFade);
+    if (isRealScan && gestFade > 0.02 && !activeDrink && !hsActive) {
+      // Natural open-palm supination & wrist inflection phrased with speech
+      const palmOpenR = isRocketbox ? -0.30 : -0.14 + Math.max(0, gestWaveR) * 0.22;
+      handPronY = THREE.MathUtils.lerp(-1.15 * sit, palmOpenR + Math.cos(timeSec * 2.8) * 0.16, gestFade);
+      handExtX = THREE.MathUtils.lerp(-0.16 * sit, Math.sin(timeSec * 3.1) * 0.16 - 0.06, gestFade);
+      handLatZ = THREE.MathUtils.lerp(-0.08 * sit, Math.sin(timeSec * 2.1) * 0.08, gestFade);
     } else if (lie < 0.05 && sit < 0.2 && !activeDrink) {
       if (activePickFile) {
         handPronY = THREE.MathUtils.lerp(-0.55 * pickReach, -0.34, pickGrasp);
@@ -5132,8 +5495,8 @@ export function animateHumanoid3D(
       }
     } else if (isRealScan && (sit >= 0.2 || lie >= 0.05)) {
       // Palms resting gently & naturally ON top of thighs (or flat on bed while lying)
-      handExtX = THREE.MathUtils.lerp(-0.16 * sit, 0, lie);
-      handPronY = THREE.MathUtils.lerp(-1.15 * sit, -lieHandPronGoal, lie);
+      handExtX = THREE.MathUtils.lerp(-0.16 * sit + fppSitMicro * 0.05, 0, lie);
+      handPronY = THREE.MathUtils.lerp(-1.15 * sit + fppSitMicro * 0.12, -lieHandPronGoal, lie);
       handLatZ = THREE.MathUtils.lerp(-0.08 * sit, 0, lie);
     }
     if (hsActive) {
@@ -5146,8 +5509,14 @@ export function animateHumanoid3D(
     }
     applyLocalHandPose(b['HandR'], handExtX, handPronY, handLatZ, isRocketbox);
     if (isRealScan) {
-      const handLExtX = THREE.MathUtils.lerp(-0.16 * sit, 0, lie);
-      const handLPronY = THREE.MathUtils.lerp(1.15 * sit, lieHandPronGoal, lie);
+      const handLExtX =
+        gestFade > 0.02
+          ? THREE.MathUtils.lerp(-0.16 * sit, Math.sin(timeSec * 2.5 + 1.0) * 0.09, gestFade * 0.7)
+          : THREE.MathUtils.lerp(-0.16 * sit, 0, lie);
+      const handLPronY =
+        gestFade > 0.02
+          ? THREE.MathUtils.lerp(1.15 * sit, isRocketbox ? 0.28 : 0.18, gestFade * 0.7)
+          : THREE.MathUtils.lerp(1.15 * sit, lieHandPronGoal, lie);
       const handLLatZ = THREE.MathUtils.lerp(-0.08 * sit, 0, lie);
       applyLocalHandPose(b['HandL'], handLExtX, handLPronY, handLLatZ, isRocketbox);
     }
@@ -5167,14 +5536,19 @@ export function animateHumanoid3D(
         : 0;
     const effStdGrip = Math.max(gripAmt, hsActive ? hsArmBlend * hsClasp : 0);
     if (isRealScan) {
-      const tenseCurlBoost = highDiscomfort * 0.30 + sSpike * 0.22;
+      const tenseCurlBoost = highDiscomfort * 0.30 + sSpike * 0.22 + fppGuardBlend * 0.14;
+      const gestFingerFlex = gestFade * (0.06 * Math.sin(timeSec * 3.1));
       const relaxedCurlL =
-        THREE.MathUtils.lerp(0.28, 0.30, sit) + Math.sin(t * 0.52) * 0.03 + tenseCurlBoost;
+        THREE.MathUtils.lerp(0.28, 0.30, sit) +
+        Math.sin(t * 0.52) * 0.03 -
+        gestFade * 0.09 +
+        tenseCurlBoost;
       let rightCurl = activeDrink
         ? 0.72
         : gripAmt > 0.05
           ? THREE.MathUtils.lerp(0.28, 0.88, gripAmt)
-          : THREE.MathUtils.lerp(THREE.MathUtils.lerp(0.30, 0.32, sit), 0.16, gestFade) + tenseCurlBoost;
+          : THREE.MathUtils.lerp(THREE.MathUtils.lerp(0.30, 0.32, sit), 0.16 + gestFingerFlex, gestFade) +
+            tenseCurlBoost;
       if (hsActive) {
         rightCurl = THREE.MathUtils.lerp(rightCurl, hsClasp, hsArmBlend);
       }
@@ -5195,18 +5569,20 @@ export function animateHumanoid3D(
       applyLocalHandPose(b['Thumb2R'], 0.18 * effStdGrip, 0, 0.24 * effStdGrip);
     }
 
-    // Natural head stabilization during walk & spontaneous FPP human eye contact
+    // Natural head stabilization during walk & calm punctuated glances while standing idle
+    const rawStandGlance = Math.sin(t * 0.36);
+    const easedStandGlance = Math.pow(Math.abs(rawStandGlance), 2.3) * Math.sign(rawStandGlance);
     const standYaw =
-      (Math.sin(t * 0.51) * 0.18 + Math.sin(t * 0.21 + 0.9) * 0.12 + idleLookYawOff) *
-      (1 - activeBlend * 0.68) *
+      (easedStandGlance * 0.20 + Math.sin(t * 0.15 + 0.9) * 0.07 + idleLookYawOff) *
+      (1 - activeBlend * 0.78) *
       (1 - pushAmt);
     const standPitch = activePickFile
       ? THREE.MathUtils.lerp(-0.07, 0.04, pickGrasp) * pickReach
       : activePlaceFile
         ? 0.24 * placeReach
-        : (Math.sin(t * 0.78) * 0.032 + Math.sin(t * 0.29) * 0.02 + idleLookPitchOff) *
-            (1 - activeBlend * 0.45) -
-          cos2 * 0.016 * activeBlend;
+        : (Math.sin(t * 0.52) * 0.022 + Math.sin(t * 0.21) * 0.015 + idleLookPitchOff) *
+            (1 - activeBlend * 0.55) -
+          cos2 * 0.014 * activeBlend;
 
     const lookYaw = activeDrink
       ? 0
@@ -5259,27 +5635,39 @@ export function animateHumanoid3D(
         // Spontaneous occasional thoughtful look-away (~1.1s every ~7s) & realistic eye micro-saccades
         if (timeSec >= fppBeh.nextGlanceAt && !isSpeaking && !hsActive) {
           const sideG = Math.sin(timeSec * 13.7 + actorSeed) >= 0 ? 1 : -1;
-          fppBeh.glanceYaw = sideG * (0.14 + (Math.abs(Math.cos(timeSec * 5.1)) * 0.08));
+          fppBeh.glanceYaw = sideG * (0.14 + Math.abs(Math.cos(timeSec * 5.1)) * 0.08);
           fppBeh.glancePitch = 0.04 + Math.abs(Math.sin(timeSec * 3.3)) * 0.04;
           fppBeh.glanceUntil = timeSec + 1.15;
-          fppBeh.nextGlanceAt = timeSec + 6.5 + (seedMod * 0.35);
+          fppBeh.nextGlanceAt = timeSec + 6.5 + seedMod * 0.35;
         }
         const glancingAway = timeSec < fppBeh.glanceUntil && !isSpeaking && !hsActive;
         const gYawOffset = glancingAway ? fppBeh.glanceYaw : 0;
         const gPitchOffset = glancingAway ? fppBeh.glancePitch : 0;
 
+        // Attentive listening head nods in FPP when patient is listening rather than frozen-staring
+        if (timeSec >= fppBeh.nextNodAt && !isSpeaking && !hsActive && !glancingAway) {
+          fppBeh.nodStrength = 0.036 + Math.abs(Math.sin(timeSec * 4.3)) * 0.022;
+          fppBeh.nodUntil = timeSec + 0.95;
+          fppBeh.nextNodAt = timeSec + 5.6 + seedMod * 0.42;
+        }
+        let listenNodOffset = 0;
+        if (timeSec < fppBeh.nodUntil && !isSpeaking && !hsActive) {
+          const nodU = 1 - (fppBeh.nodUntil - timeSec) / 0.95;
+          listenNodOffset = Math.sin(nodU * Math.PI * 2) * Math.sin(nodU * Math.PI) * fppBeh.nodStrength;
+        }
+
         if (timeSec >= fppBeh.nextSaccadeAt) {
-          fppBeh.sacYaw = (Math.sin(timeSec * 19.3 + actorSeed) * 0.022);
-          fppBeh.sacPitch = (Math.cos(timeSec * 23.1 + actorSeed) * 0.015);
+          fppBeh.sacYaw = Math.sin(timeSec * 19.3 + actorSeed) * 0.022;
+          fppBeh.sacPitch = Math.cos(timeSec * 23.1 + actorSeed) * 0.015;
           fppBeh.nextSaccadeAt = timeSec + 0.85 + Math.abs(Math.sin(timeSec * 7.1)) * 1.35;
         }
 
         const totalYaw = clampedYaw + gYawOffset;
-        const totalPitch = targetPitch + speakNod + gPitchOffset;
-        // Head follows smoothly ~78% of gaze angle; eyes track crisply + micro-saccades
-        fppBeh.curHeadYaw = THREE.MathUtils.damp(fppBeh.curHeadYaw, totalYaw * 0.78, 5.2, frameDt);
-        fppBeh.curHeadPitch = THREE.MathUtils.damp(fppBeh.curHeadPitch, totalPitch * 0.80, 5.2, frameDt);
-        finalLookYaw = fppBeh.curHeadYaw;
+        const totalPitch = targetPitch + speakNod + gPitchOffset + listenNodOffset;
+        // Eyes lead slightly faster than head (~72% head follow minus shared torso turn, 28% eye focus + saccades)
+        fppBeh.curHeadYaw = THREE.MathUtils.damp(fppBeh.curHeadYaw, totalYaw * 0.74, 5.2, frameDt);
+        fppBeh.curHeadPitch = THREE.MathUtils.damp(fppBeh.curHeadPitch, totalPitch * 0.78, 5.2, frameDt);
+        finalLookYaw = fppBeh.curHeadYaw - fppTorsoFollowYaw * 0.55;
         finalLookPitch = fppBeh.curHeadPitch;
 
         const wantEyeYaw = THREE.MathUtils.clamp(
@@ -5292,8 +5680,8 @@ export function animateHumanoid3D(
           -0.14,
           0.14
         );
-        fppBeh.curEyeYaw = THREE.MathUtils.damp(fppBeh.curEyeYaw, wantEyeYaw, 22, frameDt);
-        fppBeh.curEyePitch = THREE.MathUtils.damp(fppBeh.curEyePitch, wantEyePitch, 22, frameDt);
+        fppBeh.curEyeYaw = THREE.MathUtils.damp(fppBeh.curEyeYaw, wantEyeYaw, 24, frameDt);
+        fppBeh.curEyePitch = THREE.MathUtils.damp(fppBeh.curEyePitch, wantEyePitch, 24, frameDt);
         residualEyeYaw = fppBeh.curEyeYaw;
         residualEyePitch = fppBeh.curEyePitch;
       } else {

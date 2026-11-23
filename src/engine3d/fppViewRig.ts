@@ -751,12 +751,12 @@ export function createFppRoomBackdrop3D(
   examKeySpot.target.position.set(0, 0.42, -0.2);
   if (enableShadows) {
     examKeySpot.castShadow = true;
-    examKeySpot.shadow.mapSize.set(768, 768);
+    examKeySpot.shadow.mapSize.set(1024, 1024);
     examKeySpot.shadow.camera.near = 0.4;
     examKeySpot.shadow.camera.far = 7.8;
-    examKeySpot.shadow.bias = -0.00045;
+    examKeySpot.shadow.bias = -0.0004;
     examKeySpot.shadow.normalBias = 0.016;
-    examKeySpot.shadow.radius = 2.2;
+    examKeySpot.shadow.radius = 2.5;
   }
   group.add(examKeySpot, examKeySpot.target);
 

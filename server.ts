@@ -226,6 +226,10 @@ app.post('/api/clinical/evaluate-plan', async (req, res) => {
     diagnosisCorrect,
     selectedTreatment,
     treatmentCorrect,
+    plannedSessions,
+    frequencyPerWeek,
+    selectedModalities,
+    homePrecautions,
     studentNote,
     language = 'ar',
   } = req.body || {};
@@ -235,6 +239,19 @@ app.post('/api/clinical/evaluate-plan', async (req, res) => {
     return;
   }
 
+  const rxSummary =
+    typeof plannedSessions === 'number'
+      ? `Custom Prescription: ${plannedSessions} sessions at ${frequencyPerWeek ?? 2}x/week; Modalities=[${
+          Array.isArray(selectedModalities) && selectedModalities.length > 0
+            ? selectedModalities.join(', ')
+            : 'None'
+        }]; Home/Precautions=[${
+          Array.isArray(homePrecautions) && homePrecautions.length > 0
+            ? homePrecautions.join(', ')
+            : 'None'
+        }].`
+      : '';
+
   try {
     const response = await callGeminiWithBackoff(() =>
       ai.models.generateContent({
@@ -242,8 +259,9 @@ app.post('/api/clinical/evaluate-plan', async (req, res) => {
         contents: `You are a senior physiotherapy clinical instructor evaluating a PT student.
 Case: ${clinicalCase.chiefComplaintEn}. Clinical Pearl: ${clinicalCase.clinicalPearlEn}.
 Student results: Red Flag Screening Correct=${redFlagCorrect}, Diagnosis Chosen="${selectedDiagnosis}" (Correct=${diagnosisCorrect}), Treatment Chosen="${selectedTreatment}" (Correct=${treatmentCorrect}).
+${rxSummary}
 Student rationale note: "${studentNote || 'None provided'}".
-Write concise, encouraging, high-yield clinical mentor feedback in 2-3 sentences in ${language === 'ar' ? 'Arabic' : 'English'}.`,
+Write concise, encouraging, high-yield clinical mentor feedback in 2-3 sentences in ${language === 'ar' ? 'Arabic (with English medical terms where helpful)' : 'English'}, briefly commenting on their diagnosis and customized session/modality plan.`,
         config: {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         },

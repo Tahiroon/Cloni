@@ -174,12 +174,14 @@ const REALISTIC_CASUAL_LOOKS = [
 ];
 
 const SUDANESE_ROBE_LOOKS = [
-  { robe: '#f4f1ea', headwear: 'turban' as HeadwearStyle },
-  { robe: '#ebe2cf', headwear: 'turban' as HeadwearStyle },
-  { robe: '#dce6ee', headwear: 'taqiyah' as HeadwearStyle },
-  { robe: '#e3e8df', headwear: 'taqiyah' as HeadwearStyle },
-  { robe: '#f0e7d8', headwear: 'cap' as HeadwearStyle },
-  { robe: '#e2dcd3', headwear: 'turban' as HeadwearStyle },
+  { robe: '#f6f3ec', headwear: 'turban' as HeadwearStyle },
+  { robe: '#ece2cd', headwear: 'turban' as HeadwearStyle },
+  { robe: '#dde7ef', headwear: 'taqiyah' as HeadwearStyle },
+  { robe: '#e4e8de', headwear: 'taqiyah' as HeadwearStyle },
+  { robe: '#f2e8d7', headwear: 'turban' as HeadwearStyle },
+  { robe: '#e5dfd6', headwear: 'turban' as HeadwearStyle },
+  { robe: '#d9e1e8', headwear: 'cap' as HeadwearStyle },
+  { robe: '#ece7df', headwear: 'taqiyah' as HeadwearStyle },
 ];
 
 const EYEWEAR_VARIETY: EyewearStyle[] = ['round', 'square', 'half_rim', 'sunglasses'];
@@ -487,6 +489,7 @@ export default function App() {
   const fppMoveInputRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activePatientCountRef = useRef(0);
+  const servedCaseIdsRef = useRef<Set<string>>(new Set());
   const sessionSpawnedRealisticRef = useRef(false);
   const sessionSpawnedSudaneseRef = useRef(false);
   const fppBlinkLockRef = useRef(false);
@@ -1063,18 +1066,20 @@ export default function App() {
     ).length;
   }, [patients]);
 
-  // Patient Spawner: gradually & spontaneously brings in all 20 unique clinical cases from the start
+  // Patient Spawner: admits up to 4 patients at a time to protect performance, cycling through all 20 cases as each finishes
   useEffect(() => {
     if (!hydrated || visitingFriend || isFppSessionActive) return;
 
     let cancelled = false;
     let spawnTimer: ReturnType<typeof setTimeout> | null = null;
+    const MAX_CONCURRENT_PATIENTS = 4;
 
     const spawnCheck = () => {
       setPatients((prev) => {
-        const maxActive = FALLBACK_CLINICAL_CASES.length;
         const activeCount = prev.filter((p) => p.state !== 'treated_leaving').length;
-        if (activeCount >= maxActive) return prev;
+        if (activeCount >= MAX_CONCURRENT_PATIENTS || prev.length >= MAX_CONCURRENT_PATIENTS + 1) {
+          return prev;
+        }
 
         const isFirstEntry = clinic.patientsTreatedTotal === 0 && prev.length === 0;
         const shouldUseRealisticFirst =
@@ -1096,16 +1101,31 @@ export default function App() {
         const activeBaseIds = new Set(
           prev.map((p) => p.clinicalCase.id.replace(/_\d+$/, ''))
         );
-        const unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
+        let unseenPool = FALLBACK_CLINICAL_CASES.filter(
+          (c) => !activeBaseIds.has(c.id) && !servedCaseIdsRef.current.has(c.id)
+        );
+        if (unseenPool.length === 0) {
+          servedCaseIdsRef.current = new Set(activeBaseIds);
+          unseenPool = FALLBACK_CLINICAL_CASES.filter((c) => !activeBaseIds.has(c.id));
+        }
         const casePool = unseenPool.length > 0 ? unseenPool : FALLBACK_CLINICAL_CASES;
         const sudanesePreferredCase =
-          casePool.find((c) => c.id === 'case_knee_oa_elder' || c.id === 'case_stroke_gait_neuro') ||
+          casePool.find(
+            (c) =>
+              c.gender === 'male' &&
+              (c.id === 'case_knee_oa_elder' ||
+                c.id === 'case_stroke_gait_neuro' ||
+                c.id === 'case_lumbar_disc' ||
+                c.age >= 36)
+          ) ||
+          casePool.find((c) => c.gender === 'male') ||
           casePool[0];
         const fallbackCase = shouldUseRealisticFirst
           ? casePool[0]
           : shouldUseSudaneseFirst
             ? sudanesePreferredCase
             : casePool[Math.floor(Math.random() * casePool.length)];
+        servedCaseIdsRef.current.add(fallbackCase.id);
         const chosenCase = { ...fallbackCase, id: fallbackCase.id + '_' + Date.now() };
         const isFemale = chosenCase.gender === 'female';
 
@@ -1122,9 +1142,9 @@ export default function App() {
             const countModel = (k: string | undefined) =>
               prev.filter((p) => p.clinicalCase.gender === 'male' && p.modelKey === k).length;
             const candidates: Array<string | undefined> =
-              chosenCase.age >= 48
+              chosenCase.age >= 36
                 ? ['char_sudanese_man_1', 'char_patient_realistic_1', undefined]
-                : ['char_patient_realistic_1', undefined, 'char_sudanese_man_1'];
+                : ['char_patient_realistic_1', 'char_sudanese_man_1', undefined];
             candidates.sort((a, b) => countModel(a) - countModel(b));
             chosenModelKey = candidates[0];
           }
@@ -1332,9 +1352,9 @@ export default function App() {
         spawnCheck();
         const curActive = activePatientCountRef.current;
         const nextDelay =
-          curActive < 6
-            ? 1700 + Math.random() * 1400
-            : 2300 + Math.random() * 2100;
+          curActive < MAX_CONCURRENT_PATIENTS
+            ? 1400 + Math.random() * 1100
+            : 2200 + Math.random() * 1400;
         scheduleNext(nextDelay);
       }, delayMs);
     };
@@ -2136,7 +2156,7 @@ export default function App() {
               }
             }
 
-            updated.walkPhase += speedStep * (7.2 / Math.max(0.82, updated.heightScale || 1));
+            updated.walkPhase += speedStep * (5.95 / Math.max(0.82, updated.heightScale || 1));
             changed = true;
           } else {
             // Reached current waypoint
@@ -3465,6 +3485,7 @@ export default function App() {
       speakingTimerRef.current = null;
     }
     activePatientCountRef.current = 0;
+    servedCaseIdsRef.current.clear();
     const fresh = createInitialSaveState();
     fresh.language = clinic.language;
     setClinic(fresh);

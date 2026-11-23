@@ -71,8 +71,8 @@ const CORE_MODEL_PATHS: Record<string, string> = {
 const EXTENDED_MODEL_PATHS: Record<string, string> = {
   hand_left: '/models/chars/hand_left.glb',
   hand_right: '/models/chars/hand_right.glb',
-  char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
   char_sudanese_man_1: '/models/chars/patient_sudanese_1.glb',
+  char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
 };
 
 const EXTRA_TEXTURE_ASSETS: Array<{ key: string; url: string; contentType: string }> = [
@@ -648,9 +648,9 @@ export function startPreloadGlbs(maxAnisotropy = 8) {
     // 2. Priority Tier 1 (Essential clinic furniture, world nature & core characters)
     await runTier(coreEntries, 6, cache, true);
 
-    // 3. Yield briefly so initial 3D clinic renders smoothly, then stream Tier 2 heavy assets (2 workers = zero UI stutter)
+    // 3. Yield briefly so initial 3D clinic renders smoothly, then stream Tier 2 assets cleanly
     await yieldToUiFrame();
-    await runTier(extendedEntries, 2, cache, true);
+    await runTier(extendedEntries, 3, cache, true);
 
     // 4. Automatically recover any failed GLB (e.g. during server reload or transient drop)
     if (failedModelQueue.size > 0) {

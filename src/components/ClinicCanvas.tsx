@@ -794,7 +794,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     renderer.setSize(initW, initH);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.94;
+    renderer.toneMappingExposure = 0.98;
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate = false;
@@ -802,46 +802,55 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
-    const handleContextLost = (e: Event) => e.preventDefault();
-    renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0xd2e0ec, 55, 95);
-    scene.environmentIntensity = 0.54;
+    scene.environmentIntensity = 0.62;
 
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const roomEnv = new RoomEnvironment();
-    const envTarget = pmrem.fromScene(roomEnv, 0.04);
-    scene.environment = envTarget.texture;
-    roomEnv.dispose();
-    pmrem.dispose();
+    let isContextLost = gl.isContextLost();
+    let envTarget: THREE.WebGLRenderTarget | null = null;
+    const rebuildEnvironmentMap = () => {
+      if (isContextLost || gl.isContextLost()) return;
+      if (envTarget) {
+        envTarget.dispose();
+        envTarget = null;
+      }
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const roomEnv = new RoomEnvironment();
+      envTarget = pmrem.fromScene(roomEnv, 0.04);
+      scene.environment = envTarget.texture;
+      roomEnv.dispose();
+      pmrem.dispose();
+    };
+    rebuildEnvironmentMap();
 
     // Calibrated Architectural Daylight Rig (crisp shadows, warm-cool fill & natural contrast)
-    const hemi = new THREE.HemisphereLight(0xc6dcf0, 0x4b5c34, 0.62);
+    const hemi = new THREE.HemisphereLight(0xcbe2f6, 0x566440, 0.66);
     scene.add(hemi);
 
-    const sunLight = new THREE.DirectionalLight(0xfff1dc, 1.52);
+    const sunLight = new THREE.DirectionalLight(0xfff3e2, 1.58);
     sunLight.position.set(25, 32, 18);
     sunLight.target.position.set(13, 0, 12);
     scene.add(sunLight.target);
     if (!isSoftwareGl) {
-      const shadowRes = Math.min(1024, maxTexSize);
+      const shadowRes =
+        !isMobileGpu && maxTexSize >= 2048 ? 2048 : Math.min(1024, maxTexSize);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
-      sunLight.shadow.radius = 1.8;
+      sunLight.shadow.radius = 2.3;
       sunLight.shadow.camera.near = 6;
       sunLight.shadow.camera.far = 90;
       sunLight.shadow.camera.left = -18;
       sunLight.shadow.camera.right = 18;
       sunLight.shadow.camera.top = 18;
       sunLight.shadow.camera.bottom = -18;
-      sunLight.shadow.bias = -0.0003;
-      sunLight.shadow.normalBias = 0.014;
+      sunLight.shadow.bias = -0.00028;
+      sunLight.shadow.normalBias = 0.018;
     }
     scene.add(sunLight);
 
-    const fillLight = new THREE.DirectionalLight(0xb8d4f2, 0.34);
+    const fillLight = new THREE.DirectionalLight(0xb8d6f4, 0.38);
     fillLight.position.set(-16, 14, -12);
     scene.add(fillLight);
 
@@ -2574,7 +2583,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const duskFactor = Math.sin(nightBlend * Math.PI);
 
         sunLight.color.copy(_daySun).lerp(_moonSun, nightBlend).lerp(_duskSun, duskFactor * 0.42);
-        sunLight.intensity = THREE.MathUtils.lerp(1.52, 0.64, nightBlend);
+        sunLight.intensity = THREE.MathUtils.lerp(1.58, 0.66, nightBlend);
         sunLight.position.set(
           THREE.MathUtils.lerp(25, -22, nightBlend),
           THREE.MathUtils.lerp(32, 26, nightBlend),
@@ -2583,13 +2592,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         hemi.color.copy(_dayHemiSky).lerp(_nightHemiSky, nightBlend);
         hemi.groundColor.copy(_dayHemiGround).lerp(_nightHemiGround, nightBlend);
-        hemi.intensity = THREE.MathUtils.lerp(0.62, 0.50, nightBlend);
+        hemi.intensity = THREE.MathUtils.lerp(0.66, 0.52, nightBlend);
 
         fillLight.color.copy(_dayFill).lerp(_nightFill, nightBlend);
-        fillLight.intensity = 0.34;
+        fillLight.intensity = 0.38;
 
-        scene.environmentIntensity = THREE.MathUtils.lerp(0.54, 0.26, nightBlend);
-        renderer.toneMappingExposure = THREE.MathUtils.lerp(0.94, 1.08, nightBlend);
+        scene.environmentIntensity = THREE.MathUtils.lerp(0.62, 0.30, nightBlend);
+        renderer.toneMappingExposure = THREE.MathUtils.lerp(0.98, 1.08, nightBlend);
 
         const fog = scene.fog as THREE.Fog;
         fog.color.copy(_dayFog).lerp(_nightFog, nightBlend).lerp(_duskFog, duskFactor * 0.35);
@@ -3084,7 +3093,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       syncDraft(latestRef.current.placementDraft);
       updateCameraTransform();
       shadowsDirty = true;
-      if (!isSoftwareGl) {
+      if (!isSoftwareGl && !isContextLost && !gl.isContextLost()) {
         const wasBackdropVis = fppBackdrop.group.visible;
         const wasHandsVis = fppHands.group.visible;
         fppBackdrop.group.visible = true;
@@ -3100,17 +3109,65 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const unsubGlb = glbRegistry.onCoreReady(() => {
       initSceneAssets();
     });
-    const unsubFullGlb = glbRegistry.onReady(() => {
+    const upgradeTier2PatientRigs = (targetModelKey?: string) => {
       if (disposed) return;
+      const curPatientsList = latestRef.current.patients;
       for (const [pid, entry] of patientRigs.entries()) {
         if (!entry.needsTier2Upgrade) continue;
-        actorsLayer.remove(entry.rig.root);
+        const p = curPatientsList.find((pat) => pat.id === pid);
+        if (!p || !p.modelKey) continue;
+        if (targetModelKey && p.modelKey !== targetModelKey) continue;
+        if (!glbRegistry.getModel(p.modelKey)) continue;
+
+        const oldRoot = entry.rig.root;
+        const newRig = createHumanoid3D({
+          modelKey: p.modelKey,
+          skinTone: p.skinTone,
+          hairColor: p.hairColor,
+          shirtColor: p.shirtColor,
+          pantsColor: p.pantsColor,
+          hasHijab: p.hasHijab,
+          hasTurban: p.hasTurban,
+          outfitStyle: p.outfitStyle,
+          shirtStyle: p.shirtStyle,
+          heightScale: p.heightScale,
+          buildScale: p.buildScale,
+          eyewearStyle: p.eyewearStyle,
+          eyewearColor: p.eyewearColor,
+          facialHairStyle: p.facialHairStyle,
+          headwearStyle: p.headwearStyle,
+          orthosisType: p.orthosisType ?? p.clinicalCase.orthosisType ?? 'none',
+          age: p.clinicalCase.age,
+          hasBeard: p.hasBeard,
+          isFemale: p.clinicalCase.gender === 'female',
+          variantSeed: p.id.charCodeAt(p.id.length - 1),
+          mobilityAid: p.clinicalCase.mobilityAid || 'none',
+          isStaff: false,
+          ...pbrCharMaps,
+        });
+        newRig.root.position.copy(oldRoot.position);
+        newRig.root.rotation.copy(oldRoot.rotation);
+        newRig.root.visible = oldRoot.visible;
+        actorsLayer.add(newRig.root);
+        actorsLayer.remove(oldRoot);
         disposeHumanoid3D(entry.rig);
-        patientRigs.delete(pid);
+        entry.rig = newRig;
+        entry.needsTier2Upgrade = false;
+        if (fppCamRef.current.activeId === pid) {
+          newRig.root.updateMatrixWorld(true);
+          ensureFppBoneCache(newRig, pid);
+        }
       }
+    };
+    const unsubFullGlb = glbRegistry.onReady(() => {
+      upgradeTier2PatientRigs();
     });
     const unsubAssetLoaded = glbRegistry.onAssetLoaded((key) => {
-      if (disposed || !sceneAssetsInitialized) return;
+      if (disposed) return;
+      if (key === 'char_sudanese_man_1' || key === 'char_patient_realistic_1') {
+        upgradeTier2PatientRigs(key);
+      }
+      if (!sceneAssetsInitialized) return;
       if (
         (key === 'bush_1' || key === 'bush_2' || key === 'grass_clump') &&
         worldHandle?.group.userData.usesFallbackGlb
@@ -4289,14 +4346,19 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     }
 
     const onResize = () => {
-      if (!container) return;
-      containerW = Math.max(1, container.clientWidth);
-      containerH = Math.max(1, container.clientHeight);
+      if (!container || disposed) return;
+      const rawW = container.clientWidth;
+      const rawH = container.clientHeight;
+      if (rawW <= 0 || rawH <= 0) return;
+      containerW = rawW;
+      containerH = rawH;
       const w = containerW;
       const h = containerH;
-      const curDpr = getTargetDpr(w, h);
-      renderer.setPixelRatio(curDpr);
-      renderer.setSize(w, h);
+      if (!isContextLost && !gl.isContextLost()) {
+        const curDpr = getTargetDpr(w, h);
+        renderer.setPixelRatio(curDpr);
+        renderer.setSize(w, h);
+      }
       lastOverlaySig = '';
       updateCameraTransform();
     };
@@ -4928,7 +4990,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           if (ld > 0.01) {
             const pHasAid =
               Boolean(p.clinicalCase.mobilityAid) && p.clinicalCase.mobilityAid !== 'none';
-            const pSpeed = (pHasAid ? 0.98 : 1.24) * dt;
+            const pSpeed = (pHasAid ? 0.96 : 1.20) * dt;
             const adv = Math.min(ld, pSpeed);
             entry.leadX += (ldx / ld) * adv;
             entry.leadZ += (ldz / ld) * adv;
@@ -5185,10 +5247,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             : isSeatedWait
               ? 12.5
               : isLyingStation && entry.bedPhase === 'to_edge'
-                ? 12.0
+                ? 11.5
                 : p.path.length > 0
-                  ? 14.0
-                  : 9.5;
+                  ? 11.5
+                  : 9.0;
         let nextVisX = bedDirectPos ? bedDirectX : THREE.MathUtils.damp(entry.visX, targetX, dampRate, dt);
         let nextVisZ = bedDirectPos ? bedDirectZ : THREE.MathUtils.damp(entry.visZ, targetZ, dampRate, dt);
         // Prevent brisk rocket catch-up and sideways sliding on sharp turns
@@ -5200,11 +5262,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           if (rawStepD > 0.002) {
             const desiredMoveAng = Math.atan2(rawStepDx, rawStepDz);
             const tDiff = angleDiffAbs(entry.facingRad, desiredMoveAng);
-            if (tDiff > 0.35) {
-              turnScale = THREE.MathUtils.clamp(Math.cos(tDiff * 0.75), 0.35, 1.0);
+            if (tDiff > 0.30) {
+              turnScale = THREE.MathUtils.clamp(Math.cos(tDiff * 0.65), 0.25, 1.0);
             }
           }
-          const maxStepD = Math.max(0.01, dt * 1.55 * turnScale);
+          const maxStepD = Math.max(0.01, dt * 1.42 * turnScale);
           if (rawStepD > maxStepD && rawStepD < 2.5) {
             const scaleStep = maxStepD / rawStepD;
             nextVisX = prevVisX + rawStepDx * scaleStep;
@@ -5348,7 +5410,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             ? entry.lastBedTiltPitch
             : tiltPitch;
 
-        entry.walkBlend = THREE.MathUtils.damp(entry.walkBlend, isMoving ? 1 : 0, 12.0, dt);
+        const targetWalkBlendPt = isMoving
+          ? THREE.MathUtils.clamp(realSpeed / 1.12, 0.22, 1.05)
+          : 0;
+        entry.walkBlend = THREE.MathUtils.damp(
+          entry.walkBlend,
+          targetWalkBlendPt,
+          isMoving ? 9.5 : 11.5,
+          dt
+        );
         entry.sitBlend = THREE.MathUtils.damp(
           entry.sitBlend,
           shouldSit ? 1 : 0,
@@ -5399,7 +5469,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           Boolean(headingToChair) && Math.hypot(seatWorldX - entry.visX, seatWorldZ - entry.visZ) < 1.05;
         if (stepDist > 0.0005 && (isMoving || entry.walkBlend > 0.04)) {
           const hScalePt = Math.max(0.82, p.heightScale || 1);
-          entry.walkPhase += (stepDist * (surfPt.onStairs ? 8.5 : 7.2)) / hScalePt;
+          entry.walkPhase += (stepDist * (surfPt.onStairs ? 7.4 : 5.95)) / hScalePt;
           if (
             stepDist > 0.0008 &&
             isMoving &&
@@ -5407,7 +5477,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             !(isLyingStation && bedDesiredFacing !== null)
           ) {
             const targetAngle = Math.atan2(mdx, mdz);
-            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 12.5));
+            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 7.6));
           }
         }
 
@@ -6717,7 +6787,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             ? recWalking && (realSpeed > 0.1 || (logicalMoving && stepDist > 0.0016))
             : realSpeed > 0.12 || (logicalMoving && stepDist > 0.0018);
 
-        entry.walkBlend = THREE.MathUtils.damp(entry.walkBlend, isMoving ? 1 : 0, 12.0, dt);
+        const targetWalkBlendSt = isMoving
+          ? THREE.MathUtils.clamp(realSpeed / 1.12, 0.22, 1.05)
+          : 0;
+        entry.walkBlend = THREE.MathUtils.damp(
+          entry.walkBlend,
+          targetWalkBlendSt,
+          isMoving ? 9.5 : 11.5,
+          dt
+        );
         const shouldStaffSit =
           s.role === 'receptionist' && recActiveMode === 'desk' && distRem < 0.25;
         entry.sitBlend = THREE.MathUtils.damp(entry.sitBlend, shouldStaffSit ? 1 : 0, 7.8, dt);
@@ -6751,10 +6829,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         const prevFacingSt = entry.facingRad;
         if (stepDist > 0.0005 && (isMoving || entry.walkBlend > 0.04)) {
-          entry.walkPhase += stepDist * (surfSt.onStairs ? 8.5 : 7.2);
+          entry.walkPhase += stepDist * (surfSt.onStairs ? 7.4 : 5.95);
           if (stepDist > 0.0008 && isMoving) {
             const targetAngle = Math.atan2(mdx, mdz);
-            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 12.5));
+            entry.facingRad = lerpAngle(entry.facingRad, targetAngle, Math.min(1, dt * 7.6));
           }
         }
 
@@ -7268,10 +7346,118 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     let lastShowItemMicro = true;
     let wasPureFpp = false;
     let wasDocHidden = false;
+    let forceFppLightingSync = false;
     let lastBackdropNight: boolean | null = null;
     let lastIsolatedStationId: string | null = null;
     let postInitFrames = 0;
     let sceneReadyEmitted = false;
+
+    const refreshSceneGpuResources = (fullRestore: boolean, rebuildEnv: boolean) => {
+      if (disposed || isContextLost || gl.isContextLost()) return;
+      renderer.state.reset();
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      onResize();
+
+      if (fullRestore || rebuildEnv) {
+        rebuildEnvironmentMap();
+      }
+
+      if (fullRestore) {
+        renderer.renderLists.dispose();
+        const refreshedTex = new Set<THREE.Texture>();
+        const markTexture = (tex: unknown) => {
+          if (tex instanceof THREE.Texture && tex !== envTarget?.texture && !refreshedTex.has(tex)) {
+            refreshedTex.add(tex);
+            tex.needsUpdate = true;
+          }
+        };
+        for (const val of Object.values(textures)) {
+          markTexture(val);
+        }
+        const texSlots = [
+          'map',
+          'normalMap',
+          'roughnessMap',
+          'metalnessMap',
+          'bumpMap',
+          'aoMap',
+          'alphaMap',
+          'emissiveMap',
+          'clearcoatMap',
+          'clearcoatNormalMap',
+          'clearcoatRoughnessMap',
+          'sheenColorMap',
+          'sheenRoughnessMap',
+          'specularIntensityMap',
+          'specularColorMap',
+          'lightMap',
+        ] as const;
+        scene.traverse((obj) => {
+          const matField = (obj as THREE.Mesh).material;
+          if (!matField) return;
+          const mats = Array.isArray(matField) ? matField : [matField];
+          for (let i = 0; i < mats.length; i++) {
+            const mat = mats[i] as THREE.Material & Record<string, unknown>;
+            if (!mat) continue;
+            for (let s = 0; s < texSlots.length; s++) {
+              markTexture(mat[texSlots[s]]);
+            }
+            mat.needsUpdate = true;
+          }
+        });
+        if (sunLight.shadow.map) {
+          sunLight.shadow.map.dispose();
+          sunLight.shadow.map = null;
+        }
+      }
+
+      lastMs = performance.now();
+      lastShadowUpdateMs = -1000;
+      shadowsDirty = true;
+      atmoDirty = true;
+      lastNightBlend = -1;
+      lastBackdropNight = null;
+      forceFppLightingSync = true;
+      if (renderer.shadowMap.enabled) {
+        renderer.shadowMap.needsUpdate = true;
+        sunLight.shadow.needsUpdate = true;
+      }
+      if (!latestRef.current.firstPersonPatientId) {
+        updateAtmosphereAndLights(lastMs * 0.001, 0.05);
+      }
+    };
+
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      isContextLost = true;
+    };
+    const handleContextRestored = () => {
+      isContextLost = false;
+      refreshSceneGpuResources(true, true);
+    };
+    const handlePageHide = () => {
+      wasDocHidden = true;
+    };
+    const handlePageResume = () => {
+      if (disposed) return;
+      if (document.hidden) {
+        wasDocHidden = true;
+        return;
+      }
+      isContextLost = gl.isContextLost();
+      if (isContextLost) return;
+      const shouldRebuildEnv = wasDocHidden;
+      wasDocHidden = false;
+      refreshSceneGpuResources(false, shouldRebuildEnv);
+    };
+    renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+    renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
+    document.addEventListener('visibilitychange', handlePageResume);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageResume);
+    window.addEventListener('focus', handlePageResume);
+
     const tick = () => {
       if (disposed) return;
       if (document.hidden) {
@@ -7283,10 +7469,19 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
         return;
       }
+      if (isContextLost || gl.isContextLost()) {
+        isContextLost = true;
+        if (isSoftwareGl) {
+          setTimeout(tick, 250);
+        } else {
+          rafId = requestAnimationFrame(tick);
+        }
+        return;
+      }
       const nowMs = performance.now();
       if (wasDocHidden) {
         wasDocHidden = false;
-        lastMs = nowMs;
+        refreshSceneGpuResources(false, true);
       }
       const dt = Math.min(0.08, Math.max(0.001, (nowMs - lastMs) / 1000));
       lastMs = nowMs;
@@ -7771,11 +7966,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const prX = Math.cos(fpp.patientFacing);
         const prZ = -Math.sin(fpp.patientFacing);
 
-        const moveSpeed = 1.32;
-        const tgtFwdVel = mag > 0.04 ? inFwd * moveSpeed : 0;
-        const tgtRightVel = mag > 0.04 ? inRight * moveSpeed : 0;
-        fpp.velFwd = THREE.MathUtils.damp(fpp.velFwd, tgtFwdVel, mag > 0.04 ? 11.5 : 10.5, dt);
-        fpp.velRight = THREE.MathUtils.damp(fpp.velRight, tgtRightVel, mag > 0.04 ? 11.5 : 10.5, dt);
+        const moveSpeed = 1.85;
+        const tgtFwdVel = mag > 0.03 ? inFwd * moveSpeed : 0;
+        const tgtRightVel = mag > 0.03 ? inRight * moveSpeed : 0;
+        fpp.velFwd = THREE.MathUtils.damp(fpp.velFwd, tgtFwdVel, mag > 0.03 ? 18 : 20, dt);
+        fpp.velRight = THREE.MathUtils.damp(fpp.velRight, tgtRightVel, mag > 0.03 ? 18 : 20, dt);
 
         const curSpeed = Math.hypot(fpp.velFwd, fpp.velRight);
         fpp.moveSpeedNorm = THREE.MathUtils.clamp(curSpeed / moveSpeed, 0, 1);
@@ -8597,7 +8792,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         // Pure FPP Isolation: hide outside clinic, staff, and non-session patients
         const fppStationId = fppPatient?.assignedStationId ?? null;
 
-        if (!wasPureFpp || lastIsolatedStationId !== fppStationId) {
+        if (!wasPureFpp || lastIsolatedStationId !== fppStationId || forceFppLightingSync) {
+          forceFppLightingSync = false;
           lastIsolatedStationId = fppStationId;
           worldLayer.visible = false;
           draftLayer.visible = false;
@@ -9657,10 +9853,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       fppDropDiscMat.dispose();
       if (fppCommandRef) fppCommandRef.current = null;
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
+      renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
+      document.removeEventListener('visibilitychange', handlePageResume);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('pageshow', handlePageResume);
+      window.removeEventListener('focus', handlePageResume);
       fppBackdrop.dispose();
       fppHands.dispose();
       camera.remove(fppHands.group);
-      envTarget.dispose();
+      envTarget?.dispose();
       textures.dispose();
       renderer.dispose();
       if (renderer.domElement.parentElement === container) {

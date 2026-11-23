@@ -3,22 +3,26 @@ import {
   Activity,
   AlertTriangle,
   Armchair,
+  ArrowLeft,
+  ArrowRight,
   BedDouble,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ClipboardCheck,
+  ClipboardList,
   Coins,
   Crosshair,
-  Eye,
-  EyeOff,
   Flame,
   Hand,
   Handshake,
   Lock,
   LogOut,
   Maximize2,
+  Minimize2,
   Minus,
+  Move,
   Pause,
   PersonStanding,
   Play,
@@ -34,6 +38,18 @@ import {
   Zap,
 } from 'lucide-react';
 import { getPostureRulesForStation } from '../data/catalog';
+import {
+  buildCategorizedHistory,
+  evaluateClinicalSubmission,
+  getRecommendedPrescription,
+  HISTORY_CATEGORIES,
+  HistoryCategory,
+  HistoryQuestionItem,
+  HOME_PRECAUTION_OPTIONS,
+  HomePrecautionId,
+  ModalityId,
+  PRESCRIPTION_MODALITIES,
+} from '../data/clinicalReasoning';
 import {
   formatTimerMmSs,
   getDefaultDeviceParams,
@@ -52,15 +68,23 @@ import {
 } from '../types/clinic';
 import { PhysicalDeviceController } from './PhysicalDeviceController';
 
-type SessionStep = 'subjective' | 'redflags' | 'objective' | 'plan' | 'summary';
+type SessionStep = 'subjective' | 'redflags' | 'objective' | 'diagnosis' | 'plan' | 'summary';
 
-interface PresetQuestion {
-  id: string;
-  qAr: string;
-  qEn: string;
-  aAr: string;
-  aEn: string;
-}
+const OBJECTIVE_CATEGORY_EN: Record<'rom' | 'mmt' | 'special' | 'palpation', string> = {
+  rom: 'ROM',
+  mmt: 'MMT',
+  special: 'SPECIAL TEST',
+  palpation: 'PALPATION',
+};
+
+const POSTURE_LABELS: Record<FppPatientPosture, { ar: string; en: string }> = {
+  standing: { ar: 'وقوف', en: 'Standing' },
+  sitting: { ar: 'جلوس', en: 'Sitting' },
+  supine: { ar: 'استلقاء', en: 'Supine' },
+  prone: { ar: 'على البطن', en: 'Prone' },
+  right_side: { ar: 'جانب أيمن', en: 'Right Side' },
+  left_side: { ar: 'جانب أيسر', en: 'Left Side' },
+};
 
 interface FirstPersonSessionHudProps {
   patient: PatientEntity;
@@ -101,9 +125,12 @@ const VirtualJoystick: React.FC<{
   moveInputRef: React.MutableRefObject<{ x: number; y: number }>;
 }> = ({ isAr, isNight, moveInputRef }) => {
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const knobRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
-  const [knob, setKnob] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const maxR = 30;
+  const [isActive, setIsActive] = useState(false);
+  const visualMaxR = 34;
+  const fullThrottleR = 26;
+  const deadzone = 0.05;
 
   useEffect(() => {
     return () => {
@@ -111,89 +138,122 @@ const VirtualJoystick: React.FC<{
     };
   }, [moveInputRef]);
 
+  const setKnobTransform = (x: number, y: number, active: boolean) => {
+    const k = knobRef.current;
+    if (!k) return;
+    k.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${active ? 1.06 : 1})`;
+  };
+
   const updateFromClient = (clientX: number, clientY: number) => {
     const el = trackRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    let dx = clientX - cx;
-    let dy = clientY - cy;
-    const dist = Math.hypot(dx, dy);
-    if (dist > maxR) {
-      dx = (dx / dist) * maxR;
-      dy = (dy / dist) * maxR;
+    const rawDx = clientX - cx;
+    const rawDy = clientY - cy;
+    const dist = Math.hypot(rawDx, rawDy);
+
+    let visDx = rawDx;
+    let visDy = rawDy;
+    if (dist > visualMaxR && dist > 1e-4) {
+      visDx = (rawDx / dist) * visualMaxR;
+      visDy = (rawDy / dist) * visualMaxR;
     }
-    setKnob({ x: dx, y: dy });
+    setKnobTransform(visDx, visDy, true);
+
+    const normDist = Math.min(1, dist / fullThrottleR);
+    if (normDist <= deadzone || dist < 1e-4) {
+      moveInputRef.current = { x: 0, y: 0 };
+      return;
+    }
+    const linear = (normDist - deadzone) / (1 - deadzone);
+    const responsiveMag = Math.pow(linear, 0.82);
+    const ux = rawDx / dist;
+    const uy = rawDy / dist;
     moveInputRef.current = {
-      x: dx / maxR,
-      y: -dy / maxR,
+      x: ux * responsiveMag,
+      y: -uy * responsiveMag,
     };
   };
 
   const resetStick = () => {
     activePointerId.current = null;
-    setKnob({ x: 0, y: 0 });
+    setIsActive(false);
+    setKnobTransform(0, 0, false);
     moveInputRef.current = { x: 0, y: 0 };
   };
 
   return (
     <div
-      className="pointer-events-auto flex flex-col items-center gap-1 select-none"
+      className="pointer-events-auto flex flex-col items-center gap-1 select-none touch-none"
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
     >
-      <div
-        ref={trackRef}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          e.currentTarget.setPointerCapture(e.pointerId);
-          activePointerId.current = e.pointerId;
-          updateFromClient(e.clientX, e.clientY);
-        }}
-        onPointerMove={(e) => {
-          e.stopPropagation();
-          if (activePointerId.current !== e.pointerId) return;
-          updateFromClient(e.clientX, e.clientY);
-        }}
-        onPointerUp={(e) => {
-          e.stopPropagation();
-          if (activePointerId.current === e.pointerId) {
-            resetStick();
-          }
-        }}
-        onPointerCancel={(e) => {
-          e.stopPropagation();
-          if (activePointerId.current === e.pointerId) {
-            resetStick();
-          }
-        }}
-        className={`relative w-24 h-24 rounded-full border touch-none flex items-center justify-center shadow-xl cursor-grab active:cursor-grabbing ${
-          isNight
-            ? 'bg-slate-950/90 border-sky-400/35'
-            : 'bg-slate-900/82 border-white/25'
-        }`}
-      >
-        <div className="absolute inset-2.5 rounded-full border border-dashed border-white/15 pointer-events-none" />
-        <span className="absolute top-1 text-[8px] font-black text-sky-300/75 pointer-events-none">
-          ▲
-        </span>
-        <span className="absolute bottom-1 text-[8px] font-black text-sky-300/75 pointer-events-none">
-          ▼
-        </span>
-        <span className="absolute left-1.5 text-[8px] font-black text-sky-300/75 pointer-events-none">
-          ◀
-        </span>
-        <span className="absolute right-1.5 text-[8px] font-black text-sky-300/75 pointer-events-none">
-          ▶
-        </span>
+      <div className="p-2.5 -m-2.5 touch-none">
         <div
-          style={{ transform: `translate3d(${knob.x}px, ${knob.y}px, 0)` }}
-          className="w-9 h-9 rounded-full bg-gradient-to-b from-sky-400 to-sky-600 border-2 border-white/85 shadow-lg pointer-events-none"
-        />
+          ref={trackRef}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            activePointerId.current = e.pointerId;
+            setIsActive(true);
+            updateFromClient(e.clientX, e.clientY);
+          }}
+          onPointerMove={(e) => {
+            e.stopPropagation();
+            if (activePointerId.current !== e.pointerId) return;
+            updateFromClient(e.clientX, e.clientY);
+          }}
+          onPointerUp={(e) => {
+            e.stopPropagation();
+            if (activePointerId.current === e.pointerId) {
+              resetStick();
+            }
+          }}
+          onPointerCancel={(e) => {
+            e.stopPropagation();
+            if (activePointerId.current === e.pointerId) {
+              resetStick();
+            }
+          }}
+          className={`relative w-26 h-26 sm:w-28 sm:h-28 rounded-full border-2 touch-none flex items-center justify-center shadow-2xl transition-colors cursor-grab active:cursor-grabbing ${
+            isActive
+              ? isNight
+                ? 'bg-slate-950/92 border-sky-400/80 ring-4 ring-sky-400/20'
+                : 'bg-slate-900/85 border-sky-300/85 ring-4 ring-sky-400/25'
+              : isNight
+                ? 'bg-slate-950/82 border-sky-400/40'
+                : 'bg-slate-900/72 border-white/30'
+          }`}
+        >
+          <div className="absolute inset-3 rounded-full border border-dashed border-white/20 pointer-events-none" />
+          <div className="absolute w-1.5 h-1.5 rounded-full bg-white/25 pointer-events-none" />
+          <span className="absolute top-1.5 text-[9px] font-black text-sky-300/80 pointer-events-none">
+            ▲
+          </span>
+          <span className="absolute bottom-1.5 text-[9px] font-black text-sky-300/80 pointer-events-none">
+            ▼
+          </span>
+          <span className="absolute left-2 text-[9px] font-black text-sky-300/80 pointer-events-none">
+            ◀
+          </span>
+          <span className="absolute right-2 text-[9px] font-black text-sky-300/80 pointer-events-none">
+            ▶
+          </span>
+          <div
+            ref={knobRef}
+            style={{ transform: 'translate3d(0px, 0px, 0) scale(1)' }}
+            className={`w-11 h-11 rounded-full bg-gradient-to-b from-sky-300 via-sky-500 to-sky-600 border-2 border-white/95 shadow-lg flex items-center justify-center pointer-events-none will-change-transform ${
+              isActive ? '' : 'transition-transform duration-100 ease-out'
+            }`}
+          >
+            <div className="w-4 h-4 rounded-full border border-white/50 bg-white/20" />
+          </div>
+        </div>
       </div>
-      <span className="text-[10px] font-bold text-white/90 drop-shadow">
+      <span className="text-[11px] font-extrabold text-white/95 drop-shadow">
         {isAr ? 'تحرك' : 'Move'}
       </span>
     </div>
@@ -642,11 +702,19 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   onExit,
   onCompleteCase,
 }) => {
+  const c = patient.clinicalCase;
+  const isAr = language === 'ar';
+  const isNight = lightingMode === 'night';
+
+  const defaultPrescription = useMemo(() => getRecommendedPrescription(c), [c]);
+
   const [step, setStep] = useState<SessionStep>('subjective');
   const [panelHidden, setPanelHidden] = useState(false);
+  const [chartExpanded, setChartExpanded] = useState(false);
   const [postureOpen, setPostureOpen] = useState(false);
-  const postureButtonRef = useRef<HTMLButtonElement | null>(null);
-  const posturePopoverRef = useRef<HTMLDivElement | null>(null);
+  const postureDockRef = useRef<HTMLDivElement | null>(null);
+
+  const [historyCategory, setHistoryCategory] = useState<HistoryCategory>('hpi');
   const [openQuestionId, setOpenQuestionId] = useState<string | null>(null);
   const [askedIds, setAskedIds] = useState<string[]>([]);
   const [speechCaption, setSpeechCaption] = useState<string | null>(null);
@@ -654,33 +722,82 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
   const [redFlagChoice, setRedFlagChoice] = useState<'safe' | 'refer' | null>(null);
   const [selectedDiag, setSelectedDiag] = useState<string | null>(null);
   const [selectedTx, setSelectedTx] = useState<string | null>(null);
+
+  // Custom Treatment Prescription Builder state
+  const [plannedSessions, setPlannedSessions] = useState<number>(defaultPrescription.defaultSessions);
+  const [frequencyPerWeek, setFrequencyPerWeek] = useState<2 | 3 | 5>(defaultPrescription.defaultFreq);
+  const [selectedModalities, setSelectedModalities] = useState<ModalityId[]>(() =>
+    defaultPrescription.idealModalities.length > 0 ? [defaultPrescription.idealModalities[0]] : []
+  );
+  const [homePrecautions, setHomePrecautions] = useState<HomePrecautionId[]>(() =>
+    c.redFlagsPresent ? ['urgent_ref'] : ['hep']
+  );
+
   const [evaluating, setEvaluating] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState<{
     score: number;
     coinsEarned: number;
     starsEarned: number;
     feedback: string;
+    prescriptionNote: string;
     caughtRedFlag: boolean;
   } | null>(null);
 
-  const c = patient.clinicalCase;
-  const isAr = language === 'ar';
-  const isNight = lightingMode === 'night';
   const [screenExpanded, setScreenExpanded] = useState(false);
+  const [therapyStarted, setTherapyStarted] = useState(false);
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [entryReady, setEntryReady] = useState(false);
   const entryGreetedRef = useRef(false);
 
+  const completeActiveSession = () => {
+    if (!evaluationResult) {
+      onExit();
+      return;
+    }
+    onCompleteCase({
+      patientId: patient.id,
+      coinsEarned: evaluationResult.coinsEarned,
+      starsEarned: evaluationResult.starsEarned,
+      satisfactionDelta: evaluationResult.score >= 80 ? 2 : 0,
+      caughtRedFlag: evaluationResult.caughtRedFlag,
+    });
+  };
+
+  // Reset prescription defaults when switching to a different patient
+  useEffect(() => {
+    setPlannedSessions(defaultPrescription.defaultSessions);
+    setFrequencyPerWeek(defaultPrescription.defaultFreq);
+    setSelectedModalities(
+      defaultPrescription.idealModalities.length > 0 ? [defaultPrescription.idealModalities[0]] : []
+    );
+    setHomePrecautions(c.redFlagsPresent ? ['urgent_ref'] : ['hep']);
+  }, [patient.id, defaultPrescription, c.redFlagsPresent]);
+
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntryReady(true));
+    let hideGreetTimer: number | null = null;
     if (!entryGreetedRef.current) {
       entryGreetedRef.current = true;
       const greetAr = `أهلاً دكتور، أنا ${c.patientNameAr} — أشتكي من ${c.chiefComplaintAr}.`;
       const greetEn = `Hello doctor, I'm ${c.patientNameEn} — dealing with ${c.chiefComplaintEn}.`;
       setSpeechCaption(isAr ? greetAr : greetEn);
       onPatientSpeak(patient.id, 2600);
+      hideGreetTimer = window.setTimeout(() => {
+        setSpeechCaption((cur) => (cur === (isAr ? greetAr : greetEn) ? null : cur));
+      }, 4200);
     }
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (hideGreetTimer !== null) window.clearTimeout(hideGreetTimer);
+    };
   }, [patient.id, c.patientNameAr, c.patientNameEn, c.chiefComplaintAr, c.chiefComplaintEn, isAr, onPatientSpeak]);
+
+  // Clear floating speech bubble when the Clinical Chart is open so replies never duplicate
+  useEffect(() => {
+    if (!panelHidden && (openQuestionId !== null || revealedTests.length > 0)) {
+      setSpeechCaption(null);
+    }
+  }, [panelHidden, openQuestionId, revealedTests.length]);
 
   const activeDeviceIdentity = activeDevice ? `${activeDevice.instanceId ?? activeDevice.catalogId}` : '';
   useEffect(() => {
@@ -715,10 +832,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
     if (!postureOpen) return;
     const handleOutside = (e: PointerEvent) => {
       const target = e.target as Node;
-      if (
-        postureButtonRef.current?.contains(target) ||
-        posturePopoverRef.current?.contains(target)
-      ) {
+      if (postureDockRef.current?.contains(target)) {
         return;
       }
       setPostureOpen(false);
@@ -727,77 +841,67 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
     return () => window.removeEventListener('pointerdown', handleOutside);
   }, [postureOpen]);
 
-  const presetQuestions = useMemo<PresetQuestion[]>(() => {
-    const complaintReplyAr = `أشعر بـ${c.chiefComplaintAr}، وقد بدأت المشكلة منذ ${c.onsetAr}.`;
-    const complaintReplyEn = `I'm having ${c.chiefComplaintEn}, and it started ${c.onsetEn}.`;
+  const categorizedHistory = useMemo<HistoryQuestionItem[]>(
+    () => buildCategorizedHistory(c),
+    [c]
+  );
 
-    const modReplyAr = `يزداد الألم مع ${c.aggravatingAr}، بينما يخف عند ${c.easingAr}.`;
-    const modReplyEn = `It gets worse with ${c.aggravatingEn}, and feels better with ${c.easingEn}.`;
+  const activeHistoryQuestions = useMemo(
+    () => categorizedHistory.filter((q) => q.category === historyCategory),
+    [categorizedHistory, historyCategory]
+  );
 
-    const redReplyAr = c.redFlagsPresent
-      ? `بصراحة هناك أمر مقلق: ${c.redFlagClueAr}.`
-      : `لا توجد أعراض خطرة؛ الأمر يتركز حول: ${c.redFlagClueAr}.`;
-    const redReplyEn = c.redFlagsPresent
-      ? `Honestly there is something concerning: ${c.redFlagClueEn}.`
-      : `No alarming signs; mostly ${c.redFlagClueEn}.`;
-
-    const painReplyAr = `شدة الألم لدي تقارب ${c.vasPain} من 10، خصوصاً أثناء الحركة.`;
-    const painReplyEn = `My pain is around ${c.vasPain} out of 10, especially when moving.`;
-
-    return [
-      {
-        id: 'q_complaint',
-        qAr: 'ما شكواك الرئيسية ومتى بدأت؟',
-        qEn: 'What is your main complaint and onset?',
-        aAr: complaintReplyAr,
-        aEn: complaintReplyEn,
-      },
-      {
-        id: 'q_agg_ease',
-        qAr: 'ما الذي يزيد الألم وما الذي يخففه؟',
-        qEn: 'What aggravates or eases your pain?',
-        aAr: modReplyAr,
-        aEn: modReplyEn,
-      },
-      {
-        id: 'q_redflag',
-        qAr: 'هل يوقظك الألم ليلاً أو هناك تنميل وضعف؟',
-        qEn: 'Any night pain, numbness, or weakness?',
-        aAr: redReplyAr,
-        aEn: redReplyEn,
-      },
-      {
-        id: 'q_severity',
-        qAr: 'كم تقيّم شدة الألم حالياً؟',
-        qEn: 'How severe is your pain right now?',
-        aAr: painReplyAr,
-        aEn: painReplyEn,
-      },
-    ];
-  }, [c]);
-
-  const handleToggleQuestion = (item: PresetQuestion) => {
+  const handleToggleQuestion = (item: HistoryQuestionItem) => {
     const isAlreadyOpen = openQuestionId === item.id;
     const answerText = isAr ? item.aAr : item.aEn;
     setOpenQuestionId(isAlreadyOpen ? null : item.id);
     if (!isAlreadyOpen) {
       setAskedIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
-      setSpeechCaption(answerText);
-      onPatientSpeak(patient.id, 2600);
+      // Only show top floating speech caption if the clinical chart is hidden; otherwise show inside chart without duplication
+      setSpeechCaption(panelHidden ? answerText : null);
+      onPatientSpeak(patient.id, 2400);
     }
   };
 
   const toggleObjectiveTest = (testId: string) => {
     const test = c.objectiveTests.find((t) => t.id === testId);
     setRevealedTests((prev) => (prev.includes(testId) ? prev : [...prev, testId]));
-    if (test) {
-      setSpeechCaption(
-        isAr
-          ? `${test.nameAr}: ${test.findingAr}`
-          : `${test.nameEn}: ${test.findingEn}`
-      );
+    // Only show top floating speech caption if the clinical chart is hidden; otherwise show exclusively in the test card
+    if (test && panelHidden) {
+      setSpeechCaption(`${test.nameEn}: ${isAr ? test.findingAr : test.findingEn}`);
+    } else {
+      setSpeechCaption(null);
     }
-    onPatientSpeak(patient.id, 1600);
+    onPatientSpeak(patient.id, 1500);
+  };
+
+  const toggleModality = (modId: ModalityId) => {
+    setSelectedModalities((prev) =>
+      prev.includes(modId) ? prev.filter((id) => id !== modId) : [...prev, modId]
+    );
+  };
+
+  const togglePrecaution = (precId: HomePrecautionId) => {
+    setHomePrecautions((prev) =>
+      prev.includes(precId) ? prev.filter((id) => id !== precId) : [...prev, precId]
+    );
+  };
+
+  const handleSelectRedFlag = (choice: 'safe' | 'refer') => {
+    setRedFlagChoice(choice);
+    if (choice === 'refer') {
+      setPlannedSessions(0);
+      setSelectedModalities([]);
+      setHomePrecautions(['urgent_ref']);
+    } else if (plannedSessions === 0) {
+      setPlannedSessions(defaultPrescription.defaultSessions || 6);
+      setSelectedModalities(
+        defaultPrescription.idealModalities.length > 0
+          ? defaultPrescription.idealModalities.slice(0, 2)
+          : ['exercise']
+      );
+      setHomePrecautions(['hep', 'ergonomics']);
+    }
   };
 
   const handleSubmitPlan = async () => {
@@ -812,13 +916,25 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
     const correctDiag = Boolean(diagObj?.isCorrect);
     const correctTx = Boolean(txObj?.isRecommended);
 
-    let score = 40;
-    if (correctRedFlag) score += 20;
-    if (correctDiag) score += 20;
-    if (correctTx) score += 20;
+    const rubric = evaluateClinicalSubmission({
+      clinicalCase: c,
+      askedCount: askedIds.length,
+      testedCount: revealedTests.length,
+      redFlagChoice,
+      diagCorrect: correctDiag,
+      txCorrect: correctTx,
+      plannedSessions,
+      frequencyPerWeek,
+      selectedModalities,
+      language,
+    });
 
-    const coinsEarned = Math.round(45 + score * 0.7);
-    const starsEarned = score >= 80 ? 2 : score >= 60 ? 1 : 0;
+    const modalityNames = selectedModalities.map(
+      (id) => PRESCRIPTION_MODALITIES.find((m) => m.id === id)?.nameEn ?? id
+    );
+    const precautionNames = homePrecautions.map(
+      (id) => HOME_PRECAUTION_OPTIONS.find((p) => p.id === id)?.nameEn ?? id
+    );
 
     let feedbackText = isAr ? c.clinicalPearlAr : c.clinicalPearlEn;
 
@@ -829,10 +945,14 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         body: JSON.stringify({
           clinicalCase: c,
           redFlagCorrect: correctRedFlag,
-          selectedDiagnosis: isAr ? diagObj?.labelAr : diagObj?.labelEn,
+          selectedDiagnosis: diagObj?.labelEn ?? (isAr ? diagObj?.labelAr : diagObj?.labelEn),
           diagnosisCorrect: correctDiag,
           selectedTreatment: isAr ? txObj?.labelAr : txObj?.labelEn,
           treatmentCorrect: correctTx,
+          plannedSessions,
+          frequencyPerWeek,
+          selectedModalities: modalityNames,
+          homePrecautions: precautionNames,
           studentNote: '',
           language,
         }),
@@ -847,164 +967,142 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       setEvaluating(false);
       setSpeechCaption(null);
       setEvaluationResult({
-        score,
-        coinsEarned,
-        starsEarned,
+        score: rubric.score,
+        coinsEarned: rubric.coinsEarned,
+        starsEarned: rubric.starsEarned,
         feedback: feedbackText,
-        caughtRedFlag: Boolean(c.redFlagsPresent && correctRedFlag),
+        prescriptionNote: rubric.prescriptionNote,
+        caughtRedFlag: rubric.caughtRedFlag,
       });
       setStep('summary');
       onPatientSpeak(patient.id, 2200);
     }
   };
 
-  const stepDefs: Array<{ id: SessionStep; labelAr: string; labelEn: string; disabled?: boolean }> = [
-    { id: 'subjective', labelAr: '1. التاريخ المرضي', labelEn: '1. History' },
-    { id: 'redflags', labelAr: '2. التحذيرات', labelEn: '2. Red Flags' },
-    { id: 'objective', labelAr: '3. الفحص', labelEn: '3. Exam' },
-    { id: 'plan', labelAr: '4. التشخيص', labelEn: '4. Plan' },
+  const stepDefs: Array<{
+    id: SessionStep;
+    num: number;
+    tabAr: string;
+    tabEn: string;
+    labelAr: string;
+    labelEn: string;
+    done: boolean;
+    badge?: string;
+    disabled?: boolean;
+  }> = [
+    {
+      id: 'subjective',
+      num: 1,
+      tabAr: 'التاريخ',
+      tabEn: 'History',
+      labelAr: 'التاريخ المرضي (History)',
+      labelEn: 'History (Hx)',
+      done: askedIds.length >= 4,
+      badge: `${askedIds.length}/${categorizedHistory.length}`,
+    },
+    {
+      id: 'redflags',
+      num: 2,
+      tabAr: 'Red Flags',
+      tabEn: 'Red Flags',
+      labelAr: 'Red Flags · التحذيرات',
+      labelEn: 'Red Flags Screening',
+      done: redFlagChoice !== null,
+    },
+    {
+      id: 'objective',
+      num: 3,
+      tabAr: 'Exam',
+      tabEn: 'Exam',
+      labelAr: 'الفحص السريري (Exam)',
+      labelEn: 'Clinical Exam',
+      done: revealedTests.length > 0 && revealedTests.length === c.objectiveTests.length,
+      badge: `${revealedTests.length}/${c.objectiveTests.length}`,
+    },
+    {
+      id: 'diagnosis',
+      num: 4,
+      tabAr: 'Diagnosis',
+      tabEn: 'Diagnosis',
+      labelAr: 'التشخيص (Diagnosis)',
+      labelEn: 'Clinical Diagnosis',
+      done: Boolean(selectedDiag),
+    },
+    {
+      id: 'plan',
+      num: 5,
+      tabAr: 'الخطة',
+      tabEn: 'Plan',
+      labelAr: 'الخطة العلاجية (Plan)',
+      labelEn: 'Treatment Plan',
+      done: Boolean(evaluationResult),
+    },
     {
       id: 'summary',
-      labelAr: '5. العلاج',
-      labelEn: '5. Therapy',
+      num: 6,
+      tabAr: 'الخلاصة',
+      tabEn: 'Summary',
+      labelAr: 'الخلاصة والتقييم',
+      labelEn: 'Session Summary',
+      done: Boolean(evaluationResult),
       disabled: !evaluationResult,
     },
   ];
 
   const surfaceCls = isNight
-    ? 'bg-slate-950/94 border-slate-700/80 text-slate-100'
-    : 'bg-white/96 border-slate-200 text-slate-900';
+    ? 'bg-slate-950/95 border-slate-700/85 text-slate-100'
+    : 'bg-white/97 border-slate-200/95 text-slate-900';
+
+  const currentStepMeta = stepDefs.find((s) => s.id === step) ?? stepDefs[0];
+  const activePostureLabelEn = activePostureRule?.labelEn ?? POSTURE_LABELS[posture].en;
 
   return (
     <div
-      className={`pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2.5 sm:p-3.5 transition-all duration-300 ease-out ${
+      className={`pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2 sm:p-3 transition-all duration-300 ease-out ${
         entryReady ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1.5'
       }`}
     >
-      {/* Top Compact Strip + Progressive Steps + Smart Non-Blocking Speech Caption */}
+      {/* Top Patient Header Bar + Sequential 6-Step Clinical Stepper */}
       <div className="flex flex-col gap-1.5">
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto flex items-center justify-between gap-2 rounded-2xl bg-slate-950/88 border border-white/15 px-3 py-1.5 text-white shadow-lg"
+          className="pointer-events-auto flex items-center justify-between gap-2 rounded-2xl bg-slate-950/92 backdrop-blur-md border border-white/15 px-3 py-1.5 text-white shadow-lg"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Stethoscope className="w-4 h-4 text-sky-400 shrink-0" />
-            <div className="flex items-center gap-1.5 min-w-0 text-xs sm:text-[13px]">
-              <span className="font-black truncate">
-                {isAr ? c.patientNameAr : c.patientNameEn}
-              </span>
-              <span className="text-slate-500" aria-hidden="true">·</span>
-              <span className="text-sky-300 font-bold tabular-nums shrink-0">
-                {c.age} {isAr ? 'س' : 'y'}
-              </span>
-              <span className="hidden sm:inline text-slate-500" aria-hidden="true">·</span>
-              <span className="hidden sm:inline text-slate-300 truncate max-w-[16rem] md:max-w-[24rem]">
+            <div className="w-7 h-7 rounded-lg bg-sky-500/15 border border-sky-400/30 flex items-center justify-center shrink-0">
+              <Stethoscope className="w-4 h-4 text-sky-400" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs sm:text-[13px] flex-wrap">
+                <span className="font-black">
+                  {isAr ? c.patientNameAr : c.patientNameEn}
+                </span>
+                <span className="text-slate-500" aria-hidden="true">·</span>
+                <span className="text-sky-300 font-bold tabular-nums shrink-0">
+                  {c.age} {isAr ? 'سنة' : 'y'}
+                </span>
+                <span className="hidden sm:inline text-slate-500" aria-hidden="true">·</span>
+                <span className="hidden sm:inline text-slate-300 text-[11px] font-medium">
+                  {isAr ? c.occupationAr : c.occupationEn}
+                </span>
+              </div>
+              <div className="hidden md:block text-[10.5px] text-slate-300/85 truncate max-w-[26rem]">
                 {isAr ? c.chiefComplaintAr : c.chiefComplaintEn}
-              </span>
+              </div>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <div dir="ltr" className="hidden md:flex items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-300">
-              <span>{c.vitals?.bp ?? '120/78'}</span>
+            <div
+              dir="ltr"
+              className="hidden lg:flex items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-300 pe-1"
+            >
+              <span>BP {c.vitals?.bp ?? '120/78'}</span>
               <span className="text-slate-600">·</span>
-              <span>{c.vitals?.hr ?? 74} bpm</span>
+              <span>HR {c.vitals?.hr ?? 74}</span>
               <span className="text-slate-600">·</span>
               <span className="text-rose-400 font-bold">VAS {c.vasPain}/10</span>
             </div>
-
-            <button
-              ref={postureButtonRef}
-              type="button"
-              onClick={() => setPostureOpen((v) => !v)}
-              aria-expanded={postureOpen}
-              aria-label={isAr ? 'التحكم بوضعية المريض' : 'Patient Posture'}
-              title={isAr ? 'وضعية المريض' : 'Patient Posture'}
-              className={`h-8 px-2 sm:px-2.5 rounded-xl border flex items-center gap-1.5 text-[11px] font-extrabold transition-colors cursor-pointer ${
-                postureOpen
-                  ? 'bg-sky-500 border-sky-300 text-slate-950'
-                  : 'bg-slate-800 hover:bg-sky-600 border-white/10 text-slate-200 hover:text-white'
-              }`}
-            >
-              <PersonStanding className="w-3.5 h-3.5 shrink-0" />
-              <span dir="ltr" className="hidden sm:inline whitespace-nowrap">
-                {activePostureRule?.labelEn ?? 'Sitting'}
-              </span>
-            </button>
-
-            {postureOpen && (
-              <div
-                ref={posturePopoverRef}
-                dir="ltr"
-                onPointerDown={(e) => e.stopPropagation()}
-                className="pointer-events-auto fixed left-1/2 -translate-x-1/2 top-14 sm:top-16 z-50 w-[min(92vw,18.5rem)] rounded-2xl bg-slate-950/96 border border-white/15 p-3 shadow-2xl text-white"
-              >
-                <div className="flex items-center justify-between gap-2 px-0.5 pb-2 mb-2 border-b border-white/10">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[11px] font-black tracking-wide text-slate-200 whitespace-nowrap">
-                      Patient Posture
-                    </span>
-                    {stationNameEn && (
-                      <span className="text-[10px] font-bold text-sky-400 truncate max-w-[8.5rem]">
-                        · {stationNameEn}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setPostureOpen(false)}
-                    aria-label="Close"
-                    className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  {postureRules.map((rule) => {
-                    const isActive = rule.id === posture;
-                    const IconCmp =
-                      rule.id === 'standing'
-                        ? PersonStanding
-                        : rule.id === 'sitting'
-                          ? Armchair
-                          : BedDouble;
-                    return (
-                      <button
-                        key={rule.id}
-                        type="button"
-                        disabled={!rule.available}
-                        onClick={() => {
-                          if (!rule.available) return;
-                          onChangePosture(rule.id);
-                        }}
-                        title={!rule.available ? rule.reason : rule.labelEn}
-                        className={`rounded-xl border px-2.5 py-2 text-left transition-colors flex flex-col gap-0.5 ${
-                          !rule.available
-                            ? 'bg-slate-950/60 border-white/5 text-slate-500 opacity-60 cursor-not-allowed'
-                            : isActive
-                              ? 'bg-sky-500 border-sky-300 text-slate-950 shadow-sm cursor-pointer'
-                              : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-100 cursor-pointer'
-                        }`}
-                      >
-                        <span className="flex items-center justify-between gap-1 text-[11px] font-extrabold">
-                          <span className="flex items-center gap-1.5 truncate">
-                            <IconCmp className="w-3.5 h-3.5 shrink-0" />
-                            <span>{rule.labelEn}</span>
-                          </span>
-                          {!rule.available && <Lock className="w-2.5 h-2.5 shrink-0 text-slate-500" />}
-                        </span>
-                        {!rule.available && rule.reason && (
-                          <span className="text-[9px] leading-tight font-medium text-slate-500 truncate">
-                            {rule.reason}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {onRecenterCamera && (
               <button
@@ -1012,89 +1110,175 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
                 onClick={onRecenterCamera}
                 aria-label={isAr ? 'توجيه الكاميرا نحو المريض' : 'Center on Patient'}
                 title={isAr ? 'التركيز على المريض' : 'Center on Patient'}
-                className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-sky-600 border border-white/10 text-slate-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                className="h-8 px-2.5 rounded-xl bg-slate-800/90 hover:bg-sky-600 border border-white/10 text-slate-200 hover:text-white flex items-center gap-1 text-[11px] font-bold transition-colors cursor-pointer"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden md:inline">{isAr ? 'التركيز' : 'Center'}</span>
               </button>
             )}
 
             <button
               type="button"
-              onClick={() => setPanelHidden((v) => !v)}
-              aria-label={panelHidden ? (isAr ? 'إظهار اللوحة' : 'Show Panel') : isAr ? 'إخفاء اللوحة' : 'Hide Panel'}
-              title={panelHidden ? (isAr ? 'إظهار اللوحة' : 'Show Panel') : isAr ? 'إخفاء اللوحة' : 'Hide Panel'}
-              className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+              onClick={() => {
+                setPanelHidden((v) => !v);
+                setSpeechCaption(null);
+              }}
+              aria-label={panelHidden ? (isAr ? 'إظهار الملف السريري' : 'Show Chart') : isAr ? 'المشي والحركة 3D' : '3D Move'}
+              title={panelHidden ? (isAr ? 'إظهار الملف السريري' : 'Show Chart') : isAr ? 'إخفاء للتحرك بحرية' : 'Hide Chart to Walk'}
+              className={`h-8 px-2.5 sm:px-3 rounded-xl border flex items-center gap-1.5 text-[11px] font-black transition-colors cursor-pointer ${
+                panelHidden
+                  ? 'bg-sky-500 hover:bg-sky-400 border-sky-300 text-slate-950 shadow-md'
+                  : 'bg-slate-800/90 hover:bg-slate-700 border-white/10 text-slate-200'
+              }`}
             >
-              {panelHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              {panelHidden ? <ClipboardList className="w-3.5 h-3.5 shrink-0" /> : <Move className="w-3.5 h-3.5 shrink-0" />}
+              <span>
+                {panelHidden
+                  ? isAr
+                    ? `الملف السريري · ${currentStepMeta.num}/6`
+                    : `Chart · ${currentStepMeta.num}/6`
+                  : isAr
+                    ? 'تحرك 3D'
+                    : 'Walk'}
+              </span>
             </button>
+
+            {therapyStarted && (
+              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 text-[10.5px] font-black whitespace-nowrap">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {isAr ? 'جلسة نشطة' : 'Therapy Active'}
+              </span>
+            )}
 
             <button
               type="button"
-              onClick={onExit}
+              onClick={() => {
+                if (therapyStarted) {
+                  setExitConfirmOpen(true);
+                } else {
+                  onExit();
+                }
+              }}
               aria-label={isAr ? 'خروج من الجلسة' : 'Exit Session'}
-              title={isAr ? 'خروج' : 'Exit'}
-              className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-rose-600 border border-white/15 text-slate-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              title={therapyStarted ? (isAr ? 'إنهاء أو خروج' : 'Finish or Exit') : isAr ? 'خروج' : 'Exit'}
+              className="w-8 h-8 rounded-xl bg-slate-800/90 hover:bg-rose-600 border border-white/15 text-slate-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
-        {/* Slender Stage Tabs (hidden while focused on adjusting a device/probes) */}
-        {!activeDevice && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto pb-0.5"
-          >
-            {stepDefs.map((s) => {
-              const active = step === s.id && !panelHidden;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={s.disabled}
-                  onClick={() => {
-                    setPanelHidden(false);
-                    setStep(s.id);
-                  }}
-                  className={`h-8 px-2.5 rounded-xl text-[11px] sm:text-xs font-extrabold whitespace-nowrap shrink-0 border transition-colors ${
-                    active
-                      ? 'bg-sky-500 border-sky-300 text-slate-950 shadow'
-                      : s.disabled
-                        ? 'bg-slate-950/60 border-white/10 text-slate-500 cursor-not-allowed'
-                        : 'bg-slate-950/85 hover:bg-slate-900 border-white/15 text-slate-100 cursor-pointer'
-                  }`}
-                >
-                  {isAr ? s.labelAr : s.labelEn}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Smart Floating Patient Speech Reply — positioned neatly in the side corner, never blocking patient's face */}
-        {!activeDevice && speechCaption && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            className="pointer-events-auto self-start max-w-[19rem] sm:max-w-xs rounded-2xl bg-slate-950/90 border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2"
-          >
-            <div className="min-w-0 text-xs leading-relaxed">
-              <div className="text-[10px] font-extrabold text-sky-300 mb-0.5">
-                {isAr ? c.patientNameAr : c.patientNameEn}
-              </div>
-              <p className="text-slate-100 font-semibold">{speechCaption}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSpeechCaption(null)}
-              aria-label={isAr ? 'إغلاق' : 'Close'}
-              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 shrink-0 cursor-pointer"
+        {/* Smart Floating Patient Speech Reply — anchored physical right, ONLY on greeting or when minimized */}
+        {!activeDevice && !heldDevice && !nearbyDevice && speechCaption && (panelHidden || (!openQuestionId && revealedTests.length === 0)) && (
+          <div dir="ltr" className="w-full flex justify-end">
+            <div
+              dir={isAr ? 'rtl' : 'ltr'}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto max-w-[18.5rem] sm:max-w-xs rounded-2xl bg-slate-950/92 backdrop-blur-md border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2"
             >
-              <X className="w-3 h-3" />
-            </button>
+              <div className="min-w-0 text-xs leading-relaxed">
+                <div className="text-[10px] font-extrabold text-sky-300 mb-0.5">
+                  {isAr ? c.patientNameAr : c.patientNameEn}
+                </div>
+                <p className="text-slate-100 font-semibold">{speechCaption}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSpeechCaption(null)}
+                aria-label={isAr ? 'إغلاق' : 'Close'}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 shrink-0 cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         )}
       </div>
+
+      {/* Compact Top-Left Patient Posture Switcher — closed by default, never blocks face or chart */}
+      {!screenExpanded && !activeDevice?.selectedProbeId && (
+        <div
+          ref={postureDockRef}
+          dir="ltr"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed left-2.5 sm:left-4 top-[3.75rem] sm:top-[4.15rem] z-35 flex flex-col items-start gap-1.5"
+        >
+          <button
+            type="button"
+            onClick={() => setPostureOpen((v) => !v)}
+            aria-expanded={postureOpen}
+            className={`h-8 px-2.5 rounded-xl border shadow-lg flex items-center gap-1.5 text-[11px] font-extrabold backdrop-blur-md transition-colors cursor-pointer ${
+              postureOpen
+                ? 'bg-sky-500 border-sky-300 text-slate-950'
+                : 'bg-slate-950/90 hover:bg-slate-900 border-white/15 text-slate-100'
+            }`}
+          >
+            <PersonStanding className="w-3.5 h-3.5 shrink-0" />
+            <span dir="ltr" className="whitespace-nowrap">
+              {isAr ? `الوضعية: ${activePostureLabelEn}` : `Posture: ${activePostureLabelEn}`}
+            </span>
+            {postureOpen ? (
+              <ChevronUp className="w-3.5 h-3.5 shrink-0 opacity-80" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-80" />
+            )}
+          </button>
+
+          {postureOpen && (
+            <div
+              dir="ltr"
+              className="w-[15.5rem] rounded-2xl bg-slate-950/95 backdrop-blur-md border border-white/15 p-2 shadow-2xl text-white space-y-1.5"
+            >
+              {stationNameEn && (
+                <div className="px-1 pb-1 border-b border-white/10 text-[10px] font-bold text-sky-400 truncate">
+                  {stationNameEn}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-1.5">
+                {postureRules.map((rule) => {
+                  const isActive = rule.id === posture;
+                  const IconCmp =
+                    rule.id === 'standing'
+                      ? PersonStanding
+                      : rule.id === 'sitting'
+                        ? Armchair
+                        : BedDouble;
+                  return (
+                    <button
+                      key={rule.id}
+                      type="button"
+                      disabled={!rule.available}
+                      onClick={() => {
+                        if (!rule.available) return;
+                        onChangePosture(rule.id);
+                        setPostureOpen(false);
+                      }}
+                      title={!rule.available ? rule.reason : rule.labelEn}
+                      className={`rounded-xl border px-2 py-2 text-left transition-colors flex items-center justify-between gap-1 text-[11px] font-extrabold ${
+                        !rule.available
+                          ? 'bg-slate-950/50 border-white/5 text-slate-500 opacity-50 cursor-not-allowed'
+                          : isActive
+                            ? 'bg-sky-500 border-sky-300 text-slate-950 shadow-sm cursor-pointer'
+                            : 'bg-slate-900/90 hover:bg-slate-800 border-white/10 text-slate-100 cursor-pointer'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <IconCmp className="w-3.5 h-3.5 shrink-0" />
+                        <span className="leading-tight truncate">{rule.labelEn}</span>
+                      </span>
+                      {!rule.available ? (
+                        <Lock className="w-3 h-3 shrink-0 text-slate-500" />
+                      ) : isActive ? (
+                        <Check className="w-3 h-3 shrink-0" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Direct 3D Electrode / Probe Placement Guide Bar — only for bedside-deployed devices */}
       {!heldDevice &&
@@ -1193,7 +1377,11 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       {!heldDevice && !activeDevice && ((nearbyDevice && (nearbyDevice.canDeploy || nearbyDevice.isStationConsole)) || (handshakeReady && onHandshake)) && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 flex items-center gap-2"
+          className={`pointer-events-auto fixed z-40 flex items-center gap-2 transition-all ${
+            panelHidden
+              ? 'left-1/2 -translate-x-1/2 bottom-6 sm:bottom-8'
+              : 'right-2.5 top-[3.75rem] sm:right-auto sm:top-auto sm:left-5 sm:bottom-48'
+          }`}
         >
           {handshakeReady && onHandshake && (
             <button
@@ -1237,7 +1425,9 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       {heldDevice && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed left-1/2 -translate-x-1/2 bottom-28 sm:bottom-32 z-40 flex flex-col items-center gap-1.5"
+          className={`pointer-events-auto fixed left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-1.5 transition-all ${
+            panelHidden ? 'bottom-6 sm:bottom-8' : 'top-[3.75rem] sm:top-auto sm:bottom-8'
+          }`}
         >
           <div className="px-3 py-1 rounded-xl bg-slate-950/90 border border-white/15 text-[11px] font-bold text-slate-200 shadow-lg flex items-center gap-1.5 whitespace-nowrap">
             <span dir="ltr" className="text-sky-300 font-black">
@@ -1759,326 +1949,1081 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         </div>
       )}
 
-      {/* Bottom Row: Compact Joystick + Smart End-Docked Clinical Sheet (hidden while adjusting device/probes) */}
+      {/* Bottom Row: Ergonomic Left-Thumb Joystick + Spacious Clinical Chart (Physical LTR dock geometry) */}
       {!activeDevice && (
-        <div className="flex items-end justify-between gap-3 w-full">
-          <div className="shrink-0">
+        <div dir="ltr" className="relative w-full h-0">
+          {/* Virtual Joystick: raised ergonomic position on physical left */}
+          <div
+            className={`fixed left-4 bottom-12 sm:left-5 sm:bottom-14 z-30 transition-all ${
+              panelHidden ? 'block' : 'hidden sm:block'
+            }`}
+          >
             <VirtualJoystick isAr={isAr} isNight={isNight} moveInputRef={moveInputRef} />
           </div>
 
+          {/* Spacious, Unified Clinical Chart Tablet with Integrated 6-Step Stepper */}
           {!panelHidden && (
             <div
+              dir={isAr ? 'rtl' : 'ltr'}
               onPointerDown={(e) => e.stopPropagation()}
-              className={`pointer-events-auto w-full max-w-[15.5rem] sm:max-w-[20.5rem] rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[33vh] sm:max-h-[40vh] ${surfaceCls}`}
+              className={`pointer-events-auto fixed bottom-2 inset-x-2 sm:inset-x-auto sm:right-4 sm:bottom-4 z-35 rounded-2xl border shadow-2xl overflow-hidden flex flex-col transition-[max-height,width] duration-200 ${
+                chartExpanded
+                  ? 'sm:w-[min(calc(100vw-9.5rem),41rem)] max-h-[80vh] sm:max-h-[86vh]'
+                  : 'sm:w-[min(calc(100vw-9.5rem),36rem)] max-h-[62vh] sm:max-h-[70vh]'
+              } ${surfaceCls}`}
             >
-            <div className="p-2.5 sm:p-3 overflow-y-auto custom-scroll space-y-2 flex-1">
-              {step === 'subjective' && (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px] font-bold opacity-75 px-0.5">
-                    <span>{isAr ? 'اضغط على السؤال لسماع رد المريض' : 'Tap a question to hear the patient'}</span>
-                    <span className="tabular-nums text-rose-500">VAS {c.vasPain}/10</span>
+              {/* Crisp Chart Header */}
+              <div
+                className={`px-3.5 py-2 border-b flex items-center justify-between gap-2 shrink-0 ${
+                  isNight ? 'border-slate-800 bg-slate-900/95' : 'border-slate-200 bg-slate-50/95'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <ClipboardList className="w-4 h-4 text-sky-500 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-[13px] font-black leading-tight truncate">
+                      {currentStepMeta.num}/6 · {isAr ? currentStepMeta.labelAr : currentStepMeta.labelEn}
+                    </div>
                   </div>
-                  <p className="text-[10px] opacity-60 px-0.5 leading-snug">
-                    {isAr
-                      ? 'اسحب للنظر · اقترب تماماً من أي جهاز لاستخدامه وتقريبه للسرير'
-                      : 'Drag to look · Walk right up to any device to use and bring it bedside'}
-                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 text-[10.5px] font-bold">
+                  <span dir="ltr" className="font-mono tabular-nums opacity-75 px-1">
+                    VAS {c.vasPain}/10
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setChartExpanded((v) => !v)}
+                    aria-label={chartExpanded ? (isAr ? 'حجم عادي' : 'Compact') : isAr ? 'توسيع النافذة' : 'Expand'}
+                    title={chartExpanded ? (isAr ? 'حجم عادي' : 'Compact size') : isAr ? 'توسيع النافذة' : 'Expand height'}
+                    className={`h-7 px-2 rounded-lg border text-[10.5px] font-extrabold flex items-center gap-1 cursor-pointer ${
+                      isNight
+                        ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200'
+                        : 'border-slate-200 bg-white hover:bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {chartExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                    <span className="hidden sm:inline">
+                      {chartExpanded ? (isAr ? 'عادي' : 'Compact') : isAr ? 'توسيع' : 'Expand'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPanelHidden(true)}
+                    aria-label={isAr ? 'إخفاء للتحرك' : 'Hide to Walk'}
+                    title={isAr ? 'إخفاء النافذة والتحرك بحرية' : 'Hide panel to walk freely'}
+                    className={`h-7 px-2 rounded-lg border text-[10.5px] font-extrabold flex items-center gap-1 cursor-pointer ${
+                      isNight
+                        ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-sky-300'
+                        : 'border-slate-200 bg-white hover:bg-slate-100 text-sky-700'
+                    }`}
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span className="sm:hidden">{isAr ? 'تحرك' : 'Walk'}</span>
+                  </button>
+                </div>
+              </div>
 
-                  {presetQuestions.map((item) => {
-                    const isOpen = openQuestionId === item.id;
-                    const wasAsked = askedIds.includes(item.id);
-                    return (
-                      <div
-                        key={item.id}
-                        className={`rounded-xl border transition-colors overflow-hidden ${
-                          isOpen
+              {/* Integrated 6-Step Wizard Tabs — neatly inside the tablet, zero loose floating bars */}
+              <div
+                className={`px-2.5 py-1.5 border-b shrink-0 grid grid-cols-3 sm:grid-cols-6 gap-1 ${
+                  isNight ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-100/75'
+                }`}
+              >
+                {stepDefs.map((s) => {
+                  const active = step === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      disabled={s.disabled}
+                      onClick={() => {
+                        setStep(s.id);
+                        setSpeechCaption(null);
+                      }}
+                      className={`px-1.5 py-1.5 rounded-lg text-[10.5px] font-extrabold border transition-all flex items-center justify-center gap-1 ${
+                        active
+                          ? 'bg-sky-500 border-sky-400 text-slate-950 shadow-sm'
+                          : s.disabled
                             ? isNight
-                              ? 'border-sky-500/60 bg-sky-950/35'
-                              : 'border-sky-300 bg-sky-50/85'
-                            : isNight
-                              ? 'border-slate-800 bg-slate-900/75'
-                              : 'border-slate-200 bg-slate-50/75'
+                              ? 'bg-slate-950/40 border-slate-800/60 text-slate-600 cursor-not-allowed'
+                              : 'bg-slate-100 border-slate-200/60 text-slate-400 cursor-not-allowed'
+                            : s.done
+                              ? isNight
+                                ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/50 cursor-pointer'
+                                : 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100 cursor-pointer'
+                              : isNight
+                                ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 cursor-pointer'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 cursor-pointer'
+                      }`}
+                    >
+                      <span
+                        className={`w-3.5 h-3.5 rounded text-[9px] font-mono font-black flex items-center justify-center shrink-0 ${
+                          active
+                            ? 'bg-slate-950/20 text-slate-950'
+                            : s.done
+                              ? 'bg-emerald-500/20 text-emerald-500'
+                              : 'bg-slate-500/15'
                         }`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => handleToggleQuestion(item)}
-                          className="w-full px-2.5 py-2 flex items-center justify-between gap-2 text-start text-xs font-extrabold cursor-pointer"
-                        >
-                          <span className="leading-snug">{isAr ? item.qAr : item.qEn}</span>
-                          <span className="shrink-0 text-sky-500 flex items-center gap-1">
-                            {wasAsked && !isOpen && (
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                            )}
-                            {isOpen ? (
-                              <ChevronUp className="w-3.5 h-3.5" />
-                            ) : (
-                              <ChevronDown className="w-3.5 h-3.5" />
-                            )}
-                          </span>
-                        </button>
-                        {isOpen && (
-                          <div
-                            className={`px-2.5 pb-2.5 pt-1 text-[11px] font-semibold leading-relaxed border-t ${
-                              isNight
-                                ? 'border-sky-800/50 text-slate-200'
-                                : 'border-sky-200/80 text-slate-700'
-                            }`}
-                          >
-                            {isAr ? item.aAr : item.aEn}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                        {s.done && !active ? <Check className="w-2.5 h-2.5" /> : s.num}
+                      </span>
+                      <span className="whitespace-nowrap leading-tight">{isAr ? s.tabAr : s.tabEn}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
-              {step === 'redflags' && (
-                <div className="space-y-2">
-                  <div
-                    className={`border rounded-xl p-2 flex items-start gap-2 text-xs ${
-                      isNight ? 'bg-amber-950/45 border-amber-800/70' : 'bg-amber-50 border-amber-200'
-                    }`}
-                  >
-                    <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                    <p className="font-semibold leading-snug">
-                      {isAr ? c.redFlagClueAr : c.redFlagClueEn}
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setRedFlagChoice('safe')}
-                    className={`w-full p-2.5 rounded-xl border-2 text-start flex items-center gap-2 text-xs font-extrabold cursor-pointer ${
-                      redFlagChoice === 'safe'
-                        ? 'border-emerald-500 bg-emerald-500/15'
-                        : isNight
-                          ? 'border-slate-800'
-                          : 'border-slate-200'
-                    }`}
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>{isAr ? 'آمن للعلاج الطبيعي' : 'Cleared for Physiotherapy'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setRedFlagChoice('refer')}
-                    className={`w-full p-2.5 rounded-xl border-2 text-start flex items-center gap-2 text-xs font-extrabold cursor-pointer ${
-                      redFlagChoice === 'refer'
-                        ? 'border-rose-500 bg-rose-500/15'
-                        : isNight
-                          ? 'border-slate-800'
-                          : 'border-slate-200'
-                    }`}
-                  >
-                    <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
-                    <span>{isAr ? 'علامة تحذيرية — تحويل طبي' : 'Red Flag — Urgent Referral'}</span>
-                  </button>
-                </div>
-              )}
-
-              {step === 'objective' && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold opacity-75 px-0.5">
-                    {isAr ? 'اضغط على الاختبار لإجرائه:' : 'Tap test to examine:'}
-                  </div>
-                  {c.objectiveTests.map((test) => {
-                    const revealed = revealedTests.includes(test.id);
-                    return (
-                      <div
-                        key={test.id}
-                        className={`rounded-xl border overflow-hidden ${
-                          isNight ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-slate-50'
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => toggleObjectiveTest(test.id)}
-                          className="w-full p-2 flex items-center justify-between gap-2 text-start text-xs font-extrabold cursor-pointer"
-                        >
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <Activity className="w-3.5 h-3.5 text-sky-500 shrink-0" />
-                            <span className="truncate">{isAr ? test.nameAr : test.nameEn}</span>
-                          </div>
-                          <span className="text-[11px] text-sky-500 shrink-0">
-                            {revealed ? (isAr ? '✓ تم' : '✓ Done') : isAr ? 'فحص' : 'Test'}
-                          </span>
-                        </button>
-                        {revealed && (
-                          <div
-                            className={`px-2.5 py-1.5 text-[11px] font-bold border-t ${
-                              test.isPositive
-                                ? isNight
-                                  ? 'bg-amber-950/50 text-amber-200 border-amber-800/70'
-                                  : 'bg-amber-50 text-amber-900 border-amber-200'
+              {/* Scrollable Clinical Stage Body */}
+              <div className="p-3 sm:p-3.5 overflow-y-auto custom-scroll space-y-3 flex-1">
+                {step === 'subjective' && (
+                  <div className="space-y-2.5">
+                    {/* History Type Category Segmented Selector (Light Clinical English + Arabic Cue) */}
+                    <div
+                      dir="ltr"
+                      className={`grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 rounded-xl border ${
+                        isNight ? 'bg-slate-900 border-slate-800' : 'bg-slate-100 border-slate-200'
+                      }`}
+                    >
+                      {HISTORY_CATEGORIES.map((cat) => {
+                        const catQs = categorizedHistory.filter((q) => q.category === cat.id);
+                        const catAsked = catQs.filter((q) => askedIds.includes(q.id)).length;
+                        const activeCat = historyCategory === cat.id;
+                        const allAsked = catAsked === catQs.length && catQs.length > 0;
+                        return (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setHistoryCategory(cat.id)}
+                            className={`px-2 py-1.5 rounded-lg transition-colors flex items-center justify-between gap-1.5 cursor-pointer ${
+                              activeCat
+                                ? 'bg-sky-500 text-slate-950 shadow-sm'
                                 : isNight
-                                  ? 'bg-emerald-950/50 text-emerald-200 border-emerald-800/70'
-                                  : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                                  ? 'text-slate-200 hover:bg-slate-800'
+                                  : 'text-slate-800 hover:bg-white'
                             }`}
                           >
-                            {test.isPositive ? '▲ ' : '● '}
-                            {isAr ? test.findingAr : test.findingEn}
-                          </div>
+                            <div className="min-w-0 text-left">
+                              <div className="text-[11px] font-black leading-tight">{cat.shortEn}</div>
+                              {isAr && (
+                                <div
+                                  className={`text-[9.5px] font-semibold leading-tight ${
+                                    activeCat ? 'text-slate-950/75' : 'opacity-65'
+                                  }`}
+                                >
+                                  {cat.labelAr}
+                                </div>
+                              )}
+                            </div>
+                            <span
+                              className={`text-[10px] font-mono font-bold tabular-nums shrink-0 ${
+                                activeCat
+                                  ? 'text-slate-950/80'
+                                  : allAsked
+                                    ? 'text-emerald-500'
+                                    : 'opacity-65'
+                              }`}
+                            >
+                              {catAsked}/{catQs.length}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] font-semibold opacity-75 px-0.5">
+                      <span>
+                        {isAr
+                          ? 'اضغط على السؤال لعرض إجابة المريض هنا:'
+                          : 'Tap a question to view the patient response:'}
+                      </span>
+                      <span dir="ltr" className="font-mono tabular-nums">
+                        {askedIds.length}/{categorizedHistory.length}
+                      </span>
+                    </div>
+
+                    {activeHistoryQuestions.map((item) => {
+                      const isOpen = openQuestionId === item.id;
+                      const wasAsked = askedIds.includes(item.id);
+                      return (
+                        <div
+                          key={item.id}
+                          className={`rounded-xl border transition-colors overflow-hidden ${
+                            isOpen
+                              ? isNight
+                                ? 'border-sky-500/70 bg-sky-950/40'
+                                : 'border-sky-400 bg-sky-50/90'
+                              : isNight
+                                ? 'border-slate-800 bg-slate-900/80'
+                                : 'border-slate-200 bg-slate-50/85'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleToggleQuestion(item)}
+                            className="w-full px-3 py-2.5 flex items-start justify-between gap-2.5 text-start cursor-pointer"
+                          >
+                            <div className="min-w-0 space-y-0.5">
+                              <div
+                                dir="ltr"
+                                className="text-[10px] font-mono font-bold uppercase tracking-wider text-sky-500"
+                              >
+                                {item.tagEn}
+                              </div>
+                              <div className="text-xs sm:text-[13px] font-extrabold leading-snug">
+                                {isAr ? item.qAr : item.qEn}
+                              </div>
+                            </div>
+                            <span className="shrink-0 text-sky-500 flex items-center gap-1 pt-0.5">
+                              {wasAsked && !isOpen && (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                              )}
+                              {isOpen ? (
+                                <ChevronUp className="w-4 h-4" />
+                              ) : (
+                                <ChevronDown className="w-4 h-4" />
+                              )}
+                            </span>
+                          </button>
+                          {isOpen && (
+                            <div
+                              className={`px-3 pb-3 pt-2 text-xs font-semibold leading-relaxed border-t ${
+                                isNight
+                                  ? 'border-sky-800/50 text-slate-100 bg-slate-950/45'
+                                  : 'border-sky-200/80 text-slate-800 bg-white/80'
+                              }`}
+                            >
+                              <div className="text-[10px] font-black text-sky-500 mb-0.5">
+                                {isAr ? `رد ${c.patientNameAr}:` : `${c.patientNameEn}'s reply:`}
+                              </div>
+                              {isAr ? item.aAr : item.aEn}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {step === 'redflags' && (
+                  <div className="space-y-2.5">
+                    <div
+                      className={`border rounded-xl p-3 flex items-start gap-2.5 text-xs ${
+                        isNight
+                          ? 'bg-amber-950/40 border-amber-800/60'
+                          : 'bg-amber-50 border-amber-200'
+                      }`}
+                    >
+                      <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div className="space-y-1 min-w-0">
+                        <div dir="ltr" className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-amber-500 text-start">
+                          Red Flag Clinical Screen
+                        </div>
+                        <p dir="ltr" className="font-bold leading-relaxed text-[12px] text-start">
+                          {c.redFlagClueEn}
+                        </p>
+                        {isAr && (
+                          <p className="text-[11px] font-medium opacity-80 leading-relaxed">
+                            {c.redFlagClueAr}
+                          </p>
                         )}
+                        <div
+                          dir="ltr"
+                          className="text-[10.5px] font-mono tabular-nums opacity-80 pt-0.5 text-start"
+                        >
+                          BP {c.vitals?.bp ?? '120/78'} · HR {c.vitals?.hr ?? 74} · Temp{' '}
+                          {c.vitals?.temp ?? '36.7°C'}
+                        </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {step === 'plan' && (
-                <div className="space-y-2">
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-extrabold opacity-75">
-                      {isAr ? 'التشخيص المرجح:' : 'Clinical Diagnosis:'}
                     </div>
-                    {c.diagnosisOptions.map((d) => (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() => setSelectedDiag(d.id)}
-                        className={`w-full text-start p-2 rounded-xl border-2 text-xs font-bold cursor-pointer ${
-                          selectedDiag === d.id
-                            ? 'border-sky-500 bg-sky-500/15'
-                            : isNight
-                              ? 'border-slate-800'
-                              : 'border-slate-200'
+
+                    <button
+                      type="button"
+                      onClick={() => handleSelectRedFlag('safe')}
+                      className={`w-full p-3 rounded-xl border-2 text-start flex items-center gap-2.5 text-xs font-extrabold transition-colors cursor-pointer ${
+                        redFlagChoice === 'safe'
+                          ? 'border-emerald-500 bg-emerald-500/15'
+                          : isNight
+                            ? 'border-slate-800 hover:border-slate-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="text-[13px]">
+                          {isAr ? 'Cleared for PT · آمن للعلاج الطبيعي' : 'Cleared for Physiotherapy'}
+                        </div>
+                        <div className="text-[11px] font-medium opacity-75 leading-snug">
+                          {isAr
+                            ? 'لا توجد موانع خطرة — متابعة الفحص ووضع الخطة'
+                            : 'No systemic/vascular red flags — proceed to exam'}
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSelectRedFlag('refer')}
+                      className={`w-full p-3 rounded-xl border-2 text-start flex items-center gap-2.5 text-xs font-extrabold transition-colors cursor-pointer ${
+                        redFlagChoice === 'refer'
+                          ? 'border-rose-500 bg-rose-500/15'
+                          : isNight
+                            ? 'border-slate-800 hover:border-slate-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="text-[13px]">
+                          {isAr ? 'Urgent Referral (Red Flag) · تحويل طبي عاجل' : 'Red Flag — Urgent Referral'}
+                        </div>
+                        <div className="text-[11px] font-medium opacity-75 leading-snug">
+                          {isAr
+                            ? 'منع الأجهزة والتمارين وإحالة الحالة للطوارئ'
+                            : 'Contraindicate PT modalities and refer urgently'}
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+
+                {step === 'objective' && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-bold opacity-75 px-0.5">
+                      <span>
+                        {isAr
+                          ? 'اضغط على الاختبار السريري لعرض النتيجة:'
+                          : 'Tap each physical test to reveal findings:'}
+                      </span>
+                      <span dir="ltr" className="font-mono tabular-nums">
+                        {revealedTests.length}/{c.objectiveTests.length}
+                      </span>
+                    </div>
+
+                    {c.objectiveTests.map((test) => {
+                      const revealed = revealedTests.includes(test.id);
+                      const catLabel = OBJECTIVE_CATEGORY_EN[test.category] ?? 'TEST';
+                      return (
+                        <div
+                          key={test.id}
+                          className={`rounded-xl border overflow-hidden ${
+                            isNight ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-slate-50'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleObjectiveTest(test.id)}
+                            className="w-full p-2.5 sm:p-3 flex items-start justify-between gap-2.5 text-start cursor-pointer"
+                          >
+                            <div className="flex items-start gap-2 min-w-0">
+                              <Activity className="w-4 h-4 text-sky-500 shrink-0 mt-0.5" />
+                              <div className="min-w-0 space-y-0.5">
+                                <div
+                                  dir="ltr"
+                                  className="text-xs sm:text-[13px] font-black leading-snug text-start break-words"
+                                >
+                                  {test.nameEn}
+                                </div>
+                                <div
+                                  dir="ltr"
+                                  className="text-[10px] font-mono font-bold tracking-wider uppercase opacity-65 text-start"
+                                >
+                                  {catLabel}
+                                </div>
+                              </div>
+                            </div>
+                            <span
+                              dir="ltr"
+                              className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md border shrink-0 ${
+                                revealed
+                                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-500'
+                                  : 'border-sky-500/35 bg-sky-500/10 text-sky-500'
+                              }`}
+                            >
+                              {revealed ? '✓ DONE' : 'RUN TEST'}
+                            </span>
+                          </button>
+                          {revealed && (
+                            <div
+                              className={`px-3 py-2.5 text-xs font-semibold leading-relaxed border-t space-y-1 ${
+                                test.isPositive
+                                  ? isNight
+                                    ? 'bg-amber-950/50 text-amber-100 border-amber-800/70'
+                                    : 'bg-amber-50 text-amber-950 border-amber-200'
+                                  : isNight
+                                    ? 'bg-emerald-950/50 text-emerald-100 border-emerald-800/70'
+                                    : 'bg-emerald-50 text-emerald-950 border-emerald-200'
+                              }`}
+                            >
+                              <div dir="ltr" className="text-[10px] font-mono font-black uppercase">
+                                {test.isPositive ? '▲ POSITIVE FINDING' : '● NEGATIVE / INTACT'}
+                              </div>
+                              <div dir="ltr" className="font-bold text-start">
+                                {test.findingEn}
+                              </div>
+                              {isAr && (
+                                <div className="text-[11px] opacity-80 leading-snug">
+                                  {test.findingAr}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {step === 'diagnosis' && (
+                  <div className="space-y-2.5">
+                    {/* Quick Clinical Synthesis Recap */}
+                    <div
+                      className={`rounded-xl border px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold ${
+                        isNight ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sky-500 font-black">
+                          {isAr ? 'ملخص المعطيات:' : 'Clinical Clues:'}
+                        </span>
+                        <span dir="ltr" className="font-mono text-[10.5px]">
+                          VAS {c.vasPain}/10
+                        </span>
+                        <span className="opacity-40">·</span>
+                        <span>
+                          {isAr
+                            ? `اختبارات: ${revealedTests.length}/${c.objectiveTests.length}`
+                            : `Tests: ${revealedTests.length}/${c.objectiveTests.length}`}
+                        </span>
+                      </div>
+                      <span
+                        className={`text-[10.5px] font-extrabold ${
+                          redFlagChoice === 'refer'
+                            ? 'text-rose-500'
+                            : redFlagChoice === 'safe'
+                              ? 'text-emerald-500'
+                              : 'text-amber-500'
                         }`}
                       >
-                        {isAr ? d.labelAr : d.labelEn}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-extrabold opacity-75">
-                      {isAr ? 'العلاج النهائي:' : 'Final Treatment:'}
+                        {redFlagChoice === 'refer'
+                          ? isAr
+                            ? 'تحذير: تحويل طبي'
+                            : 'Red Flag: Refer'
+                          : redFlagChoice === 'safe'
+                            ? isAr
+                              ? 'آمن للعلاج'
+                              : 'Cleared'
+                            : isAr
+                              ? 'لم يُحسم التحذير'
+                              : 'Red Flag pending'}
+                      </span>
                     </div>
-                    {c.treatmentOptions.map((t) => (
+
+                    <div className="flex items-center justify-between text-xs font-extrabold px-0.5">
+                      <span className="text-sky-500">
+                        {isAr ? 'اختر التشخيص السريري (Clinical Diagnosis):' : 'Select Primary Clinical Diagnosis:'}
+                      </span>
+                      <span dir="ltr" className="text-[10px] font-mono uppercase opacity-65">
+                        Clinical Dx
+                      </span>
+                    </div>
+
+                    <div dir="ltr" className="space-y-2">
+                      {c.diagnosisOptions.map((d) => {
+                        const isPicked = selectedDiag === d.id;
+                        return (
+                          <button
+                            key={d.id}
+                            type="button"
+                            onClick={() => setSelectedDiag(d.id)}
+                            className={`w-full text-left p-3 rounded-xl border-2 transition-colors flex items-center justify-between gap-2.5 cursor-pointer ${
+                              isPicked
+                                ? 'border-sky-500 bg-sky-500/15'
+                                : isNight
+                                  ? 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}
+                          >
+                            <span className="text-xs sm:text-[13px] font-black leading-snug min-w-0">
+                              {d.labelEn}
+                            </span>
+                            <span
+                              className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                isPicked
+                                  ? 'border-sky-500 bg-sky-500 text-slate-950'
+                                  : isNight
+                                    ? 'border-slate-700'
+                                    : 'border-slate-300'
+                              }`}
+                            >
+                              {isPicked && <Check className="w-3 h-3 stroke-[3]" />}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {step === 'plan' && (
+                  <div className="space-y-3">
+                    {!selectedDiag && (
                       <button
-                        key={t.id}
                         type="button"
-                        onClick={() => setSelectedTx(t.id)}
-                        className={`w-full text-start p-2 rounded-xl border-2 text-xs font-bold cursor-pointer ${
-                          selectedTx === t.id
-                            ? 'border-emerald-500 bg-emerald-500/15'
-                            : isNight
-                              ? 'border-slate-800'
-                              : 'border-slate-200'
+                        onClick={() => setStep('diagnosis')}
+                        className={`w-full p-2.5 rounded-xl border text-xs font-extrabold flex items-center justify-between gap-2 cursor-pointer ${
+                          isNight
+                            ? 'bg-amber-950/45 border-amber-700/70 text-amber-200'
+                            : 'bg-amber-50 border-amber-300 text-amber-900'
                         }`}
                       >
-                        {isAr ? t.labelAr : t.labelEn}
+                        <span>
+                          {isAr
+                            ? 'تنبيه: يرجى تحديد التشخيص (Diagnosis) أولاً'
+                            : 'Reminder: Select a Diagnosis first before submitting'}
+                        </span>
+                        <span className="underline shrink-0">
+                          {isAr ? 'اختر التشخيص' : 'Pick Dx'}
+                        </span>
                       </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                    )}
 
-              {step === 'summary' && evaluationResult && (
-                <div className="space-y-2 text-center">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto">
-                    <ClipboardCheck className="w-5 h-5" />
+                    {/* Primary Treatment Strategy */}
+                    <div className="space-y-2">
+                      <div className="text-xs font-extrabold text-emerald-500">
+                        {isAr ? 'أ. الاستراتيجية العلاجية (Primary Strategy):' : 'A. Primary Treatment Strategy:'}
+                      </div>
+                      <div className="space-y-1.5">
+                        {c.treatmentOptions.map((t) => {
+                          const picked = selectedTx === t.id;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => setSelectedTx(t.id)}
+                              className={`w-full text-start p-2.5 sm:p-3 rounded-xl border-2 flex items-start justify-between gap-2.5 transition-colors cursor-pointer ${
+                                picked
+                                  ? 'border-emerald-500 bg-emerald-500/15'
+                                  : isNight
+                                    ? 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                                    : 'border-slate-200 bg-white hover:border-slate-300'
+                              }`}
+                            >
+                              <div className="min-w-0 space-y-1">
+                                <div dir="ltr" className="text-xs sm:text-[13px] font-black leading-snug text-start">
+                                  {t.labelEn}
+                                </div>
+                                {isAr && (
+                                  <div className="text-[11px] font-medium opacity-75 leading-snug">
+                                    {t.labelAr}
+                                  </div>
+                                )}
+                              </div>
+                              <span
+                                className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 ${
+                                  picked
+                                    ? 'border-emerald-500 bg-emerald-500 text-slate-950'
+                                    : isNight
+                                      ? 'border-slate-700'
+                                      : 'border-slate-300'
+                                }`}
+                              >
+                                {picked && <Check className="w-3 h-3 stroke-[3]" />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Custom Treatment Prescription Builder (Sessions, Frequency, Modalities, Precautions) */}
+                    <div
+                      className={`rounded-xl border p-3 space-y-3 ${
+                        isNight ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-xs font-extrabold text-sky-500">
+                          <SlidersHorizontal className="w-3.5 h-3.5" />
+                          <span>
+                            {isAr
+                              ? 'ب. تفاصيل الجلسات والأجهزة والبرنامج المنزلي'
+                              : 'B. Sessions, Modalities & Home Program'}
+                          </span>
+                        </div>
+                        <span dir="ltr" className="text-[11px] font-mono font-bold opacity-75 tabular-nums">
+                          {plannedSessions}× · {frequencyPerWeek}/wk
+                        </span>
+                      </div>
+
+                      {/* Sessions Count & Weekly Frequency */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div
+                          className={`rounded-lg border px-2.5 py-2 flex items-center justify-between gap-2 ${
+                            isNight ? 'bg-slate-950/70 border-slate-800' : 'bg-white border-slate-200'
+                          }`}
+                        >
+                          <span className="text-[11px] font-extrabold">
+                            {isAr ? 'عدد الجلسات' : 'Sessions'}
+                          </span>
+                          <div dir="ltr" className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setPlannedSessions((v) => Math.max(0, v - 1))}
+                              aria-label="Decrease sessions"
+                              className={`w-7 h-7 rounded-md border flex items-center justify-center cursor-pointer ${
+                                isNight
+                                  ? 'border-slate-700 bg-slate-800 hover:bg-slate-700'
+                                  : 'border-slate-200 bg-slate-100 hover:bg-slate-200'
+                              }`}
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <span className="w-6 text-center text-xs font-mono font-black tabular-nums">
+                              {plannedSessions}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setPlannedSessions((v) => Math.min(20, v + 1))}
+                              aria-label="Increase sessions"
+                              className={`w-7 h-7 rounded-md border flex items-center justify-center cursor-pointer ${
+                                isNight
+                                  ? 'border-slate-700 bg-slate-800 hover:bg-slate-700'
+                                  : 'border-slate-200 bg-slate-100 hover:bg-slate-200'
+                              }`}
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`rounded-lg border px-2.5 py-2 flex items-center justify-between gap-1.5 ${
+                            isNight ? 'bg-slate-950/70 border-slate-800' : 'bg-white border-slate-200'
+                          }`}
+                        >
+                          <span className="text-[11px] font-extrabold">
+                            {isAr ? 'أسبوعياً' : 'Freq/wk'}
+                          </span>
+                          <div dir="ltr" className="flex items-center gap-1">
+                            {([2, 3, 5] as const).map((fq) => (
+                              <button
+                                key={fq}
+                                type="button"
+                                onClick={() => setFrequencyPerWeek(fq)}
+                                className={`h-7 px-2.5 rounded-md text-[10.5px] font-mono font-black border cursor-pointer tabular-nums ${
+                                  frequencyPerWeek === fq
+                                    ? 'bg-sky-500 border-sky-400 text-slate-950'
+                                    : isNight
+                                      ? 'border-slate-700 bg-slate-800 text-slate-300'
+                                      : 'border-slate-200 bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {fq}x
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Quick Session Presets */}
+                      <div dir="ltr" className="flex items-center gap-1.5 flex-wrap">
+                        {[0, 4, 6, 8, 10, 12].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setPlannedSessions(preset)}
+                            className={`h-7 px-2.5 rounded-md text-[10.5px] font-mono font-bold border tabular-nums cursor-pointer ${
+                              plannedSessions === preset
+                                ? 'bg-sky-500/20 border-sky-500 text-sky-400'
+                                : isNight
+                                  ? 'border-slate-800 bg-slate-950/60 text-slate-400 hover:text-slate-200'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {preset === 0 ? '0 (Refer)' : `${preset} sess`}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Equipment & Therapeutic Modalities Multi-Select */}
+                      <div className="space-y-1.5">
+                        <div className="text-[11px] font-extrabold opacity-85">
+                          {isAr
+                            ? 'الأجهزة والوسائل العلاجية المختارة:'
+                            : 'Select Equipment & Modalities:'}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {PRESCRIPTION_MODALITIES.map((mod) => {
+                            const active = selectedModalities.includes(mod.id);
+                            return (
+                              <button
+                                key={mod.id}
+                                type="button"
+                                onClick={() => toggleModality(mod.id)}
+                                className={`rounded-lg border px-2.5 py-2 text-start transition-colors cursor-pointer ${
+                                  active
+                                    ? 'border-emerald-500 bg-emerald-500/15'
+                                    : isNight
+                                      ? 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                                      : 'border-slate-200 bg-white hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1.5">
+                                  <span dir="ltr" className="text-[11.5px] font-black leading-tight">
+                                    {mod.nameEn}
+                                  </span>
+                                  {active && <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
+                                </div>
+                                <div className="text-[10px] opacity-70 leading-snug mt-0.5">
+                                  {isAr ? mod.subAr : mod.subEn}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Home Program / Precautions */}
+                      <div className="space-y-1.5">
+                        <div className="text-[11px] font-extrabold opacity-85">
+                          {isAr ? 'البرنامج المنزلي والاحتياطات (HEP & Precautions):' : 'Home Program & Precautions:'}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {HOME_PRECAUTION_OPTIONS.map((prec) => {
+                            const active = homePrecautions.includes(prec.id);
+                            return (
+                              <button
+                                key={prec.id}
+                                type="button"
+                                onClick={() => togglePrecaution(prec.id)}
+                                className={`rounded-lg border px-2.5 py-2 flex items-center justify-between gap-1.5 text-start cursor-pointer ${
+                                  active
+                                    ? 'border-sky-500 bg-sky-500/15 text-sky-400'
+                                    : isNight
+                                      ? 'border-slate-800 bg-slate-950/50 text-slate-300'
+                                      : 'border-slate-200 bg-white text-slate-700'
+                                }`}
+                              >
+                                <div className="min-w-0 space-y-0.5">
+                                  <div dir="ltr" className="text-[11px] font-black leading-tight text-start">
+                                    {prec.nameEn}
+                                  </div>
+                                  {isAr && (
+                                    <div className="text-[10px] font-medium opacity-70 leading-tight">
+                                      {prec.labelAr}
+                                    </div>
+                                  )}
+                                </div>
+                                {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-sm font-black tabular-nums">
-                    {isAr ? `الدقة السريرية: ${evaluationResult.score}%` : `Accuracy: ${evaluationResult.score}%`}
+                )}
+
+                {step === 'summary' && evaluationResult && (
+                  <div className="space-y-2.5 text-center">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto">
+                      <ClipboardCheck className="w-5 h-5" />
+                    </div>
+                    <div className="text-sm font-black tabular-nums">
+                      {isAr
+                        ? `الدقة السريرية: ${evaluationResult.score}%`
+                        : `Clinical Accuracy: ${evaluationResult.score}%`}
+                    </div>
+                    <div className="flex items-center justify-center gap-3 text-xs font-black tabular-nums">
+                      <span className="flex items-center gap-1 text-amber-500">
+                        <Coins className="w-3.5 h-3.5" />+{evaluationResult.coinsEarned}
+                      </span>
+                      <span className="text-slate-400" aria-hidden="true">·</span>
+                      <span className="flex items-center gap-1 text-sky-500">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />+
+                        {evaluationResult.starsEarned}
+                      </span>
+                    </div>
+
+                    {/* Prescribed Plan Overview */}
+                    <div
+                      className={`rounded-xl border p-3 text-start text-xs space-y-1.5 ${
+                        isNight ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 font-extrabold text-emerald-500">
+                        <span>{isAr ? 'ملخص الخطة المخصصة' : 'Prescribed Plan'}</span>
+                        <span dir="ltr" className="font-mono tabular-nums text-[11px]">
+                          {plannedSessions} sessions · {frequencyPerWeek}x/wk
+                        </span>
+                      </div>
+                      {selectedDiag && (
+                        <div dir="ltr" className="text-xs font-black text-start">
+                          Dx: {c.diagnosisOptions.find((d) => d.id === selectedDiag)?.labelEn}
+                        </div>
+                      )}
+                      {selectedModalities.length > 0 && (
+                        <div dir="ltr" className="text-[11px] font-semibold opacity-85 text-start">
+                          Modalities:{' '}
+                          {selectedModalities
+                            .map((id) => PRESCRIPTION_MODALITIES.find((m) => m.id === id)?.nameEn)
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      )}
+                      <p className="text-[11px] font-semibold opacity-90 pt-0.5 leading-relaxed">
+                        {evaluationResult.prescriptionNote}
+                      </p>
+                    </div>
+
+                    <div
+                      className={`rounded-xl border p-3 text-start text-xs space-y-1 ${
+                        isNight ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-extrabold text-sky-500">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>{isAr ? 'ملاحظة المشرف السريري:' : 'Clinical Mentor Note:'}</span>
+                      </div>
+                      <p className="leading-relaxed opacity-90">{evaluationResult.feedback}</p>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-center gap-3 text-xs font-black tabular-nums">
-                    <span className="flex items-center gap-1 text-amber-500">
-                      <Coins className="w-3.5 h-3.5" />+{evaluationResult.coinsEarned}
-                    </span>
-                    <span className="text-slate-400" aria-hidden="true">·</span>
-                    <span className="flex items-center gap-1 text-sky-500">
-                      <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />+{evaluationResult.starsEarned}
-                    </span>
-                  </div>
-                  <div
-                    className={`rounded-xl border p-2 text-start text-[11px] space-y-1 ${
-                      isNight ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
+                )}
+              </div>
+
+              {/* Footer Stage Navigation */}
+              <div
+                className={`p-2.5 border-t flex items-center gap-2 shrink-0 ${
+                  isNight ? 'border-slate-800 bg-slate-900/95' : 'border-slate-200 bg-slate-50'
+                }`}
+              >
+                {step === 'subjective' && (
+                  <button
+                    type="button"
+                    onClick={() => setStep('redflags')}
+                    className="w-full py-2.5 rounded-xl game-btn-blue text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>{isAr ? 'التالي: فحص التحذيرات' : 'Next: Red Flags'}</span>
+                    {isAr ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                  </button>
+                )}
+
+                {step === 'redflags' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setStep('subjective')}
+                      className={`px-3.5 py-2.5 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                        isNight
+                          ? 'border-slate-700 bg-slate-800 text-slate-200'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      {isAr ? 'السابق' : 'Back'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!redFlagChoice}
+                      onClick={() => setStep('objective')}
+                      className="flex-1 py-2.5 rounded-xl game-btn-blue disabled:opacity-45 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>{isAr ? 'التالي: الفحص السريري (EN)' : 'Next: Clinical Exam'}</span>
+                      {isAr ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                    </button>
+                  </>
+                )}
+
+                {step === 'objective' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setStep('redflags')}
+                      className={`px-3.5 py-2.5 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                        isNight
+                          ? 'border-slate-700 bg-slate-800 text-slate-200'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      {isAr ? 'السابق' : 'Back'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStep('diagnosis')}
+                      className="flex-1 py-2.5 rounded-xl game-btn-blue text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>{isAr ? 'التالي: التشخيص السريري' : 'Next: Clinical Diagnosis'}</span>
+                      {isAr ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                    </button>
+                  </>
+                )}
+
+                {step === 'diagnosis' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setStep('objective')}
+                      className={`px-3.5 py-2.5 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                        isNight
+                          ? 'border-slate-700 bg-slate-800 text-slate-200'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      {isAr ? 'السابق' : 'Back'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!selectedDiag}
+                      onClick={() => setStep('plan')}
+                      className="flex-1 py-2.5 rounded-xl game-btn-blue disabled:opacity-45 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>{isAr ? 'التالي: الخطة العلاجية' : 'Next: Treatment Plan'}</span>
+                      {isAr ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                    </button>
+                  </>
+                )}
+
+                {step === 'plan' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setStep('diagnosis')}
+                      className={`px-3.5 py-2.5 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                        isNight
+                          ? 'border-slate-700 bg-slate-800 text-slate-200'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      {isAr ? 'السابق' : 'Back'}
+                    </button>
+                    {!selectedDiag ? (
+                      <button
+                        type="button"
+                        onClick={() => setStep('diagnosis')}
+                        className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black cursor-pointer"
+                      >
+                        {isAr ? 'اختر التشخيص أولاً ←' : 'Select Diagnosis First'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!selectedTx || evaluating}
+                        onClick={handleSubmitPlan}
+                        className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-45 text-white text-xs font-extrabold cursor-pointer"
+                      >
+                        {evaluating
+                          ? isAr
+                            ? 'جارٍ تقييم الخطة...'
+                            : 'Evaluating Plan...'
+                          : isAr
+                            ? 'اعتماد الخطة ← الخلاصة'
+                            : 'Confirm Plan → Summary'}
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {step === 'summary' && evaluationResult && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!therapyStarted) {
+                        setTherapyStarted(true);
+                        setPanelHidden(true);
+                        setSpeechCaption(
+                          isAr
+                            ? 'تفضل دكتور، أنا مستعد لبدء الجلسة العلاجية.'
+                            : 'Ready whenever you are, doctor.'
+                        );
+                        onPatientSpeak(patient.id, 1800);
+                      } else {
+                        completeActiveSession();
+                      }
+                    }}
+                    className={`w-full py-2.5 rounded-xl text-xs font-black cursor-pointer ${
+                      therapyStarted
+                        ? 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                        : 'game-btn-gold text-slate-950'
                     }`}
                   >
-                    <div className="flex items-center gap-1 font-extrabold text-sky-500">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>{isAr ? 'التقييم الإكلينيكي:' : 'Clinical Note:'}</span>
-                    </div>
-                    <p className="leading-snug opacity-90">{evaluationResult.feedback}</p>
-                  </div>
-                </div>
-              )}
+                    {therapyStarted
+                      ? isAr
+                        ? 'إنهاء الجلسة واحتساب النتيجة ✓'
+                        : 'Complete Session & Claim Rewards ✓'
+                      : isAr
+                        ? 'بدء العلاج وتنفيذ الجلسة ✓'
+                        : 'Start Therapy Session ✓'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Session Completion Confirmation Prompt on Exit after Starting Therapy */}
+      {exitConfirmOpen && (
+        <div
+          dir={isAr ? 'rtl' : 'ltr'}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            className={`w-full max-w-sm rounded-2xl border p-4 sm:p-5 shadow-2xl space-y-3.5 ${surfaceCls}`}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-400/35 text-emerald-500 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 space-y-1">
+                <h3 className="text-sm sm:text-base font-black leading-snug">
+                  {isAr ? 'هل أكملت الجلسة العلاجية؟' : 'Did you complete the therapy session?'}
+                </h3>
+                <p className="text-xs opacity-80 leading-relaxed">
+                  {isAr
+                    ? 'اختر "نعم، أكملت الجلسة" لإنهاء الحالة واحتساب النقاط، أو تابع لتجربة الأجهزة.'
+                    : 'Choose "Yes, Complete Session" to finish and score the case, or continue using devices.'}
+                </p>
+              </div>
             </div>
 
-            {/* Footer Stage Action */}
-            <div
-              className={`p-2 border-t ${
-                isNight ? 'border-slate-800 bg-slate-900/90' : 'border-slate-200 bg-slate-50'
-              }`}
-            >
-              {step === 'subjective' && (
-                <button
-                  type="button"
-                  onClick={() => setStep('redflags')}
-                  className="w-full py-2 rounded-xl game-btn-blue text-white text-xs font-extrabold cursor-pointer"
-                >
-                  {isAr ? 'التالي: التحذيرات ←' : 'Next: Red Flags →'}
-                </button>
-              )}
-              {step === 'redflags' && (
-                <button
-                  type="button"
-                  disabled={!redFlagChoice}
-                  onClick={() => setStep('objective')}
-                  className="w-full py-2 rounded-xl game-btn-blue disabled:opacity-45 text-white text-xs font-extrabold cursor-pointer"
-                >
-                  {isAr ? 'التالي: الفحص السريري ←' : 'Next: Clinical Exam →'}
-                </button>
-              )}
-              {step === 'objective' && (
-                <button
-                  type="button"
-                  onClick={() => setStep('plan')}
-                  className="w-full py-2 rounded-xl game-btn-blue text-white text-xs font-extrabold cursor-pointer"
-                >
-                  {isAr ? 'التالي: التشخيص والعلاج ←' : 'Next: Diagnosis & Plan →'}
-                </button>
-              )}
-              {step === 'plan' && (
-                <button
-                  type="button"
-                  disabled={!selectedDiag || !selectedTx || evaluating}
-                  onClick={handleSubmitPlan}
-                  className="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-45 text-white text-xs font-extrabold cursor-pointer"
-                >
-                  {evaluating
-                    ? isAr
-                      ? 'جارٍ التقييم...'
-                      : 'Evaluating...'
-                    : isAr
-                      ? 'تأكيد الخطة ← العلاج النهائي'
-                      : 'Confirm Plan → Final Therapy'}
-                </button>
-              )}
-              {step === 'summary' && evaluationResult && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onCompleteCase({
-                      patientId: patient.id,
-                      coinsEarned: evaluationResult.coinsEarned,
-                      starsEarned: evaluationResult.starsEarned,
-                      satisfactionDelta: evaluationResult.score >= 80 ? 2 : 0,
-                      caughtRedFlag: evaluationResult.caughtRedFlag,
-                    })
-                  }
-                  className="w-full py-2 rounded-xl game-btn-gold text-slate-950 text-xs font-black cursor-pointer"
-                >
-                  {isAr ? 'بدء العلاج النهائي وإكمال الجلسة ✓' : 'Complete & Start Therapy ✓'}
-                </button>
-              )}
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setExitConfirmOpen(false);
+                  completeActiveSession();
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs sm:text-[13px] font-black flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-colors"
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{isAr ? 'نعم، أكملت الجلسة ✓' : 'Yes, Complete Session ✓'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setExitConfirmOpen(false)}
+                className={`w-full py-2.5 px-4 rounded-xl border text-xs font-extrabold cursor-pointer transition-colors ${
+                  isNight
+                    ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-100'
+                    : 'border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-800'
+                }`}
+              >
+                {isAr ? 'لا، متابعة الجلسة وتجربة الأجهزة' : 'No, Continue Session'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setExitConfirmOpen(false);
+                  onExit();
+                }}
+                className="w-full py-1.5 text-[11px] font-bold opacity-65 hover:opacity-100 hover:text-rose-500 cursor-pointer transition-opacity"
+              >
+                {isAr ? 'خروج دون إكمال الحالة' : 'Exit without completing'}
+              </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
       )}
     </div>
   );

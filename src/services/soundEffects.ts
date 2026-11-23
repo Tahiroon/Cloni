@@ -109,7 +109,7 @@ class SoundEngine {
     input.gain.value = 1.0;
 
     const dryGain = ctx.createGain();
-    dryGain.gain.value = 0.92;
+    dryGain.gain.value = 1.0;
 
     // Tiny pre-computed small clinic room early reflections & damped air tail
     const irLen = Math.floor(ctx.sampleRate * 0.24);
@@ -127,29 +127,40 @@ class SoundEngine {
     const roomConv = ctx.createConvolver();
     roomConv.buffer = irBuf;
     const wetGain = ctx.createGain();
-    wetGain.gain.value = 0.17;
+    wetGain.gain.value = 0.14;
+
+    const presenceEq = ctx.createBiquadFilter();
+    presenceEq.type = 'peaking';
+    presenceEq.frequency.value = 2600;
+    presenceEq.Q.value = 0.85;
+    presenceEq.gain.value = 3.2;
 
     const warmLp = ctx.createBiquadFilter();
     warmLp.type = 'lowpass';
-    warmLp.frequency.value = 5800;
-    warmLp.Q.value = 0.55;
+    warmLp.frequency.value = 11500;
+    warmLp.Q.value = 0.5;
+
+    const preCompGain = ctx.createGain();
+    preCompGain.gain.value = 1.65;
 
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -15;
-    comp.knee.value = 16;
-    comp.ratio.value = 3.0;
-    comp.attack.value = 0.004;
-    comp.release.value = 0.16;
+    comp.threshold.value = -10;
+    comp.knee.value = 10;
+    comp.ratio.value = 3.8;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.14;
 
     const outGain = ctx.createGain();
-    outGain.gain.value = 1.32;
+    outGain.gain.value = 1.55;
 
     input.connect(dryGain);
     input.connect(roomConv);
     roomConv.connect(wetGain);
-    dryGain.connect(warmLp);
-    wetGain.connect(warmLp);
-    warmLp.connect(comp);
+    dryGain.connect(presenceEq);
+    wetGain.connect(presenceEq);
+    presenceEq.connect(warmLp);
+    warmLp.connect(preCompGain);
+    preCompGain.connect(comp);
     comp.connect(outGain);
     outGain.connect(ctx.destination);
 
@@ -264,7 +275,7 @@ class SoundEngine {
       const dcOut = combined - dcX + 0.994 * dcY;
       dcX = combined;
       dcY = dcOut;
-      darkLp = darkLp + 0.26 * (dcOut - darkLp);
+      darkLp = darkLp + 0.46 * (dcOut - darkLp);
 
       // Organic breath envelope: smooth rise, vocal presence earlier, gentle breathy tail
       const att = Math.pow(Math.min(1, tSec / spec.attackSec), 1.3);
@@ -283,9 +294,9 @@ class SoundEngine {
     }
     const buf = ctx.createBuffer(1, n, sr);
     const ch = buf.getChannelData(0);
-    const scale = 0.72 / maxAbs;
+    const scale = 0.84 / maxAbs;
     for (let i = 0; i < n; i++) {
-      ch[i] = Math.tanh(raw[i] * scale * 1.1);
+      ch[i] = Math.tanh(raw[i] * scale * 1.15);
     }
     return buf;
   }
@@ -649,47 +660,47 @@ class SoundEngine {
   tap() {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.1, 1.05);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.24, 1.05);
   }
 
   placeItem() {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.16, 1.15);
-    this.playTone(340, 0.08, 'sine', 0.06, 0.025);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.34, 1.15);
+    this.playTone(340, 0.08, 'sine', 0.15, 0.025);
   }
 
   coin() {
-    this.playTone(987.77, 0.08, 'sine', 0.085, 0);
-    this.playTone(1318.51, 0.15, 'sine', 0.085, 0.055);
+    this.playTone(987.77, 0.09, 'sine', 0.2, 0);
+    this.playTone(1318.51, 0.16, 'sine', 0.21, 0.055);
   }
 
   starSuccess() {
-    this.playTone(523.25, 0.09, 'sine', 0.08, 0);
-    this.playTone(659.25, 0.09, 'sine', 0.08, 0.08);
-    this.playTone(783.99, 0.11, 'sine', 0.08, 0.16);
-    this.playTone(1046.5, 0.2, 'sine', 0.09, 0.24);
+    this.playTone(523.25, 0.09, 'sine', 0.19, 0);
+    this.playTone(659.25, 0.09, 'sine', 0.19, 0.08);
+    this.playTone(783.99, 0.11, 'sine', 0.2, 0.16);
+    this.playTone(1046.5, 0.22, 'sine', 0.22, 0.24);
   }
 
   alert() {
-    this.playTone(340, 0.11, 'triangle', 0.075, 0);
-    this.playTone(280, 0.15, 'triangle', 0.075, 0.1);
+    this.playTone(340, 0.11, 'triangle', 0.19, 0);
+    this.playTone(280, 0.16, 'triangle', 0.19, 0.1);
   }
 
   padStick() {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'pad_stick'), 0.16, 0.96 + Math.random() * 0.08);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'pad_stick'), 0.36, 0.96 + Math.random() * 0.08);
   }
 
   deviceToggle(on: boolean) {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.13, on ? 1.12 : 0.88);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.28, on ? 1.12 : 0.88);
     if (on) {
-      this.playTone(880, 0.06, 'sine', 0.065, 0.02);
+      this.playTone(880, 0.065, 'sine', 0.15, 0.02);
     } else {
-      this.playTone(460, 0.065, 'sine', 0.055, 0.02);
+      this.playTone(460, 0.07, 'sine', 0.13, 0.02);
     }
   }
 
@@ -699,11 +710,11 @@ class SoundEngine {
     this.playBufferOneShot(
       ctx,
       this.getDeviceBuffer(ctx, 'equip_thud'),
-      isRollingCart ? 0.14 : 0.11,
+      isRollingCart ? 0.3 : 0.24,
       isRollingCart ? 1.15 : 1.38
     );
     if (isRollingCart) {
-      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.09, 0.9, 0.018);
+      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.2, 0.9, 0.018);
     }
   }
 
@@ -713,18 +724,18 @@ class SoundEngine {
     this.playBufferOneShot(
       ctx,
       this.getDeviceBuffer(ctx, 'equip_thud'),
-      isRollingCart ? 0.2 : 0.14,
+      isRollingCart ? 0.4 : 0.3,
       isRollingCart ? 0.88 : 1.05
     );
     if (nearBed) {
-      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.11, 0.85, 0.035);
+      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.24, 0.85, 0.035);
     }
   }
 
   fppEquipReturn() {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.1, 1.25);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.24, 1.25);
   }
 
   fppEquipAdjust(timeSec: number) {
@@ -732,7 +743,7 @@ class SoundEngine {
     this.lastAdjustCueAt = timeSec;
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.055, 0.72);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.15, 0.72);
   }
 
   syncFppEquipMove(isMovingHeld: boolean, speed01: number, isRollingCart: boolean, timeSec: number) {
@@ -759,7 +770,7 @@ class SoundEngine {
 
       const rollLp = ctx.createBiquadFilter();
       rollLp.type = 'lowpass';
-      rollLp.frequency.value = 280;
+      rollLp.frequency.value = 520;
       rollLp.Q.value = 0.65;
 
       src.connect(rollLp);
@@ -782,9 +793,9 @@ class SoundEngine {
       return;
     }
 
-    const baseVol = isRollingCart ? 0.042 + clampedSpd * 0.13 : 0.012 + clampedSpd * 0.03;
+    const baseVol = isRollingCart ? 0.11 + clampedSpd * 0.24 : 0.035 + clampedSpd * 0.08;
     em.masterGain.gain.setTargetAtTime(baseVol, now, 0.045);
-    em.rollLp.frequency.setTargetAtTime((isRollingCart ? 210 : 320) + clampedSpd * 240, now, 0.05);
+    em.rollLp.frequency.setTargetAtTime((isRollingCart ? 420 : 560) + clampedSpd * 420, now, 0.05);
   }
 
   private disposeEquipMove(ctx: AudioContext | null) {
@@ -878,15 +889,15 @@ class SoundEngine {
       this.lastVoiceSpikeAt = timeSec;
       if (lvl >= 0.88) {
         clipKey = `${prefix}groan_${this.voiceVariantIdx}`;
-        vol = Math.min(0.4, 0.28 + lvl * 0.1);
+        vol = Math.min(0.68, 0.48 + lvl * 0.16);
         nextDelay = 2.0 + Math.random() * 0.7;
       } else if (lvl >= 0.68) {
         clipKey = input.kind === 'percussion' || input.kind === 'cold' ? `${prefix}gasp` : `${prefix}wince_${this.voiceVariantIdx}`;
-        vol = 0.25 + (lvl - 0.68) * 0.25;
+        vol = 0.42 + (lvl - 0.68) * 0.4;
         nextDelay = 2.4 + Math.random() * 0.8;
       } else {
         clipKey = `${prefix}sigh_mild`;
-        vol = 0.16 + (lvl - 0.45) * 0.18;
+        vol = 0.3 + (lvl - 0.45) * 0.3;
         nextDelay = 3.0 + Math.random() * 0.9;
       }
       this.nextVoiceAt = timeSec + nextDelay;
@@ -896,19 +907,19 @@ class SoundEngine {
 
     if (lvl >= 0.92) {
       clipKey = `${prefix}groan_${this.voiceVariantIdx}`;
-      vol = Math.min(0.38, 0.26 + (lvl - 0.9) * 0.28);
+      vol = Math.min(0.65, 0.46 + (lvl - 0.9) * 0.45);
       nextDelay = 2.0 + Math.random() * 0.75;
     } else if (lvl >= 0.72) {
       clipKey = `${prefix}wince_${this.voiceVariantIdx}`;
-      vol = 0.21 + (lvl - 0.72) * 0.28;
+      vol = 0.38 + (lvl - 0.72) * 0.42;
       nextDelay = 2.4 + Math.random() * 0.9;
     } else if (lvl >= 0.44) {
       clipKey = this.voiceVariantIdx === 0 ? `${prefix}sigh_mild` : `${prefix}breath_soft`;
-      vol = 0.14 + (lvl - 0.44) * 0.18;
+      vol = 0.28 + (lvl - 0.44) * 0.32;
       nextDelay = 3.2 + Math.random() * 1.1;
     } else {
       clipKey = `${prefix}breath_soft`;
-      vol = 0.08 + (lvl - 0.25) * 0.14;
+      vol = 0.18 + (lvl - 0.25) * 0.26;
       nextDelay = 4.6 + Math.random() * 1.5;
     }
 
@@ -939,7 +950,7 @@ class SoundEngine {
       fanSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(380, now);
+      lp.frequency.setValueAtTime(780, now);
       fanSrc.connect(lp);
       lp.connect(masterGain);
       fanSrc.start(now);
@@ -955,7 +966,7 @@ class SoundEngine {
       compSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(360, now);
+      lp.frequency.setValueAtTime(720, now);
       compSrc.connect(lp);
       lp.connect(masterGain);
       compSrc.start(now);
@@ -971,7 +982,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(720, now);
+      lp.frequency.setValueAtTime(1350, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -987,7 +998,7 @@ class SoundEngine {
       fanSrc.loop = true;
       const bp = ctx.createBiquadFilter();
       bp.type = 'bandpass';
-      bp.frequency.setValueAtTime(520, now);
+      bp.frequency.setValueAtTime(780, now);
       bp.Q.setValueAtTime(0.75, now);
 
       const pulseOsc = ctx.createOscillator();
@@ -1017,7 +1028,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(sprite === 'cryo_unit' ? 680 : 480, now);
+      lp.frequency.setValueAtTime(sprite === 'cryo_unit' ? 1250 : 900, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1033,7 +1044,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(480, now);
+      lp.frequency.setValueAtTime(920, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1049,7 +1060,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(220, now);
+      lp.frequency.setValueAtTime(520, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1065,7 +1076,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(sprite === 'hydro_sink' ? 1850 : 320, now);
+      lp.frequency.setValueAtTime(sprite === 'hydro_sink' ? 2600 : 680, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1096,7 +1107,7 @@ class SoundEngine {
       humSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(240, now);
+      lp.frequency.setValueAtTime(540, now);
 
       const coilOsc = ctx.createOscillator();
       coilOsc.type = 'sine';
@@ -1125,7 +1136,7 @@ class SoundEngine {
       motorSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(320, now);
+      lp.frequency.setValueAtTime(680, now);
       motorSrc.connect(lp);
       lp.connect(masterGain);
       motorSrc.start(now);
@@ -1159,7 +1170,7 @@ class SoundEngine {
         src.buffer = shotBuf;
         src.playbackRate.value = 0.94 + bar01 * 0.14;
         const g = ctx.createGain();
-        g.gain.value = 0.15 + bar01 * 0.18;
+        g.gain.value = 0.3 + bar01 * 0.28;
         src.connect(g);
         g.connect(out);
         src.start(pt);
@@ -1192,7 +1203,7 @@ class SoundEngine {
           src.buffer = tickBuf;
           src.playbackRate.value = 0.92 + Math.min(0.28, rawHz / 450);
           const g = ctx.createGain();
-          g.gain.value = (0.025 + ma01 * 0.082) * contactMul * gate;
+          g.gain.value = (0.065 + ma01 * 0.16) * contactMul * gate;
           src.connect(g);
           g.connect(out);
           src.start(pt);
@@ -1209,7 +1220,7 @@ class SoundEngine {
         const w01 = (watts - 2) / 13;
         h.pulseOsc.frequency.setValueAtTime(1440 + w01 * 160, pt);
         h.pulseGain.gain.setValueAtTime(0.0002, pt);
-        h.pulseGain.gain.linearRampToValueAtTime(0.022 + w01 * 0.016, pt + 0.008);
+        h.pulseGain.gain.linearRampToValueAtTime(0.055 + w01 * 0.04, pt + 0.008);
         h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.055);
         h.nextPulseAt += period;
       }
@@ -1224,7 +1235,7 @@ class SoundEngine {
         if (item.placedCount > 0 && emgWave > thr01 * 0.85) {
           h.pulseOsc.frequency.setValueAtTime(560 + emgWave * 280, pt);
           h.pulseGain.gain.setValueAtTime(0.0002, pt);
-          h.pulseGain.gain.linearRampToValueAtTime(0.04, pt + 0.015);
+          h.pulseGain.gain.linearRampToValueAtTime(0.11, pt + 0.015);
           h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.12);
         }
         h.nextPulseAt += period;
@@ -1235,7 +1246,7 @@ class SoundEngine {
       while (h.nextPulseAt <= lookahead) {
         const pt = h.nextPulseAt;
         h.pulseGain.gain.setValueAtTime(0.0002, pt);
-        h.pulseGain.gain.linearRampToValueAtTime(0.036, pt + 0.012);
+        h.pulseGain.gain.linearRampToValueAtTime(0.1, pt + 0.012);
         h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.14);
         h.nextPulseAt += period;
       }
@@ -1263,7 +1274,7 @@ class SoundEngine {
         } else if (mode === 'CONT') {
           gate = 0.65;
         }
-        const peakVol = (0.01 + mT01 * 0.026) * gate;
+        const peakVol = (0.035 + mT01 * 0.065) * gate;
         h.pulseOsc.frequency.setValueAtTime(92 + mT01 * 28, pt);
         h.pulseGain.gain.setValueAtTime(0.0002, pt);
         h.pulseGain.gain.linearRampToValueAtTime(peakVol, pt + 0.014);
@@ -1280,11 +1291,11 @@ class SoundEngine {
     if (h.sprite === 'tens_unit') {
       const ma = Math.max(2, Math.min(60, Number(p?.intensity ?? 16)));
       const ma01 = (ma - 2) / 58;
-      h.masterGain.gain.setTargetAtTime(0.008 + ma01 * 0.012, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.025 + ma01 * 0.025, now, 0.05);
     } else if (h.sprite === 'shockwave_eswt') {
       const bar = Math.max(1, Math.min(5, Number(p?.intensity ?? 2.4)));
       const bar01 = (bar - 1) / 4;
-      h.masterGain.gain.setTargetAtTime(0.048 + bar01 * 0.048, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.1 + bar01 * 0.09, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.92 + bar01 * 0.18, now, 0.05);
     } else if (h.sprite === 'ultrasound_unit') {
       const w = Math.max(0.2, Math.min(2.5, Number(p?.intensity ?? 1.2)));
@@ -1296,55 +1307,55 @@ class SoundEngine {
         dutyGate = phase < duty / 100 ? 1.0 : 0.3;
       }
       const contactMul = item.placedCount > 0 ? 1.0 : 0.45;
-      h.masterGain.gain.setTargetAtTime((0.036 + w01 * 0.044) * dutyGate * contactMul, now, 0.04);
+      h.masterGain.gain.setTargetAtTime((0.09 + w01 * 0.1) * dutyGate * contactMul, now, 0.04);
       h.src1?.playbackRate.setTargetAtTime(Number(p?.freqHz ?? 1) > 2 ? 1.12 : 0.96, now, 0.05);
     } else if (h.sprite === 'laser_hilt') {
       const watts = Math.max(2, Math.min(15, Number(p?.intensity ?? 10)));
       const w01 = (watts - 2) / 13;
-      h.masterGain.gain.setTargetAtTime(0.034 + w01 * 0.028, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.08 + w01 * 0.06, now, 0.05);
     } else if (h.sprite === 'swd_unit') {
       const watts = Math.max(20, Math.min(250, Number(p?.intensity ?? 120)));
       const w01 = (watts - 20) / 230;
       const isPulsed = p?.mode === 'PULSED';
       const pulseGate = isPulsed ? (Math.sin(timeSec * Math.PI * 8) > 0 ? 1.0 : 0.45) : 1.0;
-      h.masterGain.gain.setTargetAtTime((0.038 + w01 * 0.044) * pulseGate, now, 0.04);
+      h.masterGain.gain.setTargetAtTime((0.09 + w01 * 0.1) * pulseGate, now, 0.04);
     } else if (h.sprite === 'cryo_unit') {
       const mmHg = Math.max(20, Math.min(75, Number(p?.pressureMmHg ?? 45)));
       const mm01 = (mmHg - 20) / 55;
       const flowMul = p?.flow === 'HIGH' ? 1.15 : p?.flow === 'LOW' ? 0.74 : 0.94;
-      h.masterGain.gain.setTargetAtTime((0.048 + mm01 * 0.05) * flowMul, now, 0.05);
+      h.masterGain.gain.setTargetAtTime((0.11 + mm01 * 0.1) * flowMul, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.9 + mm01 * 0.18, now, 0.05);
     } else if (h.sprite === 'cpm_device') {
       const speed = Math.max(1, Math.min(4, Number(p?.speed ?? 2)));
       const cycleRate = 0.65 + speed * 0.35;
       const strokeVel = Math.abs(Math.sin(timeSec * cycleRate));
-      h.masterGain.gain.setTargetAtTime(0.042 + speed * 0.012 + strokeVel * 0.022, now, 0.04);
+      h.masterGain.gain.setTargetAtTime(0.1 + speed * 0.028 + strokeVel * 0.05, now, 0.04);
       h.src1?.playbackRate.setTargetAtTime(0.86 + speed * 0.06 + strokeVel * 0.14, now, 0.04);
     } else if (h.sprite === 'infrared_lamp') {
       const ir = Math.max(0.1, Math.min(1, item.irIntensity ?? 0.85));
-      h.masterGain.gain.setTargetAtTime(0.012 + ir * 0.015, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.045 + ir * 0.055, now, 0.05);
     } else if (h.sprite === 'hydro_sink' || h.sprite === 'paraffin_bath') {
       const temp = Number(p?.tempC ?? (h.sprite === 'hydro_sink' ? 74 : 53));
       const t01 = h.sprite === 'hydro_sink' ? (temp - 65) / 15 : (temp - 48) / 10;
       h.masterGain.gain.setTargetAtTime(
-        (h.sprite === 'hydro_sink' ? 0.072 : 0.03) + Math.max(0, Math.min(1, t01)) * 0.04,
+        (h.sprite === 'hydro_sink' ? 0.16 : 0.075) + Math.max(0, Math.min(1, t01)) * 0.085,
         now,
         0.05
       );
     } else if (h.sprite === 'emg_biofeedback' || h.sprite === 'balance_trainer') {
-      h.masterGain.gain.setTargetAtTime(0.008, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.025, now, 0.05);
     } else if (h.sprite === 'magnetotherapy') {
       const mT = Math.max(10, Math.min(100, Number(p?.intensity ?? 45)));
       const mT01 = (mT - 10) / 90;
       const zone = p?.magnetZone ?? 'SCAN';
       const speed = Math.max(1, Math.min(3, Number(p?.speed ?? 2)));
-      const scanGlide = zone === 'SCAN' ? 0.005 + speed * 0.002 : 0;
-      h.masterGain.gain.setTargetAtTime(0.012 + mT01 * 0.014 + scanGlide, now, 0.06);
-      h.filter1?.frequency.setTargetAtTime(210 + mT01 * 110 + (zone === 'SCAN' ? 40 : 0), now, 0.08);
+      const scanGlide = zone === 'SCAN' ? 0.015 + speed * 0.006 : 0;
+      h.masterGain.gain.setTargetAtTime(0.04 + mT01 * 0.04 + scanGlide, now, 0.06);
+      h.filter1?.frequency.setTargetAtTime(420 + mT01 * 180 + (zone === 'SCAN' ? 70 : 0), now, 0.08);
     } else if (h.sprite === 'tilt_table') {
       const spd = Math.max(1, Math.min(3, Number(p?.speed ?? 2)));
       const motorActive = Boolean(item.isMoving);
-      h.masterGain.gain.setTargetAtTime(motorActive ? 0.028 + spd * 0.011 : 0.0002, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(motorActive ? 0.08 + spd * 0.03 : 0.0002, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.76 + spd * 0.11, now, 0.05);
     }
 
