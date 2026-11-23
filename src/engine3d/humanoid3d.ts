@@ -4034,7 +4034,8 @@ export function animateHumanoid3D(
       rig.mouthSeam.scale.set(1 + hsSmile * 0.06, 1, 1);
       rig.mouthSeam.rotation.x = -hsSmile * 0.12 + effDiscomfort * 0.14;
     } else {
-      const gaspDrop = (sSpike * 0.0024 + highDiscomfort * 0.0012);
+      const screamJawDrop = THREE.MathUtils.clamp((sLvl - 0.82) / 0.32, 0, 1) * 0.0042;
+      const gaspDrop = (sSpike * 0.003 + highDiscomfort * 0.0014 + screamJawDrop);
       rig.mouthLower.position.y = hsSmile * 0.0007 - gaspDrop;
       rig.mouthSeam.position.y = hsSmile * 0.0004 - gaspDrop * 0.35;
       rig.mouthSeam.scale.set(1 + hsSmile * 0.10 - effDiscomfort * 0.05, 1, 1);
@@ -4073,9 +4074,13 @@ export function animateHumanoid3D(
         : Math.max(0, Math.sin(timeSec * 0.65) - 0.55) * 0.22) *
         calmFactor +
       hsSmile * 0.14;
-    const stimSquintBoost = effDiscomfort * 0.42 + sSpike * 0.36;
-    const stimFrownBoost = effDiscomfort * 0.44 + highDiscomfort * 0.26 + sSpike * 0.22;
-    const stimGaspJaw = !speakingActive ? Math.min(0.32, sSpike * 0.24 + highDiscomfort * 0.12) : 0;
+    const stimSquintBoost = effDiscomfort * 0.44 + sSpike * 0.36;
+    const stimFrownBoost = effDiscomfort * 0.46 + highDiscomfort * 0.28 + sSpike * 0.24;
+    const screamJaw = THREE.MathUtils.clamp((sLvl - 0.82) / 0.32, 0, 1);
+    const screamOpen = screamJaw * (0.42 + 0.14 * Math.abs(Math.sin(timeSec * 14.5)));
+    const stimGaspJaw = !speakingActive
+      ? Math.min(0.68, sSpike * 0.34 + highDiscomfort * 0.14 + screamOpen)
+      : 0;
 
     if (isRocketbox) {
       // Microsoft Rocketbox ARKit (AK_*) + Oculus Viseme (AA_VI_*) blendshapes
@@ -4293,12 +4298,13 @@ export function animateHumanoid3D(
         dampMorphTarget(rig, 'h_expressions.JawCompress_h', 0, 14, frameDt);
       } else {
         const restBreathPart = !hsSmile ? (0.018 + Math.max(0, breathWave) * 0.018 + painIntensity * 0.025) * (1 - hsSmile) : 0;
-        const clenchAmt = Math.min(0.42, highDiscomfort * 0.34 + sSpike * 0.25);
-        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', Math.max(stimGaspJaw, restBreathPart), 16, frameDt);
-        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', Math.max(stimGaspJaw, restBreathPart), 16, frameDt);
+        const screamClenchSuppress = Math.max(0, 1 - THREE.MathUtils.clamp((sLvl - 0.82) / 0.2, 0, 1));
+        const clenchAmt = Math.min(0.42, highDiscomfort * 0.34 + sSpike * 0.25) * screamClenchSuppress;
+        dampMorphTarget(rig, 'h_expressions.MouthOpen_h', Math.max(stimGaspJaw, restBreathPart), 18, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_MouthOpen_h', Math.max(stimGaspJaw, restBreathPart), 18, frameDt);
         dampMorphTarget(rig, 'h_expressions.JawCompress_h', clenchAmt, 14, frameDt);
-        dampMorphTarget(rig, 'h_expressions.AE_AA_h', stimGaspJaw * 0.42, 16, frameDt);
-        dampMorphTarget(rig, 'h_teeth.t_AE_AA_h', stimGaspJaw * 0.42, 16, frameDt);
+        dampMorphTarget(rig, 'h_expressions.AE_AA_h', stimGaspJaw * 0.62, 16, frameDt);
+        dampMorphTarget(rig, 'h_teeth.t_AE_AA_h', stimGaspJaw * 0.62, 16, frameDt);
         dampMorphTarget(rig, 'h_expressions.AO_a_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_teeth.t_AO_a_h', 0, 14, frameDt);
         dampMorphTarget(rig, 'h_expressions.Ax_E_h', 0, 14, frameDt);

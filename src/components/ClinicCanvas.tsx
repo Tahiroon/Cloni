@@ -8739,11 +8739,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 const hz = Number(dp.freqHz ?? 80);
                 const us = Number(dp.pulseUs ?? 180);
                 const mode = String(dp.mode ?? 'CONV');
-                // <=26 mA is normal therapeutic sensory/motor range (<=0.25); >34 mA escalates noticeably
+                // <=26 mA is normal therapeutic sensory/motor range (<=0.25); >=44 mA enters severe pain/scream zone
                 const maNorm =
                   mA <= 26
                     ? THREE.MathUtils.clamp((mA - 4) / 88, 0.02, 0.25)
-                    : THREE.MathUtils.clamp(0.25 + ((mA - 26) / 34) * 0.92, 0.25, 1.17);
+                    : THREE.MathUtils.clamp(0.25 + ((mA - 26) / 34) * 0.98, 0.25, 1.23);
                 const pwMul = 0.88 + 0.22 * THREE.MathUtils.clamp(us / 300, 0, 1.4);
                 contrib = maNorm * padFactor * pwMul;
                 if (mode === 'BURST') {
@@ -8759,10 +8759,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               } else if (eq.sprite === 'shockwave_eswt' && placedCount >= 1) {
                 const bar = Number(dp.intensity ?? 2.2);
                 const hz = Number(dp.freqHz ?? 10);
+                const hzBoost = hz >= 14 ? ((hz - 14) / 7) * 0.12 : 0;
                 contrib =
                   bar <= 2.6
                     ? THREE.MathUtils.clamp((bar - 0.8) / 7.2, 0.05, 0.25)
-                    : THREE.MathUtils.clamp(0.25 + ((bar - 2.6) / 2.2) * 0.9, 0.25, 1.15);
+                    : THREE.MathUtils.clamp(0.25 + ((bar - 2.6) / 2.2) * 0.92 + hzBoost, 0.25, 1.22);
                 pulseW = Math.pow(Math.max(0, Math.sin(tSec * Math.PI * hz)), 6);
                 rKind = 'percussion';
               } else if (eq.sprite === 'ultrasound_unit' && placedCount >= 1) {
@@ -8770,41 +8771,44 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 const duty = Number(dp.dutyPct ?? 100) / 100;
                 const base =
                   wCm2 <= 1.5
-                    ? Math.max(0.04, (wCm2 - 0.2) * 0.14)
-                    : 0.18 + ((wCm2 - 1.5) / 1.0) * 0.65;
-                contrib = THREE.MathUtils.clamp(base * (0.4 + 0.6 * duty), 0.04, 0.88);
+                    ? Math.max(0.04, (wCm2 - 0.2) * 0.15)
+                    : 0.2 + ((wCm2 - 1.5) / 0.9) * 0.95;
+                contrib = THREE.MathUtils.clamp(base * (0.36 + 0.64 * duty), 0.04, 1.15);
                 pulseW = 0.25;
                 rKind = 'thermal';
               } else if (eq.sprite === 'laser_hilt' && placedCount >= 1) {
                 const watts = Number(dp.intensity ?? 8);
                 contrib =
                   watts <= 10
-                    ? THREE.MathUtils.clamp(watts / 45, 0.05, 0.22)
-                    : THREE.MathUtils.clamp(0.22 + ((watts - 10) / 5) * 0.48, 0.22, 0.7);
+                    ? THREE.MathUtils.clamp(watts / 44, 0.05, 0.23)
+                    : THREE.MathUtils.clamp(0.23 + ((watts - 10) / 5) * 0.87, 0.23, 1.10);
                 pulseW = 0.2;
                 rKind = 'thermal';
               } else if (eq.sprite === 'infrared_lamp') {
-                const closeness = THREE.MathUtils.clamp((0.68 - eq.irDistance) / 0.34, 0.05, 1.15);
-                contrib = eq.irIntensity * closeness * 0.72;
+                // Safe 45-65cm feels gently warm; <=42cm at high intensity burns skin -> crosses >0.90 scream threshold!
+                const closeness = THREE.MathUtils.clamp((0.72 - eq.irDistance) / 0.34, 0.05, 1.06);
+                const closeBurn = eq.irDistance <= 0.44 ? ((0.44 - eq.irDistance) / 0.08) * 0.46 : 0;
+                contrib = THREE.MathUtils.clamp(eq.irIntensity * (closeness * 0.78 + closeBurn), 0.04, 1.22);
                 pulseW = 0.15;
                 rKind = 'thermal';
               } else if (eq.sprite === 'swd_unit') {
                 const watts = Number(dp.intensity ?? 80);
                 const pulsed = String(dp.mode ?? 'CONT') === 'PULSED';
                 const wBase =
-                  watts <= 140
-                    ? watts / 540
-                    : 0.26 + ((watts - 140) / 110) * 0.56;
-                contrib = THREE.MathUtils.clamp(wBase * (pulsed ? 0.65 : 1), 0.06, 0.82);
+                  watts <= 120
+                    ? watts / 480
+                    : 0.25 + ((watts - 120) / 80) * 0.92;
+                contrib = THREE.MathUtils.clamp(wBase * (pulsed ? 0.62 : 1), 0.06, 1.17);
                 pulseW = pulsed ? Math.max(0, Math.sin(tSec * 9)) * 0.5 : 0.2;
                 rKind = 'thermal';
               } else if (eq.sprite === 'cryo_unit' && placedCount >= 1) {
                 const tempC = Number(dp.tempC ?? 6);
                 const mmHg = Number(dp.pressureMmHg ?? 45);
-                const coldNorm = THREE.MathUtils.clamp((10 - tempC) / 14, 0.06, 1);
-                const pressNorm = THREE.MathUtils.clamp((mmHg - 15) / 70, 0.05, 1);
-                const extremeBoost = (tempC <= 1 ? 0.2 : 0) + (mmHg >= 65 ? 0.16 : 0);
-                contrib = coldNorm * 0.32 + pressNorm * 0.3 + extremeBoost;
+                const flowBoost = dp.flow === 'HIGH' ? 0.16 : 0;
+                const coldNorm = THREE.MathUtils.clamp((10 - tempC) / 11, 0.06, 1);
+                const pressNorm = THREE.MathUtils.clamp((mmHg - 15) / 55, 0.05, 1);
+                const extremeBoost = (tempC <= 2 ? 0.28 : 0) + (mmHg >= 65 ? 0.2 : 0) + flowBoost;
+                contrib = THREE.MathUtils.clamp(coldNorm * 0.34 + pressNorm * 0.32 + extremeBoost, 0.06, 1.14);
                 pulseW = 0.35 + 0.35 * Math.sin(tSec * 1.1);
                 rKind = 'cold';
               } else if (eq.sprite === 'hydro_sink' && placedCount >= 1) {
@@ -8812,7 +8816,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 contrib =
                   tempC <= 75
                     ? THREE.MathUtils.clamp((tempC - 58) / 68, 0.08, 0.25)
-                    : THREE.MathUtils.clamp(0.25 + ((tempC - 75) / 6) * 0.55, 0.25, 0.8);
+                    : THREE.MathUtils.clamp(0.25 + ((tempC - 75) / 3) * 0.80, 0.25, 1.05);
                 pulseW = 0.18;
                 rKind = 'thermal';
               } else if (eq.sprite === 'cpm_device') {
@@ -8821,8 +8825,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 contrib =
                   flexDeg <= 75
                     ? THREE.MathUtils.clamp((flexDeg - 30) / 160, 0.06, 0.28)
-                    : THREE.MathUtils.clamp(0.28 + ((flexDeg - 75) / 45) * 0.62, 0.28, 0.9) *
-                      (0.78 + 0.22 * (speed / 4));
+                    : THREE.MathUtils.clamp(0.28 + ((flexDeg - 75) / 45) * 0.86, 0.28, 1.14) *
+                      (0.82 + 0.18 * (speed / 4));
                 pulseW = 0.5 + 0.5 * Math.sin(tSec * (0.65 + speed * 0.45));
                 rKind = 'stretch';
               } else if (eq.sprite === 'emg_biofeedback' && placedCount >= 1) {
@@ -8991,13 +8995,17 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
         const stimDelta = totalStim - fppStimState.prevLevel;
         const stepJump = totalStim - fppStimState.lastVoiceLevel;
-        // Only trigger an active flinch/reaction spike when stimulation enters noticeably strong/excessive territory
-        if ((stimDelta > 0.12 || stepJump >= 0.16) && totalStim >= 0.48) {
+        const crossedOverdose = totalStim >= 0.86 && fppStimState.lastVoiceLevel < 0.86;
+        // Trigger flinch/cry immediately when entering overdose OR stepping up into discomfort
+        if (crossedOverdose || ((stimDelta > 0.08 || stepJump >= 0.13) && totalStim >= 0.44)) {
           const mag = Math.max(stimDelta, stepJump);
-          fppStimState.spike = Math.max(fppStimState.spike, Math.min(1, 0.48 + mag * 1.3));
+          fppStimState.spike = Math.max(
+            fppStimState.spike,
+            crossedOverdose ? 1.0 : Math.min(1, 0.5 + mag * 1.4)
+          );
           fppStimState.lastVoiceLevel = totalStim;
         }
-        fppStimState.spike = Math.max(0, fppStimState.spike - dt * 2.5);
+        fppStimState.spike = Math.max(0, fppStimState.spike - dt * 2.3);
         fppStimState.prevLevel = THREE.MathUtils.damp(fppStimState.prevLevel, totalStim, 8, dt);
         fppStimState.level = totalStim;
         fppStimState.pulse = domPulseVal;

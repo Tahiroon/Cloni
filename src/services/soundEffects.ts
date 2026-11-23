@@ -43,9 +43,10 @@ interface EquipMoveHandle {
 interface ActiveVoicePlayback {
   src: AudioBufferSourceNode;
   gain: GainNode;
+  isScream: boolean;
 }
 
-const VOICE_SR = 24000;
+const VOICE_SR = 28000;
 const SFX_SR = 32000;
 
 interface VoiceSynthSpec {
@@ -53,14 +54,20 @@ interface VoiceSynthSpec {
   f0Start: number;
   f0Peak: number;
   f0End: number;
+  peakAt?: number;
+  doubleCry?: boolean;
   f1Start: number;
   f1End: number;
   f2Start: number;
   f2End: number;
+  f3: number;
+  f4: number;
   bw1: number;
   bw2: number;
+  bw3: number;
   voiceMix: number;
   breathMix: number;
+  strain: number; // 0 = relaxed breath/sigh, 0.5 = sharp pain wince, 0.95 = full pressed overdose scream
   attackSec: number;
   isInhale?: boolean;
 }
@@ -68,6 +75,8 @@ interface VoiceSynthSpec {
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private masterBus: GainNode | null = null;
+  private voiceBus: GainNode | null = null;
+  private deviceBus: GainNode | null = null;
   private bufferCache = new Map<string, AudioBuffer>();
   private activeDevices = new Map<string, DeviceAudioHandle>();
   private equipMove: EquipMoveHandle | null = null;
@@ -78,7 +87,9 @@ class SoundEngine {
   private lastAdjustCueAt = -1;
   private nextVoiceAt = 0;
   private lastVoiceSpikeAt = -1;
+  private voiceDuckUntil = 0;
   private voiceVariantIdx = 0;
+  private screamVariantIdx = 0;
   public enabled = true;
 
   private getCtx(): AudioContext | null {
@@ -97,75 +108,114 @@ class SoundEngine {
     return this.ctx;
   }
 
-  /**
-   * Shared warm clinic-room bus: dry signal + subtle 0.24s small-room reflections -> gentle warmth LP + limiter.
-   * Gives every device, wheel, and patient breath natural physical room presence instead of bone-dry synth audio.
-   */
-  private getMasterBus(ctx: AudioContext): AudioNode {
-    if (this.masterBus && this.masterBus.context === ctx) {
-      return this.masterBus;
+  private ensureBuses(ctx: AudioContext) {
+    if (this.masterBus && this.masterBus.context === ctx && this.voiceBus && this.deviceBus) {
+      return;
     }
-    const input = ctx.createGain();
-    input.gain.value = 1.0;
+
+    // Main clinic master bus: warm small room + clean presence + transparent safety limiter
+    const masterIn = ctx.createGain();
+    masterIn.gain.value = 1.0;
 
     const dryGain = ctx.createGain();
     dryGain.gain.value = 1.0;
 
-    // Tiny pre-computed small clinic room early reflections & damped air tail
-    const irLen = Math.floor(ctx.sampleRate * 0.24);
+    // Subtle natural clinic room early reflections (0.18s damped air)
+    const irLen = Math.floor(ctx.sampleRate * 0.18);
     const irBuf = ctx.createBuffer(1, irLen, ctx.sampleRate);
     const irData = irBuf.getChannelData(0);
     let irLp = 0;
     for (let i = 0; i < irLen; i++) {
       const t = i / ctx.sampleRate;
-      const env = Math.exp(-t / 0.068);
-      const early = i === 180 || i === 420 || i === 790 ? 0.35 : 0;
-      const raw = (Math.random() * 2 - 1) * env * 0.28 + early;
-      irLp = irLp + 0.22 * (raw - irLp);
+      const env = Math.exp(-t / 0.052);
+      const early = i === 140 || i === 330 || i === 610 ? 0.28 : 0;
+      const raw = (Math.random() * 2 - 1) * env * 0.22 + early;
+      irLp = irLp + 0.26 * (raw - irLp);
       irData[i] = irLp;
     }
     const roomConv = ctx.createConvolver();
     roomConv.buffer = irBuf;
     const wetGain = ctx.createGain();
-    wetGain.gain.value = 0.14;
-
-    const presenceEq = ctx.createBiquadFilter();
-    presenceEq.type = 'peaking';
-    presenceEq.frequency.value = 2600;
-    presenceEq.Q.value = 0.85;
-    presenceEq.gain.value = 3.2;
+    wetGain.gain.value = 0.09;
 
     const warmLp = ctx.createBiquadFilter();
     warmLp.type = 'lowpass';
-    warmLp.frequency.value = 11500;
-    warmLp.Q.value = 0.5;
-
-    const preCompGain = ctx.createGain();
-    preCompGain.gain.value = 1.65;
+    warmLp.frequency.value = 13500;
+    warmLp.Q.value = 0.55;
 
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -10;
-    comp.knee.value = 10;
-    comp.ratio.value = 3.8;
-    comp.attack.value = 0.003;
-    comp.release.value = 0.14;
+    comp.threshold.value = -8;
+    comp.knee.value = 8;
+    comp.ratio.value = 3.5;
+    comp.attack.value = 0.002;
+    comp.release.value = 0.12;
 
     const outGain = ctx.createGain();
-    outGain.gain.value = 1.55;
+    outGain.gain.value = 1.38;
 
-    input.connect(dryGain);
-    input.connect(roomConv);
+    masterIn.connect(dryGain);
+    masterIn.connect(roomConv);
     roomConv.connect(wetGain);
-    dryGain.connect(presenceEq);
-    wetGain.connect(presenceEq);
-    presenceEq.connect(warmLp);
-    warmLp.connect(preCompGain);
-    preCompGain.connect(comp);
+    dryGain.connect(warmLp);
+    wetGain.connect(warmLp);
+    warmLp.connect(comp);
     comp.connect(outGain);
     outGain.connect(ctx.destination);
 
-    this.masterBus = input;
-    return input;
+    // Dedicated Device Sub-bus (ducks cleanly when the patient screams or cries out)
+    const devBus = ctx.createGain();
+    devBus.gain.value = 1.0;
+    devBus.connect(masterIn);
+
+    // Dedicated Vocal Bus (clean chest warmth + crystal vocal presence at 2.4kHz, zero mud)
+    const vBus = ctx.createGain();
+    vBus.gain.value = 1.15;
+
+    const vHp = ctx.createBiquadFilter();
+    vHp.type = 'highpass';
+    vHp.frequency.value = 90;
+    vHp.Q.value = 0.7;
+
+    const vBody = ctx.createBiquadFilter();
+    vBody.type = 'peaking';
+    vBody.frequency.value = 240;
+    vBody.Q.value = 0.9;
+    vBody.gain.value = 2.4;
+
+    const vPresence = ctx.createBiquadFilter();
+    vPresence.type = 'peaking';
+    vPresence.frequency.value = 2450;
+    vPresence.Q.value = 0.75;
+    vPresence.gain.value = 4.2;
+
+    const vRoomWet = ctx.createGain();
+    vRoomWet.gain.value = 0.16;
+
+    vBus.connect(vHp);
+    vHp.connect(vBody);
+    vBody.connect(vPresence);
+    vPresence.connect(masterIn);
+    vPresence.connect(vRoomWet);
+    vRoomWet.connect(roomConv);
+
+    this.masterBus = masterIn;
+    this.deviceBus = devBus;
+    this.voiceBus = vBus;
+  }
+
+  private getMasterBus(ctx: AudioContext): AudioNode {
+    this.ensureBuses(ctx);
+    return this.masterBus!;
+  }
+
+  private getDeviceBus(ctx: AudioContext): AudioNode {
+    this.ensureBuses(ctx);
+    return this.deviceBus!;
+  }
+
+  private getVoiceBus(ctx: AudioContext): AudioNode {
+    this.ensureBuses(ctx);
+    return this.voiceBus!;
   }
 
   private clearCaches() {
@@ -192,8 +242,30 @@ class SoundEngine {
   }
 
   /**
-   * Organic human breath & deeply muffled natural chest/throat sigh synthesizer.
-   * Intentionally avoids narrow high-Q metallic vowel formants (F3/F4) so reactions always sound grounded and human.
+   * 2-pole formant resonator helper (normalized gain so resonances stay smooth & realistic).
+   */
+  private applyFormantCascade(
+    x: number,
+    f: number,
+    bw: number,
+    sr: number,
+    state: [number, number]
+  ): number {
+    const clampedF = Math.max(90, Math.min(sr * 0.44, f));
+    const r = Math.exp((-Math.PI * bw) / sr);
+    const c = -(r * r);
+    const k = 2 * r * Math.cos((2 * Math.PI * clampedF) / sr);
+    const a0 = 1 - k - c;
+    const y = a0 * x + k * state[0] + c * state[1];
+    state[1] = state[0];
+    state[0] = y;
+    return y;
+  }
+
+  /**
+   * Rosenberg glottal derivative pulse + vocal-tract 4-formant Klatt-style cascade synthesizer.
+   * Produces rich, natural, loud chest voice, winces, groans, and full distress screams
+   * instead of muffled noise static.
    */
   private buildHumanVoiceBuffer(ctx: AudioContext, spec: VoiceSynthSpec): AudioBuffer {
     const sr = VOICE_SR;
@@ -201,102 +273,168 @@ class SoundEngine {
     const raw = new Float32Array(n);
 
     let phase = 0;
+    let cycleIdx = 0;
     let jitter = 1;
     let shimmer = 1;
-    let b0 = 0, b1 = 0, b2 = 0, b3 = 0;
-    let y1a = 0, y2a = 0;
-    let y1b = 0, y2b = 0;
+    let prevGlotFlow = 0;
+    let subPhase = 0;
+
+    let b0 = 0, b1 = 0, b2 = 0;
+    const st1: [number, number] = [0, 0];
+    const st2: [number, number] = [0, 0];
+    const st3: [number, number] = [0, 0];
+    const st4: [number, number] = [0, 0];
+    const stBypass1: [number, number] = [0, 0];
+    const stBypass2: [number, number] = [0, 0];
     let dcX = 0, dcY = 0;
-    let darkLp = 0;
-    let airLp = 0;
+    let prevOut = 0;
+
+    const peakAt = spec.peakAt ?? 0.24;
+    const strain = spec.strain;
+    // Rosenberg glottal open/close ratios: higher strain = sharper closing snap -> loud bright upper harmonics
+    const tp = 0.46 - strain * 0.08;
+    const tn = 0.20 - strain * 0.095;
 
     for (let i = 0; i < n; i++) {
       const tSec = i / sr;
       const u = i / n;
 
-      // Natural human inflection curve
+      // Pitch contour (supports single urgent arc OR double pain cry "اخ آاااه!")
       let f0Base: number;
-      if (u < 0.2) {
-        f0Base = spec.f0Start + (spec.f0Peak - spec.f0Start) * Math.sin((u / 0.2) * Math.PI * 0.5);
+      if (spec.doubleCry) {
+        if (u < 0.26) {
+          const w = u / 0.26;
+          f0Base = spec.f0Start + (spec.f0Peak * 0.86 - spec.f0Start) * Math.sin(w * Math.PI * 0.5);
+        } else if (u < 0.36) {
+          const w = (u - 0.26) / 0.10;
+          f0Base = spec.f0Peak * 0.86 - (spec.f0Peak * 0.14) * w;
+        } else if (u < 0.54) {
+          const w = (u - 0.36) / 0.18;
+          f0Base = spec.f0Peak * 0.72 + (spec.f0Peak - spec.f0Peak * 0.72) * Math.sin(w * Math.PI * 0.5);
+        } else {
+          const w = (u - 0.54) / 0.46;
+          f0Base = spec.f0Peak + (spec.f0End - spec.f0Peak) * Math.pow(w, 0.82);
+        }
+      } else if (u < peakAt) {
+        f0Base = spec.f0Start + (spec.f0Peak - spec.f0Start) * Math.sin((u / peakAt) * Math.PI * 0.5);
       } else {
-        f0Base = spec.f0Peak + (spec.f0End - spec.f0Peak) * Math.pow((u - 0.2) / 0.8, 0.78);
+        f0Base = spec.f0Peak + (spec.f0End - spec.f0Peak) * Math.pow((u - peakAt) / (1 - peakAt), 0.76);
       }
 
-      const f0 = f0Base * (1 + 0.008 * Math.sin(2 * Math.PI * 4.4 * tSec)) * jitter;
+      // Natural human vibrato + distress vocal tremor (fast nervous quiver when screaming)
+      const vibrato = 1 + (0.011 + strain * 0.018) * Math.sin(2 * Math.PI * (5.2 + strain * 3.1) * tSec);
+      const distressQuiver = strain > 0.5 ? 1 + strain * 0.025 * Math.sin(2 * Math.PI * 23 * tSec) : 1;
+      const f0 = f0Base * vibrato * distressQuiver * jitter;
+
       phase += f0 / sr;
+      subPhase += (f0 * 0.5) / sr;
       if (phase >= 1) {
         phase -= 1;
-        jitter = 1 + (Math.random() * 2 - 1) * 0.014;
-        shimmer = 1 + (Math.random() * 2 - 1) * 0.06;
+        cycleIdx += 1;
+        const jitAmt = 0.012 + strain * 0.036;
+        const shimAmt = 0.05 + strain * 0.16;
+        jitter = 1 + (Math.random() * 2 - 1) * jitAmt;
+        // Pressed pain voice exhibits slight odd/even cycle diplophonia (authentic vocal cord strain!)
+        const dip = strain > 0.65 && cycleIdx % 2 === 1 ? 1 - (strain - 0.6) * 0.24 : 1;
+        shimmer = dip * (1 + (Math.random() * 2 - 1) * shimAmt);
       }
+      if (subPhase >= 1) subPhase -= 1;
 
-      // Very soft warm glottal pulse (heavy fundamental + gentle 2nd harmonic, zero harsh upper buzz)
+      // Rosenberg glottal pulse flow -> lip-radiated derivative
       let glot = 0;
       if (spec.voiceMix > 0.01) {
-        const theta = 2 * Math.PI * phase;
-        glot = (Math.sin(theta) * 0.82 + Math.sin(2 * theta - 0.4) * 0.18) * shimmer;
+        let glotFlow = 0;
+        if (phase < tp) {
+          const w = phase / tp;
+          glotFlow = 0.5 * (1 - Math.cos(Math.PI * w));
+        } else if (phase < tp + tn) {
+          const w = (phase - tp) / tn;
+          glotFlow = Math.cos(Math.PI * 0.5 * w);
+        }
+        // Derivative produces natural acoustic excitation with smooth -12dB/oct tilt + pressing brightness
+        const glotDeriv = (glotFlow - prevGlotFlow) * (sr / 4800);
+        prevGlotFlow = glotFlow;
+        // Blend direct chest fundamental warmth with crisp glottal closure impulse + subtle subharmonic grit
+        const chestFund = Math.sin(2 * Math.PI * phase) * (0.42 - strain * 0.12);
+        const subGrit = strain > 0.62 ? Math.sin(2 * Math.PI * subPhase) * (strain - 0.62) * 0.35 : 0;
+        glot = (glotDeriv * (0.78 + strain * 0.55) + chestFund + subGrit) * shimmer;
       }
 
-      // Multi-stage warm organic air turbulence (nostril + throat airflow)
+      // Turbulent glottal/pharyngeal air noise (pink-tilted, modulated by open glottis)
       const w = Math.random() * 2 - 1;
-      b0 = 0.994 * b0 + w * 0.032;
-      b1 = 0.965 * b1 + w * 0.055;
-      b2 = 0.86 * b2 + w * 0.09;
-      b3 = 0.65 * b3 + w * 0.08;
-      const warmNoise = b0 * 1.1 + b1 * 0.9 + b2 * 0.55;
-      const softAir = b2 * 0.35 + b3 * 0.25;
+      b0 = 0.992 * b0 + w * 0.05;
+      b1 = 0.94 * b1 + w * 0.11;
+      b2 = 0.72 * b2 + w * 0.22;
+      const aspNoise = b0 * 0.35 + b1 * 0.55 + b2 * 0.42;
+      const openGate = phase < tp + tn ? 1.0 : 0.28;
+      const screamFriction = strain > 0.6 ? aspNoise * strain * 0.65 : 0;
 
-      // Gentle breath modulation tied to glottal phase when vocalizing
-      const breathMod = spec.voiceMix > 0.02 ? 0.55 + 0.45 * Math.max(0, Math.sin(2 * Math.PI * phase)) : 1.0;
-      const voiceSrc = glot * spec.voiceMix + warmNoise * breathMod * spec.breathMix * 0.55;
+      const source =
+        glot * spec.voiceMix +
+        aspNoise * spec.breathMix * openGate * 0.78 +
+        screamFriction * openGate;
 
-      // Wide, heavily damped 2-formant throat/mouth shaping (never sharp/metallic)
+      // Formant trajectory over utterance
       const f1 = spec.f1Start + (spec.f1End - spec.f1Start) * u;
       const f2 = spec.f2Start + (spec.f2End - spec.f2Start) * u;
 
-      const r1 = Math.exp((-Math.PI * spec.bw1) / sr);
-      const c1 = -(r1 * r1);
-      const k1 = 2 * r1 * Math.cos((2 * Math.PI * f1) / sr);
-      const s1 = (1 - k1 - c1) * voiceSrc + k1 * y1a + c1 * y2a;
-      y2a = y1a;
-      y1a = s1;
+      // 4-formant Klatt cascade for genuine human vocal tract acoustics
+      const c1 = this.applyFormantCascade(source, f1, spec.bw1, sr, st1);
+      const c2 = this.applyFormantCascade(c1, f2, spec.bw2, sr, st2);
+      const c3 = this.applyFormantCascade(c2, spec.f3, spec.bw3, sr, st3);
+      const c4 = this.applyFormantCascade(c3, spec.f4, 240, sr, st4);
 
-      const r2 = Math.exp((-Math.PI * spec.bw2) / sr);
-      const c2 = -(r2 * r2);
-      const k2 = 2 * r2 * Math.cos((2 * Math.PI * f2) / sr);
-      const s2 = (1 - k2 - c2) * s1 + k2 * y1b + c2 * y2b;
-      y2b = y1b;
-      y1b = s2;
+      // Parallel chest/mouth reinforcement so F1+F2 carry full organic weight (no thin/hollow sound!)
+      const p1 = this.applyFormantCascade(source, f1, spec.bw1 * 1.15, sr, stBypass1) * 0.55;
+      const p2 = this.applyFormantCascade(source, f2, spec.bw2 * 1.2, sr, stBypass2) * 0.36;
+      const vocalSignal = c4 * 0.68 + p1 + p2;
 
-      // Blend soft direct exhale air around the muffled throat hum
-      airLp = airLp + 0.22 * (softAir * spec.breathMix - airLp);
-      const combined = s2 * 0.72 + airLp * 0.52;
-
-      const dcOut = combined - dcX + 0.994 * dcY;
-      dcX = combined;
+      // Gentle lip-radiation tilt removal + DC blocker
+      const dcOut = vocalSignal - dcX + 0.995 * dcY;
+      dcX = vocalSignal;
       dcY = dcOut;
-      darkLp = darkLp + 0.46 * (dcOut - darkLp);
+      const brightWarm = dcOut * 0.86 + (dcOut - prevOut) * 0.14;
+      prevOut = dcOut;
 
-      // Organic breath envelope: smooth rise, vocal presence earlier, gentle breathy tail
-      const att = Math.pow(Math.min(1, tSec / spec.attackSec), 1.3);
-      const bodyEnv = spec.isInhale
-        ? Math.sin(Math.pow(u, 0.7) * Math.PI)
-        : Math.pow(Math.max(0, 1 - u), 0.82);
-      const vocalTailGate = spec.voiceMix > 0.05 && u > 0.62 ? Math.max(0.15, 1 - (u - 0.62) * 2.2) : 1;
-      const tailFade = u > 0.88 ? Math.max(0, (1 - u) / 0.12) : 1;
-      raw[i] = darkLp * att * bodyEnv * vocalTailGate * tailFade;
+      // Dynamic human amplitude envelope
+      const att = Math.pow(Math.min(1, tSec / spec.attackSec), 1.15);
+      let bodyEnv: number;
+      if (spec.isInhale) {
+        bodyEnv = Math.sin(Math.pow(u, 0.68) * Math.PI);
+      } else if (spec.doubleCry) {
+        // Sharp first exclamation ("آخ") -> brief catch -> explosive sustained scream ("آاااااه!")
+        const dip = u > 0.25 && u < 0.39 ? 0.28 + 0.72 * Math.abs((u - 0.32) / 0.07) : 1.0;
+        const sustain = u < 0.72 ? 1.0 : Math.pow(Math.max(0, (1 - u) / 0.28), 0.75);
+        bodyEnv = dip * sustain;
+      } else if (strain > 0.75) {
+        // Loud sustained scream holds near full intensity then drops rapidly as breath empties
+        bodyEnv = u < 0.7 ? 1.0 - u * 0.12 : Math.pow(Math.max(0, (1 - u) / 0.3), 0.72);
+      } else {
+        bodyEnv = Math.pow(Math.max(0, 1 - u * 0.92), 0.68);
+      }
+
+      const tailFade = u > 0.9 ? Math.max(0, (1 - u) / 0.1) : 1;
+      raw[i] = brightWarm * att * bodyEnv * tailFade;
     }
 
+    // RMS-aware loudness normalization with natural vocal saturation so voice is loud, clear, and warm
     let maxAbs = 0.0001;
+    let sumSq = 0;
     for (let i = 0; i < n; i++) {
-      const a = Math.abs(raw[i]);
+      const v = raw[i];
+      const a = Math.abs(v);
       if (a > maxAbs) maxAbs = a;
+      sumSq += v * v;
     }
+    const rms = Math.sqrt(sumSq / Math.max(1, n));
+    const targetRms = 0.22 + strain * 0.18;
+    const gainNorm = Math.min(0.95 / maxAbs, targetRms / Math.max(0.0001, rms));
+
     const buf = ctx.createBuffer(1, n, sr);
     const ch = buf.getChannelData(0);
-    const scale = 0.84 / maxAbs;
+    const drive = 1.08 + strain * 0.38;
     for (let i = 0; i < n; i++) {
-      ch[i] = Math.tanh(raw[i] * scale * 1.15);
+      ch[i] = Math.tanh(raw[i] * gainNorm * drive) * 0.94;
     }
     return buf;
   }
@@ -307,104 +445,151 @@ class SoundEngine {
 
     let spec: VoiceSynthSpec;
     switch (key) {
+      // ===== MALE PATIENT VOICES =====
       case 'm_breath_soft':
         spec = {
-          dur: 0.48, f0Start: 98, f0Peak: 98, f0End: 92,
-          f1Start: 380, f1End: 340, f2Start: 920, f2End: 840,
-          bw1: 185, bw2: 260, voiceMix: 0.0, breathMix: 1.0, attackSec: 0.11,
+          dur: 0.48, f0Start: 112, f0Peak: 116, f0End: 94,
+          f1Start: 460, f1End: 390, f2Start: 1020, f2End: 880, f3: 2450, f4: 3400,
+          bw1: 110, bw2: 145, bw3: 185, voiceMix: 0.36, breathMix: 0.48, strain: 0.08, attackSec: 0.08,
         };
         break;
       case 'm_sigh_mild':
         spec = {
-          dur: 0.44, f0Start: 100, f0Peak: 104, f0End: 88,
-          f1Start: 310, f1End: 290, f2Start: 860, f2End: 780,
-          bw1: 155, bw2: 240, voiceMix: 0.24, breathMix: 0.76, attackSec: 0.08,
+          dur: 0.50, f0Start: 120, f0Peak: 132, f0End: 98,
+          f1Start: 540, f1End: 430, f2Start: 1060, f2End: 900, f3: 2500, f4: 3450,
+          bw1: 82, bw2: 112, bw3: 155, voiceMix: 0.72, breathMix: 0.28, strain: 0.22, attackSec: 0.055,
         };
         break;
       case 'm_wince_0':
         spec = {
-          dur: 0.36, f0Start: 104, f0Peak: 112, f0End: 90,
-          f1Start: 380, f1End: 340, f2Start: 950, f2End: 860,
-          bw1: 145, bw2: 220, voiceMix: 0.36, breathMix: 0.64, attackSec: 0.055,
+          dur: 0.42, f0Start: 144, f0Peak: 196, f0End: 122, peakAt: 0.22,
+          f1Start: 740, f1End: 590, f2Start: 1260, f2End: 1090, f3: 2620, f4: 3520,
+          bw1: 72, bw2: 96, bw3: 140, voiceMix: 0.88, breathMix: 0.22, strain: 0.50, attackSec: 0.022,
         };
         break;
       case 'm_wince_1':
         spec = {
-          dur: 0.40, f0Start: 100, f0Peak: 108, f0End: 86,
-          f1Start: 350, f1End: 315, f2Start: 900, f2End: 820,
-          bw1: 150, bw2: 230, voiceMix: 0.32, breathMix: 0.68, attackSec: 0.06,
+          dur: 0.46, f0Start: 136, f0Peak: 184, f0End: 116, peakAt: 0.25,
+          f1Start: 690, f1End: 540, f2Start: 1200, f2End: 1040, f3: 2580, f4: 3480,
+          bw1: 74, bw2: 100, bw3: 145, voiceMix: 0.86, breathMix: 0.24, strain: 0.46, attackSec: 0.026,
         };
         break;
       case 'm_groan_0':
         spec = {
-          dur: 0.44, f0Start: 110, f0Peak: 120, f0End: 92,
-          f1Start: 430, f1End: 370, f2Start: 1000, f2End: 880,
-          bw1: 135, bw2: 210, voiceMix: 0.44, breathMix: 0.56, attackSec: 0.045,
+          dur: 0.58, f0Start: 158, f0Peak: 224, f0End: 134, peakAt: 0.28,
+          f1Start: 780, f1End: 650, f2Start: 1280, f2End: 1120, f3: 2700, f4: 3600,
+          bw1: 68, bw2: 90, bw3: 130, voiceMix: 0.94, breathMix: 0.18, strain: 0.72, attackSec: 0.022,
         };
         break;
       case 'm_groan_1':
         spec = {
-          dur: 0.40, f0Start: 108, f0Peak: 116, f0End: 89,
-          f1Start: 400, f1End: 350, f2Start: 960, f2End: 850,
-          bw1: 140, bw2: 215, voiceMix: 0.40, breathMix: 0.60, attackSec: 0.042,
+          dur: 0.52, f0Start: 150, f0Peak: 210, f0End: 128, peakAt: 0.24,
+          f1Start: 740, f1End: 610, f2Start: 1230, f2End: 1070, f3: 2660, f4: 3560,
+          bw1: 70, bw2: 94, bw3: 135, voiceMix: 0.92, breathMix: 0.20, strain: 0.68, attackSec: 0.02,
+        };
+        break;
+      case 'm_scream_0':
+        // Full loud overdose distress scream ("آاااااااااه!")
+        spec = {
+          dur: 0.82, f0Start: 188, f0Peak: 318, f0End: 220, peakAt: 0.24,
+          f1Start: 880, f1End: 790, f2Start: 1460, f2End: 1310, f3: 2860, f4: 3740,
+          bw1: 65, bw2: 86, bw3: 125, voiceMix: 0.98, breathMix: 0.22, strain: 0.92, attackSec: 0.016,
+        };
+        break;
+      case 'm_scream_1':
+        // Double pain cry ("آخ! آااااااه!")
+        spec = {
+          dur: 0.76, f0Start: 196, f0Peak: 338, f0End: 230, doubleCry: true,
+          f1Start: 860, f1End: 770, f2Start: 1480, f2End: 1330, f3: 2900, f4: 3780,
+          bw1: 66, bw2: 88, bw3: 128, voiceMix: 0.98, breathMix: 0.22, strain: 0.94, attackSec: 0.014,
+        };
+        break;
+      case 'm_scream_sharp':
+        // Acute shock scream ("آاااااخ!") when device jumps straight into overdose
+        spec = {
+          dur: 0.48, f0Start: 215, f0Peak: 345, f0End: 195, peakAt: 0.18,
+          f1Start: 900, f1End: 760, f2Start: 1520, f2End: 1280, f3: 2920, f4: 3800,
+          bw1: 64, bw2: 86, bw3: 124, voiceMix: 0.98, breathMix: 0.24, strain: 0.95, attackSec: 0.011,
         };
         break;
       case 'm_gasp':
         spec = {
-          dur: 0.21, f0Start: 118, f0Peak: 126, f0End: 106,
-          f1Start: 420, f1End: 520, f2Start: 1050, f2End: 1180,
-          bw1: 165, bw2: 250, voiceMix: 0.16, breathMix: 0.84, attackSec: 0.025, isInhale: true,
+          dur: 0.28, f0Start: 168, f0Peak: 224, f0End: 146, peakAt: 0.38,
+          f1Start: 620, f1End: 740, f2Start: 1220, f2End: 1380, f3: 2660, f4: 3520,
+          bw1: 88, bw2: 115, bw3: 160, voiceMix: 0.62, breathMix: 0.58, strain: 0.52, attackSec: 0.015, isInhale: true,
         };
         break;
 
+      // ===== FEMALE PATIENT VOICES =====
       case 'f_breath_soft':
         spec = {
-          dur: 0.46, f0Start: 180, f0Peak: 180, f0End: 168,
-          f1Start: 430, f1End: 390, f2Start: 1060, f2End: 980,
-          bw1: 190, bw2: 270, voiceMix: 0.0, breathMix: 1.0, attackSec: 0.1,
+          dur: 0.46, f0Start: 204, f0Peak: 212, f0End: 176,
+          f1Start: 510, f1End: 440, f2Start: 1180, f2End: 1020, f3: 2740, f4: 3800,
+          bw1: 115, bw2: 150, bw3: 190, voiceMix: 0.34, breathMix: 0.48, strain: 0.08, attackSec: 0.075,
         };
         break;
       case 'f_sigh_mild':
         spec = {
-          dur: 0.42, f0Start: 178, f0Peak: 186, f0End: 160,
-          f1Start: 360, f1End: 330, f2Start: 1000, f2End: 920,
-          bw1: 160, bw2: 245, voiceMix: 0.22, breathMix: 0.78, attackSec: 0.075,
+          dur: 0.48, f0Start: 214, f0Peak: 234, f0End: 180,
+          f1Start: 600, f1End: 480, f2Start: 1220, f2End: 1040, f3: 2780, f4: 3850,
+          bw1: 84, bw2: 114, bw3: 160, voiceMix: 0.70, breathMix: 0.28, strain: 0.22, attackSec: 0.05,
         };
         break;
       case 'f_wince_0':
         spec = {
-          dur: 0.35, f0Start: 184, f0Peak: 196, f0End: 164,
-          f1Start: 430, f1End: 380, f2Start: 1080, f2End: 980,
-          bw1: 150, bw2: 230, voiceMix: 0.34, breathMix: 0.66, attackSec: 0.05,
+          dur: 0.40, f0Start: 248, f0Peak: 332, f0End: 218, peakAt: 0.22,
+          f1Start: 800, f1End: 650, f2Start: 1420, f2End: 1220, f3: 2880, f4: 3920,
+          bw1: 74, bw2: 100, bw3: 145, voiceMix: 0.88, breathMix: 0.22, strain: 0.50, attackSec: 0.02,
         };
         break;
       case 'f_wince_1':
         spec = {
-          dur: 0.38, f0Start: 180, f0Peak: 190, f0End: 160,
-          f1Start: 400, f1End: 360, f2Start: 1040, f2End: 950,
-          bw1: 155, bw2: 235, voiceMix: 0.30, breathMix: 0.70, attackSec: 0.055,
+          dur: 0.44, f0Start: 238, f0Peak: 316, f0End: 208, peakAt: 0.24,
+          f1Start: 750, f1End: 610, f2Start: 1360, f2End: 1180, f3: 2840, f4: 3880,
+          bw1: 76, bw2: 104, bw3: 150, voiceMix: 0.86, breathMix: 0.24, strain: 0.46, attackSec: 0.024,
         };
         break;
       case 'f_groan_0':
         spec = {
-          dur: 0.42, f0Start: 190, f0Peak: 206, f0End: 166,
-          f1Start: 480, f1End: 410, f2Start: 1120, f2End: 1000,
-          bw1: 142, bw2: 220, voiceMix: 0.40, breathMix: 0.60, attackSec: 0.042,
+          dur: 0.55, f0Start: 270, f0Peak: 378, f0End: 236, peakAt: 0.26,
+          f1Start: 840, f1End: 710, f2Start: 1460, f2End: 1280, f3: 2940, f4: 3980,
+          bw1: 70, bw2: 94, bw3: 135, voiceMix: 0.94, breathMix: 0.18, strain: 0.72, attackSec: 0.02,
         };
         break;
       case 'f_groan_1':
         spec = {
-          dur: 0.38, f0Start: 188, f0Peak: 200, f0End: 162,
-          f1Start: 450, f1End: 390, f2Start: 1080, f2End: 960,
-          bw1: 148, bw2: 225, voiceMix: 0.36, breathMix: 0.64, attackSec: 0.04,
+          dur: 0.50, f0Start: 258, f0Peak: 356, f0End: 226, peakAt: 0.23,
+          f1Start: 800, f1End: 670, f2Start: 1400, f2End: 1230, f3: 2900, f4: 3940,
+          bw1: 72, bw2: 98, bw3: 140, voiceMix: 0.92, breathMix: 0.20, strain: 0.68, attackSec: 0.018,
+        };
+        break;
+      case 'f_scream_0':
+        spec = {
+          dur: 0.80, f0Start: 325, f0Peak: 545, f0End: 380, peakAt: 0.24,
+          f1Start: 940, f1End: 850, f2Start: 1620, f2End: 1440, f3: 3080, f4: 4100,
+          bw1: 68, bw2: 90, bw3: 130, voiceMix: 0.98, breathMix: 0.22, strain: 0.92, attackSec: 0.014,
+        };
+        break;
+      case 'f_scream_1':
+        spec = {
+          dur: 0.74, f0Start: 345, f0Peak: 575, f0End: 395, doubleCry: true,
+          f1Start: 920, f1End: 830, f2Start: 1640, f2End: 1460, f3: 3120, f4: 4140,
+          bw1: 68, bw2: 92, bw3: 132, voiceMix: 0.98, breathMix: 0.22, strain: 0.94, attackSec: 0.012,
+        };
+        break;
+      case 'f_scream_sharp':
+        spec = {
+          dur: 0.46, f0Start: 365, f0Peak: 590, f0End: 340, peakAt: 0.17,
+          f1Start: 960, f1End: 820, f2Start: 1680, f2End: 1420, f3: 3150, f4: 4160,
+          bw1: 66, bw2: 90, bw3: 128, voiceMix: 0.98, breathMix: 0.24, strain: 0.95, attackSec: 0.010,
         };
         break;
       case 'f_gasp':
       default:
         spec = {
-          dur: 0.20, f0Start: 198, f0Peak: 212, f0End: 182,
-          f1Start: 460, f1End: 560, f2Start: 1160, f2End: 1280,
-          bw1: 170, bw2: 260, voiceMix: 0.14, breathMix: 0.86, attackSec: 0.024, isInhale: true,
+          dur: 0.26, f0Start: 280, f0Peak: 370, f0End: 245, peakAt: 0.36,
+          f1Start: 690, f1End: 820, f2Start: 1380, f2End: 1540, f3: 2920, f4: 3940,
+          bw1: 90, bw2: 120, bw3: 165, voiceMix: 0.60, breathMix: 0.56, strain: 0.52, attackSec: 0.014, isInhale: true,
         };
         break;
     }
@@ -415,7 +600,7 @@ class SoundEngine {
   }
 
   /**
-   * Pre-rendered realistic physical/medical hardware SFX & seamless loops.
+   * Warm acoustic chimes / crisp medical hardware SFX & seamless loops (zero harsh raw synth beeps).
    */
   private getDeviceBuffer(ctx: AudioContext, key: string): AudioBuffer {
     const cached = this.bufferCache.get(key);
@@ -424,117 +609,129 @@ class SoundEngine {
     const sr = SFX_SR;
     let buf: AudioBuffer;
 
-    if (key === 'tens_tick') {
-      // Tactile crisp clinical micro-impulse (short transient + warm damped rubber/skin thump, zero watch beep)
-      const n = Math.floor(sr * 0.014);
+    if (key === 'ui_tap') {
+      // Soft wooden/ceramic UI micro-tap
+      const n = Math.floor(sr * 0.022);
+      buf = ctx.createBuffer(1, n, sr);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) {
+        const t = i / sr;
+        const body = Math.sin(2 * Math.PI * (640 - t * 6500) * t) * Math.exp(-t / 0.0028);
+        const air = (Math.random() * 2 - 1) * Math.exp(-t / 0.0012) * 0.22;
+        ch[i] = Math.tanh((body * 0.72 + air) * 1.15) * 0.8;
+      }
+    } else if (key === 'tens_tick') {
+      // Crisp biomedical neuromuscular pulse tap (tight warm thump + soft electrode snap)
+      const n = Math.floor(sr * 0.018);
       buf = ctx.createBuffer(1, n, sr);
       const ch = buf.getChannelData(0);
       let lp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr;
-        const transient = (Math.random() * 2 - 1) * Math.exp(-t / 0.00085) * 0.72;
-        lp = lp + 0.42 * (transient - lp);
-        const body = Math.sin(2 * Math.PI * 165 * t) * Math.exp(-t / 0.0034) * 0.52;
-        const click = Math.sin(2 * Math.PI * 980 * t) * Math.exp(-t / 0.0011) * 0.34;
-        ch[i] = Math.tanh((lp + body + click) * 1.15) * 0.84;
+        const w = (Math.random() * 2 - 1) * Math.exp(-t / 0.0009);
+        lp = lp + 0.45 * (w - lp);
+        const thump = Math.sin(2 * Math.PI * (145 - t * 1800) * t) * Math.exp(-t / 0.0042) * 0.65;
+        const snap = Math.sin(2 * Math.PI * 1450 * t) * Math.exp(-t / 0.0012) * 0.22;
+        ch[i] = Math.tanh((lp * 0.55 + thump + snap) * 1.15) * 0.85;
       }
     } else if (key === 'eswt_shot') {
-      // Authentic dry radial shockwave applicator tap ("تَكْ") + tight pneumatic release puff
-      const n = Math.floor(sr * 0.078);
+      // Authentic radial shockwave ballistic projectile strike ("تَكْ!") + tight air exhaust
+      const n = Math.floor(sr * 0.085);
       buf = ctx.createBuffer(1, n, sr);
       const ch = buf.getChannelData(0);
       let airLp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr;
-        // Hard ceramic/polymer projectile snap (multi-harmonic fast decay, no retro chirp)
-        const snap =
-          (Math.sin(2 * Math.PI * 760 * t) * 0.45 +
-            Math.sin(2 * Math.PI * 1340 * t) * 0.35 +
-            Math.sin(2 * Math.PI * 2150 * t) * 0.2) *
-          Math.exp(-t / 0.0018);
-        const body = Math.sin(2 * Math.PI * (128 - t * 650) * Math.max(0, t)) * Math.exp(-t / 0.012) * 0.65;
+        const striker =
+          (Math.sin(2 * Math.PI * 690 * t) * 0.42 +
+            Math.sin(2 * Math.PI * 1240 * t) * 0.32 +
+            Math.sin(2 * Math.PI * 1980 * t) * 0.16) *
+          Math.exp(-t / 0.0022);
+        const tissueThud =
+          Math.sin(2 * Math.PI * (138 * Math.exp(-t * 28) + 64) * t) *
+          Math.exp(-t / 0.014) *
+          0.74;
         const w = Math.random() * 2 - 1;
-        airLp = airLp + 0.32 * (w - airLp);
-        const puff = (w - airLp) * Math.exp(-t / 0.009) * 0.42;
-        ch[i] = Math.tanh((snap * 0.95 + body + puff) * 1.2) * 0.88;
+        airLp = airLp + 0.28 * (w - airLp);
+        const puff = (w - airLp) * Math.exp(-t / 0.008) * 0.34;
+        ch[i] = Math.tanh((striker * 0.88 + tissueThud + puff) * 1.18) * 0.88;
       }
     } else if (key === 'pad_stick') {
-      // Wet hydrogel pad suction press onto skin
-      const n = Math.floor(sr * 0.068);
+      // Hydrogel electrode pad suction press on skin
+      const n = Math.floor(sr * 0.072);
       buf = ctx.createBuffer(1, n, sr);
       const ch = buf.getChannelData(0);
       let lp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr;
-        const env = Math.sin(Math.min(1, t / 0.012) * Math.PI * 0.5) * Math.exp(-t / 0.018);
-        const pop = Math.sin(2 * Math.PI * (185 - t * 1400) * t) * env * 0.72;
-        lp = lp + 0.25 * ((Math.random() * 2 - 1) - lp);
-        const tack = lp * Math.exp(-t / 0.009) * 0.48;
-        ch[i] = Math.tanh((pop + tack) * 1.2) * 0.84;
+        const env = Math.sin(Math.min(1, t / 0.012) * Math.PI * 0.5) * Math.exp(-t / 0.019);
+        const pop = Math.sin(2 * Math.PI * (190 - t * 1250) * t) * env * 0.72;
+        lp = lp + 0.28 * ((Math.random() * 2 - 1) - lp);
+        const tack = lp * Math.exp(-t / 0.01) * 0.42;
+        ch[i] = Math.tanh((pop + tack) * 1.18) * 0.85;
       }
     } else if (key === 'switch_click') {
-      // Clean tactile console switch micro-snap
-      const n = Math.floor(sr * 0.018);
+      // Crisp physical console tactile rocker micro-click
+      const n = Math.floor(sr * 0.020);
       buf = ctx.createBuffer(1, n, sr);
       const ch = buf.getChannelData(0);
       for (let i = 0; i < n; i++) {
         const t = i / sr;
         const hit =
-          (Math.sin(2 * Math.PI * 1150 * t) * 0.5 +
-            Math.sin(2 * Math.PI * 2400 * t) * 0.35 +
-            (Math.random() * 2 - 1) * 0.25) *
-          Math.exp(-t / 0.0016);
-        ch[i] = Math.tanh(hit * 1.2) * 0.82;
+          (Math.sin(2 * Math.PI * 1080 * t) * 0.45 +
+            Math.sin(2 * Math.PI * 2250 * t) * 0.28 +
+            Math.sin(2 * Math.PI * 210 * t) * 0.35) *
+          Math.exp(-t / 0.0018);
+        ch[i] = Math.tanh(hit * 1.18) * 0.82;
       }
     } else if (key === 'equip_thud') {
-      // Rubber/metal equipment set-down/grab thud
-      const n = Math.floor(sr * 0.095);
+      // Heavy damped rubber-caster / metal chassis set-down thud
+      const n = Math.floor(sr * 0.105);
       buf = ctx.createBuffer(1, n, sr);
       const ch = buf.getChannelData(0);
       let lp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr;
-        const thud = Math.sin(2 * Math.PI * (108 * Math.exp(-t * 14) + 46) * t) * Math.exp(-t / 0.024) * 0.82;
-        const rattle = Math.sin(2 * Math.PI * 340 * t) * Math.exp(-t / 0.008) * 0.22;
-        lp = lp + 0.2 * ((Math.random() * 2 - 1) - lp);
-        ch[i] = Math.tanh((thud + rattle + lp * Math.exp(-t / 0.016) * 0.3) * 1.2) * 0.86;
+        const thud = Math.sin(2 * Math.PI * (102 * Math.exp(-t * 16) + 48) * t) * Math.exp(-t / 0.026) * 0.84;
+        const chassis = Math.sin(2 * Math.PI * 310 * t) * Math.exp(-t / 0.009) * 0.18;
+        lp = lp + 0.22 * ((Math.random() * 2 - 1) - lp);
+        ch[i] = Math.tanh((thud + chassis + lp * Math.exp(-t / 0.016) * 0.24) * 1.15) * 0.86;
       }
     } else if (key === 'eswt_comp_loop') {
-      // Quiet medical air compressor motor chug (~17 Hz piston pulse + smooth damped cabinet hum)
+      // Clean medical diaphragm compressor hum (gentle rhythmic pulse, zero static hiss)
       const dur = 1.6;
       const n = Math.floor(sr * (dur + 0.15));
       const raw = new Float32Array(n);
       let lp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr;
-        const piston = 0.65 + 0.35 * Math.sin(2 * Math.PI * 17 * t);
+        const piston = 0.72 + 0.28 * Math.sin(2 * Math.PI * 16 * t);
         const motor =
-          Math.sin(2 * Math.PI * 52 * t) * 0.45 +
-          Math.sin(2 * Math.PI * 104 * t) * 0.22 +
-          Math.sin(2 * Math.PI * 156 * t) * 0.08;
-        lp = lp + 0.09 * ((Math.random() * 2 - 1) - lp);
-        raw[i] = (motor * piston + lp * 0.85) * 0.55;
+          Math.sin(2 * Math.PI * 55 * t) * 0.46 +
+          Math.sin(2 * Math.PI * 110 * t) * 0.22 +
+          Math.sin(2 * Math.PI * 165 * t) * 0.07;
+        lp = lp + 0.045 * ((Math.random() * 2 - 1) - lp);
+        raw[i] = (motor * piston + lp * 0.48) * 0.52;
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.15);
     } else if (key === 'cpm_motor_loop') {
-      // Realistic quiet brushed DC linear actuator / worm gear motor hum
+      // Smooth brushless linear actuator whir (warm DC servo glide)
       const dur = 1.6;
       const n = Math.floor(sr * (dur + 0.15));
       const raw = new Float32Array(n);
       let lp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr;
-        const gear =
-          Math.sin(2 * Math.PI * 118 * t) * 0.38 +
-          Math.sin(2 * Math.PI * 236 * t) * 0.22 +
-          Math.sin(2 * Math.PI * 354 * t) * 0.09;
-        const ripple = 0.88 + 0.12 * Math.sin(2 * Math.PI * 11 * t);
-        lp = lp + 0.08 * ((Math.random() * 2 - 1) - lp);
-        raw[i] = (gear * ripple + lp * 0.42) * 0.65;
+        const servo =
+          Math.sin(2 * Math.PI * 96 * t) * 0.44 +
+          Math.sin(2 * Math.PI * 192 * t) * 0.16;
+        const ripple = 0.9 + 0.1 * Math.sin(2 * Math.PI * 9 * t);
+        lp = lp + 0.04 * ((Math.random() * 2 - 1) - lp);
+        raw[i] = (servo * ripple + lp * 0.35) * 0.55;
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.15);
     } else if (key === 'cryo_pump_loop') {
-      // Rhythmic diaphragm cryo-compression pump + smooth chilled fluid tube flow
+      // Smooth chilled coolant circulation & gentle compressor purr
       const dur = 1.8;
       const n = Math.floor(sr * (dur + 0.15));
       const raw = new Float32Array(n);
@@ -542,15 +739,15 @@ class SoundEngine {
       for (let i = 0; i < n; i++) {
         const t = i / sr;
         const w = Math.random() * 2 - 1;
-        b0 = 0.992 * b0 + w * 0.035;
-        b1 = 0.94 * b1 + b0 * 0.12;
-        const pump = 0.72 + 0.28 * Math.sin(2 * Math.PI * 3.1 * t);
-        const hum = Math.sin(2 * Math.PI * 56 * t) * 0.26 + Math.sin(2 * Math.PI * 112 * t) * 0.12;
-        raw[i] = (b1 * 0.85 + hum) * pump;
+        b0 = 0.994 * b0 + w * 0.025;
+        b1 = 0.955 * b1 + b0 * 0.09;
+        const pump = 0.78 + 0.22 * Math.sin(2 * Math.PI * 2.8 * t);
+        const hum = Math.sin(2 * Math.PI * 58 * t) * 0.28 + Math.sin(2 * Math.PI * 116 * t) * 0.10;
+        raw[i] = (b1 * 0.65 + hum) * pump;
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.15);
     } else if (key === 'us_gel_loop') {
-      // Quiet cabinet cooling fan + ultra-gentle warm transducer acoustic coupling purr
+      // Quiet modern crystal ultrasound transducer hum + soft cooling airflow
       const dur = 1.8;
       const n = Math.floor(sr * (dur + 0.15));
       const raw = new Float32Array(n);
@@ -558,40 +755,43 @@ class SoundEngine {
       for (let i = 0; i < n; i++) {
         const t = i / sr;
         const w = Math.random() * 2 - 1;
-        b0 = 0.994 * b0 + w * 0.03;
-        b1 = 0.93 * b1 + b0 * 0.1;
-        const transducer = Math.sin(2 * Math.PI * 108 * t) * 0.16 + Math.sin(2 * Math.PI * 216 * t) * 0.06;
-        raw[i] = b1 * 0.75 + transducer;
+        b0 = 0.995 * b0 + w * 0.018;
+        b1 = 0.95 * b1 + b0 * 0.07;
+        const piezo =
+          Math.sin(2 * Math.PI * 110 * t) * 0.18 +
+          Math.sin(2 * Math.PI * 220 * t) * 0.07 +
+          Math.sin(2 * Math.PI * 1680 * t) * (0.018 + 0.01 * Math.sin(2 * Math.PI * 4 * t));
+        raw[i] = b1 * 0.45 + piezo;
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.15);
     } else if (key === 'hydro_water_loop') {
-      // Rich multi-layered warm water swirling & rising micro-bubbles
+      // Warm circulating hydrocollator / whirlpool water & soft micro-bubbles
       const dur = 2.8;
       const n = Math.floor(sr * (dur + 0.16));
       const raw = new Float32Array(n);
       let b0 = 0, b1 = 0;
       for (let i = 0; i < n; i++) {
         const w = Math.random() * 2 - 1;
-        b0 = 0.986 * b0 + w * 0.024;
-        b1 = 0.935 * b1 + b0 * 0.15;
-        raw[i] = b1 * 0.3;
+        b0 = 0.988 * b0 + w * 0.02;
+        b1 = 0.945 * b1 + b0 * 0.12;
+        raw[i] = b1 * 0.24;
       }
-      for (let k = 0; k < 75; k++) {
+      for (let k = 0; k < 65; k++) {
         const start = Math.floor(Math.random() * (n - Math.floor(sr * 0.06)));
-        const bDur = 0.018 + Math.random() * 0.034;
+        const bDur = 0.018 + Math.random() * 0.032;
         const bLen = Math.floor(sr * bDur);
-        const f0 = 240 + Math.random() * 580;
-        const amp = 0.065 + Math.random() * 0.13;
+        const f0 = 260 + Math.random() * 520;
+        const amp = 0.06 + Math.random() * 0.11;
         for (let j = 0; j < bLen && start + j < n; j++) {
           const u = j / bLen;
-          const freq = f0 * (1 + 0.52 * u);
+          const freq = f0 * (1 + 0.48 * u);
           const env = Math.sin(u * Math.PI) * Math.exp(-u * 1.75);
           raw[start + j] += Math.sin(2 * Math.PI * freq * (j / sr)) * env * amp;
         }
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.16);
     } else if (key === 'cart_roll_loop') {
-      // Rubber caster wheels rolling softly across tiled clinic floor
+      // Soft rubber caster wheels rolling over tiled clinic floor
       const dur = 1.6;
       const n = Math.floor(sr * (dur + 0.14));
       const raw = new Float32Array(n);
@@ -599,24 +799,25 @@ class SoundEngine {
       for (let i = 0; i < n; i++) {
         const t = i / sr;
         const w = Math.random() * 2 - 1;
-        lp = lp + 0.045 * (w - lp);
-        const tilePhase = (t * 5.2) % 1;
-        const bump = tilePhase < 0.075 ? Math.sin((tilePhase / 0.075) * Math.PI) * 0.4 : 0;
-        raw[i] = lp * 1.35 + bump * (lp * 1.6 + Math.sin(2 * Math.PI * 78 * t) * 0.14);
+        lp = lp + 0.038 * (w - lp);
+        const tilePhase = (t * 5.0) % 1;
+        const bump = tilePhase < 0.07 ? Math.sin((tilePhase / 0.07) * Math.PI) * 0.38 : 0;
+        raw[i] = lp * 1.15 + bump * (lp * 1.4 + Math.sin(2 * Math.PI * 76 * t) * 0.14);
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.14);
     } else {
-      // Clean medical cabinet fan whisper
+      // Ultra-clean silent-grade medical cabinet ventilation hum (soft warm airflow, zero hiss)
       const dur = 1.8;
       const n = Math.floor(sr * (dur + 0.16));
       const raw = new Float32Array(n);
-      let b0 = 0, b1 = 0, b2 = 0;
+      let b0 = 0, b1 = 0;
       for (let i = 0; i < n; i++) {
+        const t = i / sr;
         const w = Math.random() * 2 - 1;
-        b0 = 0.996 * b0 + w * 0.026;
-        b1 = 0.982 * b1 + w * 0.03;
-        b2 = 0.925 * b2 + w * 0.04;
-        raw[i] = Math.max(-1, Math.min(1, (b0 + b1 + b2) * 1.15));
+        b0 = 0.996 * b0 + w * 0.018;
+        b1 = 0.96 * b1 + b0 * 0.055;
+        const cabinetHum = Math.sin(2 * Math.PI * 62 * t) * 0.14 + Math.sin(2 * Math.PI * 124 * t) * 0.05;
+        raw[i] = Math.max(-1, Math.min(1, b1 * 0.85 + cabinetHum));
       }
       buf = this.makeSeamlessLoop(raw, sr, 0.16);
     }
@@ -625,7 +826,14 @@ class SoundEngine {
     return buf;
   }
 
-  private playBufferOneShot(ctx: AudioContext, buf: AudioBuffer, volume: number, rate = 1.0, delay = 0) {
+  private playBufferOneShot(
+    ctx: AudioContext,
+    buf: AudioBuffer,
+    volume: number,
+    rate = 1.0,
+    delay = 0,
+    bus?: AudioNode
+  ) {
     const now = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
     src.buffer = buf;
@@ -633,58 +841,77 @@ class SoundEngine {
     const g = ctx.createGain();
     g.gain.value = volume;
     src.connect(g);
-    g.connect(this.getMasterBus(ctx));
+    g.connect(bus ?? this.getMasterBus(ctx));
     src.start(now);
   }
 
-  private playTone(freq: number, duration: number, type: OscillatorType = 'sine', volume = 0.09, delay = 0) {
+  /**
+   * Warm acoustic chime note (marimba/bell harmonic blend + soft felt attack) so UI cues sound crisp & pleasant.
+   */
+  private playChime(freq: number, duration: number, volume = 0.14, delay = 0) {
     const ctx = this.getCtx();
     if (!ctx) return;
 
     const now = ctx.currentTime + delay;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, now);
+    const out = this.getMasterBus(ctx);
 
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(volume, now + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const g1 = ctx.createGain();
+    const g2 = ctx.createGain();
 
-    osc.connect(gain);
-    gain.connect(this.getMasterBus(ctx));
-    osc.start(now);
-    osc.stop(now + duration + 0.02);
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(freq, now);
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(freq * 2, now);
+
+    g1.gain.setValueAtTime(0.0005, now);
+    g1.gain.linearRampToValueAtTime(volume, now + 0.008);
+    g1.gain.exponentialRampToValueAtTime(0.0005, now + duration);
+
+    g2.gain.setValueAtTime(0.0005, now);
+    g2.gain.linearRampToValueAtTime(volume * 0.24, now + 0.005);
+    g2.gain.exponentialRampToValueAtTime(0.0005, now + duration * 0.55);
+
+    osc1.connect(g1);
+    osc2.connect(g2);
+    g1.connect(out);
+    g2.connect(out);
+
+    osc1.start(now);
+    osc2.start(now);
+    osc1.stop(now + duration + 0.025);
+    osc2.stop(now + duration + 0.025);
   }
 
   tap() {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.24, 1.05);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'ui_tap'), 0.26, 0.98 + Math.random() * 0.06);
   }
 
   placeItem() {
     const ctx = this.getCtx();
     if (!ctx) return;
     this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.34, 1.15);
-    this.playTone(340, 0.08, 'sine', 0.15, 0.025);
+    this.playChime(440, 0.11, 0.11, 0.02);
   }
 
   coin() {
-    this.playTone(987.77, 0.09, 'sine', 0.2, 0);
-    this.playTone(1318.51, 0.16, 'sine', 0.21, 0.055);
+    this.playChime(1046.5, 0.12, 0.14, 0);
+    this.playChime(1318.51, 0.20, 0.15, 0.055);
   }
 
   starSuccess() {
-    this.playTone(523.25, 0.09, 'sine', 0.19, 0);
-    this.playTone(659.25, 0.09, 'sine', 0.19, 0.08);
-    this.playTone(783.99, 0.11, 'sine', 0.2, 0.16);
-    this.playTone(1046.5, 0.22, 'sine', 0.22, 0.24);
+    this.playChime(523.25, 0.14, 0.14, 0);
+    this.playChime(659.25, 0.14, 0.14, 0.075);
+    this.playChime(783.99, 0.16, 0.15, 0.15);
+    this.playChime(1046.5, 0.28, 0.17, 0.225);
   }
 
   alert() {
-    this.playTone(340, 0.11, 'triangle', 0.19, 0);
-    this.playTone(280, 0.16, 'triangle', 0.19, 0.1);
+    this.playChime(392, 0.12, 0.15, 0);
+    this.playChime(293.66, 0.20, 0.15, 0.09);
   }
 
   padStick() {
@@ -698,9 +925,9 @@ class SoundEngine {
     if (!ctx) return;
     this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.28, on ? 1.12 : 0.88);
     if (on) {
-      this.playTone(880, 0.065, 'sine', 0.15, 0.02);
+      this.playChime(880, 0.09, 0.1, 0.015);
     } else {
-      this.playTone(460, 0.07, 'sine', 0.13, 0.02);
+      this.playChime(523.25, 0.09, 0.085, 0.015);
     }
   }
 
@@ -710,11 +937,11 @@ class SoundEngine {
     this.playBufferOneShot(
       ctx,
       this.getDeviceBuffer(ctx, 'equip_thud'),
-      isRollingCart ? 0.3 : 0.24,
+      isRollingCart ? 0.28 : 0.22,
       isRollingCart ? 1.15 : 1.38
     );
     if (isRollingCart) {
-      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.2, 0.9, 0.018);
+      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.18, 0.92, 0.018);
     }
   }
 
@@ -724,18 +951,18 @@ class SoundEngine {
     this.playBufferOneShot(
       ctx,
       this.getDeviceBuffer(ctx, 'equip_thud'),
-      isRollingCart ? 0.4 : 0.3,
+      isRollingCart ? 0.36 : 0.28,
       isRollingCart ? 0.88 : 1.05
     );
     if (nearBed) {
-      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.24, 0.85, 0.035);
+      this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.22, 0.86, 0.035);
     }
   }
 
   fppEquipReturn() {
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.24, 1.25);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'equip_thud'), 0.22, 1.25);
   }
 
   fppEquipAdjust(timeSec: number) {
@@ -743,7 +970,7 @@ class SoundEngine {
     this.lastAdjustCueAt = timeSec;
     const ctx = this.getCtx();
     if (!ctx) return;
-    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.15, 0.72);
+    this.playBufferOneShot(ctx, this.getDeviceBuffer(ctx, 'switch_click'), 0.14, 0.74);
   }
 
   syncFppEquipMove(isMovingHeld: boolean, speed01: number, isRollingCart: boolean, timeSec: number) {
@@ -759,7 +986,7 @@ class SoundEngine {
     this.lastMoveSyncAt = timeSec;
 
     if (!this.equipMove && isMovingHeld) {
-      const out = this.getMasterBus(ctx);
+      const out = this.getDeviceBus(ctx);
       const masterGain = ctx.createGain();
       masterGain.gain.value = 0.0001;
       masterGain.connect(out);
@@ -793,7 +1020,7 @@ class SoundEngine {
       return;
     }
 
-    const baseVol = isRollingCart ? 0.11 + clampedSpd * 0.24 : 0.035 + clampedSpd * 0.08;
+    const baseVol = isRollingCart ? 0.10 + clampedSpd * 0.22 : 0.03 + clampedSpd * 0.07;
     em.masterGain.gain.setTargetAtTime(baseVol, now, 0.045);
     em.rollLp.frequency.setTargetAtTime((isRollingCart ? 420 : 560) + clampedSpd * 420, now, 0.05);
   }
@@ -805,14 +1032,20 @@ class SoundEngine {
     this.disposeNodeList(ctx, em.masterGain, em.nodes);
   }
 
-  private playVoiceClip(ctx: AudioContext, key: string, volume: number, rateOffset = 1.0) {
+  private playVoiceClip(
+    ctx: AudioContext,
+    key: string,
+    volume: number,
+    rateOffset = 1.0,
+    isScream = false
+  ) {
     const now = ctx.currentTime;
     if (this.activeVoice) {
       const prev = this.activeVoice;
       try {
         prev.gain.gain.cancelScheduledValues(now);
-        prev.gain.gain.setTargetAtTime(0.0001, now, 0.018);
-        prev.src.stop(now + 0.07);
+        prev.gain.gain.setTargetAtTime(0.0001, now, isScream ? 0.01 : 0.022);
+        prev.src.stop(now + 0.055);
       } catch {
         // Ignore
       }
@@ -825,9 +1058,9 @@ class SoundEngine {
     src.playbackRate.value = rateOffset;
 
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.0005, now);
-    gain.gain.linearRampToValueAtTime(volume, now + 0.025);
-    gain.connect(this.getMasterBus(ctx));
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(volume, now + (isScream ? 0.012 : 0.022));
+    gain.connect(this.getVoiceBus(ctx));
 
     src.connect(gain);
     src.onended = () => {
@@ -842,7 +1075,17 @@ class SoundEngine {
       }
     };
     src.start(now);
-    this.activeVoice = { src, gain };
+    this.activeVoice = { src, gain, isScream };
+
+    // Duck running machines briefly when patient cries out or screams so the human voice stays clear & front-most
+    if (this.deviceBus && (isScream || volume >= 0.78)) {
+      const duckGain = isScream ? 0.42 : 0.65;
+      const holdSec = Math.min(0.95, buf.duration / Math.max(0.8, rateOffset));
+      this.voiceDuckUntil = Math.max(this.voiceDuckUntil, now + holdSec);
+      this.deviceBus.gain.cancelScheduledValues(now);
+      this.deviceBus.gain.setTargetAtTime(duckGain, now, 0.025);
+      this.deviceBus.gain.setTargetAtTime(1.0, now + holdSec * 0.78, 0.16);
+    }
   }
 
   syncPatientReaction(input: PatientReactionLiveInput, timeSec: number) {
@@ -850,30 +1093,43 @@ class SoundEngine {
       if (this.activeVoice && this.ctx) {
         const now = this.ctx.currentTime;
         try {
-          this.activeVoice.gain.gain.setTargetAtTime(0.0001, now, 0.04);
+          this.activeVoice.gain.gain.setTargetAtTime(0.0001, now, 0.045);
         } catch {
           // Ignore
         }
       }
+      if (this.deviceBus && this.ctx) {
+        this.deviceBus.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.08);
+      }
       this.nextVoiceAt = 0;
       return;
     }
-    const ctx = this.ctx;
-    if (!ctx || ctx.state !== 'running') return;
 
-    if (timeSec - this.lastVoiceSyncAt < 0.036) return;
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    if (ctx.state !== 'running') return;
+
+    if (timeSec - this.lastVoiceSyncAt < 0.032) return;
     this.lastVoiceSyncAt = timeSec;
 
-    const lvl = Math.max(0, Math.min(1.25, input.intensity01));
-    if (lvl < 0.25 && input.spike01 < 0.34) return;
+    const lvl = Math.max(0, Math.min(1.3, input.intensity01));
+    if (lvl < 0.24 && input.spike01 < 0.34) return;
 
+    // First entry into stimulation: respond immediately if uncomfortable/high, slightly delayed if mild
     if (this.nextVoiceAt === 0 && input.spike01 < 0.34) {
-      this.nextVoiceAt = timeSec + (lvl >= 0.68 ? 0.65 : 2.8);
-      return;
+      this.nextVoiceAt = timeSec + (lvl >= 0.84 ? 0.05 : lvl >= 0.58 ? 0.35 : 1.6);
+      if (lvl < 0.84) return;
     }
 
     const prefix = input.isFemale ? 'f_' : 'm_';
-    const isSpike = input.spike01 >= 0.34 && lvl >= 0.48 && timeSec - this.lastVoiceSpikeAt >= 1.1;
+    const isOverdose = lvl >= 0.86;
+    const isSpike =
+      input.spike01 >= 0.34 &&
+      lvl >= 0.44 &&
+      timeSec - this.lastVoiceSpikeAt >= (isOverdose ? 0.52 : 0.88);
     const isPeriodicDue = timeSec >= this.nextVoiceAt;
 
     if (!isSpike && !isPeriodicDue) return;
@@ -884,53 +1140,83 @@ class SoundEngine {
     let clipKey: string;
     let vol: number;
     let nextDelay: number;
+    let isScream = false;
 
     if (isSpike) {
       this.lastVoiceSpikeAt = timeSec;
-      if (lvl >= 0.88) {
+      if (lvl >= 0.86) {
+        // Sudden overdose jump -> instant loud pain scream!
+        this.screamVariantIdx = (this.screamVariantIdx + 1) % 3;
+        clipKey =
+          this.screamVariantIdx === 0
+            ? `${prefix}scream_sharp`
+            : this.screamVariantIdx === 1
+              ? `${prefix}scream_0`
+              : `${prefix}scream_1`;
+        vol = Math.min(1.5, 1.18 + (lvl - 0.86) * 0.82);
+        nextDelay = 1.05 + Math.random() * 0.35;
+        isScream = true;
+      } else if (lvl >= 0.66) {
         clipKey = `${prefix}groan_${this.voiceVariantIdx}`;
-        vol = Math.min(0.68, 0.48 + lvl * 0.16);
-        nextDelay = 2.0 + Math.random() * 0.7;
-      } else if (lvl >= 0.68) {
-        clipKey = input.kind === 'percussion' || input.kind === 'cold' ? `${prefix}gasp` : `${prefix}wince_${this.voiceVariantIdx}`;
-        vol = 0.42 + (lvl - 0.68) * 0.4;
-        nextDelay = 2.4 + Math.random() * 0.8;
+        vol = 0.92 + (lvl - 0.66) * 0.9;
+        nextDelay = 1.45 + Math.random() * 0.45;
+      } else if (lvl >= 0.48) {
+        clipKey =
+          input.kind === 'percussion' || input.kind === 'cold'
+            ? `${prefix}gasp`
+            : `${prefix}wince_${this.voiceVariantIdx}`;
+        vol = 0.72 + (lvl - 0.48) * 0.9;
+        nextDelay = 1.85 + Math.random() * 0.6;
       } else {
         clipKey = `${prefix}sigh_mild`;
-        vol = 0.3 + (lvl - 0.45) * 0.3;
-        nextDelay = 3.0 + Math.random() * 0.9;
+        vol = 0.52 + (lvl - 0.32) * 0.65;
+        nextDelay = 2.4 + Math.random() * 0.8;
       }
       this.nextVoiceAt = timeSec + nextDelay;
-      this.playVoiceClip(ctx, clipKey, vol, rateJitter);
+      this.playVoiceClip(ctx, clipKey, vol, rateJitter, isScream);
       return;
     }
 
-    if (lvl >= 0.92) {
+    if (lvl >= 0.85) {
+      // Sustained critical overdose -> loud urgent alternating screams & painful gasps!
+      this.screamVariantIdx = (this.screamVariantIdx + 1) % 4;
+      clipKey =
+        this.screamVariantIdx === 0
+          ? `${prefix}scream_0`
+          : this.screamVariantIdx === 1
+            ? `${prefix}scream_1`
+            : this.screamVariantIdx === 2
+              ? `${prefix}scream_sharp`
+              : `${prefix}groan_${this.voiceVariantIdx}`;
+      vol = Math.min(1.52, 1.18 + (lvl - 0.85) * 0.82);
+      nextDelay = this.screamVariantIdx === 2 ? 0.95 : 1.25 + Math.random() * 0.4;
+      isScream = this.screamVariantIdx !== 3;
+    } else if (lvl >= 0.68) {
       clipKey = `${prefix}groan_${this.voiceVariantIdx}`;
-      vol = Math.min(0.65, 0.46 + (lvl - 0.9) * 0.45);
-      nextDelay = 2.0 + Math.random() * 0.75;
-    } else if (lvl >= 0.72) {
+      vol = 0.9 + (lvl - 0.68) * 1.1;
+      nextDelay = 1.5 + Math.random() * 0.55;
+    } else if (lvl >= 0.48) {
       clipKey = `${prefix}wince_${this.voiceVariantIdx}`;
-      vol = 0.38 + (lvl - 0.72) * 0.42;
-      nextDelay = 2.4 + Math.random() * 0.9;
-    } else if (lvl >= 0.44) {
+      vol = 0.68 + (lvl - 0.48) * 0.95;
+      nextDelay = 2.0 + Math.random() * 0.7;
+    } else if (lvl >= 0.34) {
       clipKey = this.voiceVariantIdx === 0 ? `${prefix}sigh_mild` : `${prefix}breath_soft`;
-      vol = 0.28 + (lvl - 0.44) * 0.32;
-      nextDelay = 3.2 + Math.random() * 1.1;
+      vol = 0.48 + (lvl - 0.34) * 0.8;
+      nextDelay = 2.8 + Math.random() * 0.9;
     } else {
       clipKey = `${prefix}breath_soft`;
-      vol = 0.18 + (lvl - 0.25) * 0.26;
-      nextDelay = 4.6 + Math.random() * 1.5;
+      vol = 0.34 + (lvl - 0.24) * 0.75;
+      nextDelay = 3.8 + Math.random() * 1.2;
     }
 
     this.nextVoiceAt = timeSec + nextDelay;
-    this.playVoiceClip(ctx, clipKey, vol, rateJitter);
+    this.playVoiceClip(ctx, clipKey, vol, rateJitter, isScream);
   }
 
   private createDeviceHandle(ctx: AudioContext, item: ActiveDeviceAudioInput): DeviceAudioHandle | null {
     const now = ctx.currentTime;
     const sprite = item.sprite;
-    const out = this.getMasterBus(ctx);
+    const out = this.getDeviceBus(ctx);
     const masterGain = ctx.createGain();
     masterGain.gain.setValueAtTime(0.0001, now);
     masterGain.connect(out);
@@ -950,7 +1236,7 @@ class SoundEngine {
       fanSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(780, now);
+      lp.frequency.setValueAtTime(720, now);
       fanSrc.connect(lp);
       lp.connect(masterGain);
       fanSrc.start(now);
@@ -966,7 +1252,7 @@ class SoundEngine {
       compSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(720, now);
+      lp.frequency.setValueAtTime(680, now);
       compSrc.connect(lp);
       lp.connect(masterGain);
       compSrc.start(now);
@@ -982,7 +1268,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(1350, now);
+      lp.frequency.setValueAtTime(1650, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -997,13 +1283,12 @@ class SoundEngine {
       fanSrc.buffer = this.getDeviceBuffer(ctx, 'fan_loop');
       fanSrc.loop = true;
       const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.setValueAtTime(780, now);
-      bp.Q.setValueAtTime(0.75, now);
+      bp.type = 'lowpass';
+      bp.frequency.setValueAtTime(640, now);
 
       const pulseOsc = ctx.createOscillator();
       pulseOsc.type = 'sine';
-      pulseOsc.frequency.setValueAtTime(1520, now);
+      pulseOsc.frequency.setValueAtTime(1320, now);
       const pulseGain = ctx.createGain();
       pulseGain.gain.setValueAtTime(0.0001, now);
 
@@ -1028,7 +1313,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(sprite === 'cryo_unit' ? 1250 : 900, now);
+      lp.frequency.setValueAtTime(sprite === 'cryo_unit' ? 1100 : 780, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1044,7 +1329,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(920, now);
+      lp.frequency.setValueAtTime(840, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1060,7 +1345,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(520, now);
+      lp.frequency.setValueAtTime(480, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1076,7 +1361,7 @@ class SoundEngine {
       src.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(sprite === 'hydro_sink' ? 2600 : 680, now);
+      lp.frequency.setValueAtTime(sprite === 'hydro_sink' ? 2400 : 620, now);
       src.connect(lp);
       lp.connect(masterGain);
       src.start(now);
@@ -1107,7 +1392,7 @@ class SoundEngine {
       humSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(540, now);
+      lp.frequency.setValueAtTime(480, now);
 
       const coilOsc = ctx.createOscillator();
       coilOsc.type = 'sine';
@@ -1136,7 +1421,7 @@ class SoundEngine {
       motorSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(680, now);
+      lp.frequency.setValueAtTime(640, now);
       motorSrc.connect(lp);
       lp.connect(masterGain);
       motorSrc.start(now);
@@ -1154,7 +1439,7 @@ class SoundEngine {
     const now = ctx.currentTime;
     const p = item.deviceParams;
     const lookahead = now + 0.095;
-    const out = this.getMasterBus(ctx);
+    const out = this.getDeviceBus(ctx);
 
     if (h.sprite === 'shockwave_eswt') {
       const hz = Math.max(1, Math.min(21, Number(p?.freqHz ?? 10)));
@@ -1170,7 +1455,7 @@ class SoundEngine {
         src.buffer = shotBuf;
         src.playbackRate.value = 0.94 + bar01 * 0.14;
         const g = ctx.createGain();
-        g.gain.value = 0.3 + bar01 * 0.28;
+        g.gain.value = 0.28 + bar01 * 0.24;
         src.connect(g);
         g.connect(out);
         src.start(pt);
@@ -1218,10 +1503,10 @@ class SoundEngine {
         const pt = h.nextPulseAt;
         const watts = Math.max(2, Math.min(15, Number(p?.intensity ?? 10)));
         const w01 = (watts - 2) / 13;
-        h.pulseOsc.frequency.setValueAtTime(1440 + w01 * 160, pt);
+        h.pulseOsc.frequency.setValueAtTime(1280 + w01 * 140, pt);
         h.pulseGain.gain.setValueAtTime(0.0002, pt);
-        h.pulseGain.gain.linearRampToValueAtTime(0.055 + w01 * 0.04, pt + 0.008);
-        h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.055);
+        h.pulseGain.gain.linearRampToValueAtTime(0.04 + w01 * 0.03, pt + 0.008);
+        h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.05);
         h.nextPulseAt += period;
       }
     } else if (h.sprite === 'emg_biofeedback' && h.pulseOsc && h.pulseGain) {
@@ -1233,10 +1518,10 @@ class SoundEngine {
         const thr = Math.max(10, Math.min(100, Number(p?.intensity ?? 35)));
         const thr01 = thr / 100;
         if (item.placedCount > 0 && emgWave > thr01 * 0.85) {
-          h.pulseOsc.frequency.setValueAtTime(560 + emgWave * 280, pt);
+          h.pulseOsc.frequency.setValueAtTime(520 + emgWave * 240, pt);
           h.pulseGain.gain.setValueAtTime(0.0002, pt);
-          h.pulseGain.gain.linearRampToValueAtTime(0.11, pt + 0.015);
-          h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.12);
+          h.pulseGain.gain.linearRampToValueAtTime(0.095, pt + 0.015);
+          h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.11);
         }
         h.nextPulseAt += period;
       }
@@ -1246,8 +1531,8 @@ class SoundEngine {
       while (h.nextPulseAt <= lookahead) {
         const pt = h.nextPulseAt;
         h.pulseGain.gain.setValueAtTime(0.0002, pt);
-        h.pulseGain.gain.linearRampToValueAtTime(0.1, pt + 0.012);
-        h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.14);
+        h.pulseGain.gain.linearRampToValueAtTime(0.085, pt + 0.012);
+        h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.13);
         h.nextPulseAt += period;
       }
     } else if (h.sprite === 'magnetotherapy' && h.pulseOsc && h.pulseGain) {
@@ -1274,7 +1559,7 @@ class SoundEngine {
         } else if (mode === 'CONT') {
           gate = 0.65;
         }
-        const peakVol = (0.035 + mT01 * 0.065) * gate;
+        const peakVol = (0.03 + mT01 * 0.055) * gate;
         h.pulseOsc.frequency.setValueAtTime(92 + mT01 * 28, pt);
         h.pulseGain.gain.setValueAtTime(0.0002, pt);
         h.pulseGain.gain.linearRampToValueAtTime(peakVol, pt + 0.014);
@@ -1291,11 +1576,11 @@ class SoundEngine {
     if (h.sprite === 'tens_unit') {
       const ma = Math.max(2, Math.min(60, Number(p?.intensity ?? 16)));
       const ma01 = (ma - 2) / 58;
-      h.masterGain.gain.setTargetAtTime(0.025 + ma01 * 0.025, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.02 + ma01 * 0.02, now, 0.05);
     } else if (h.sprite === 'shockwave_eswt') {
       const bar = Math.max(1, Math.min(5, Number(p?.intensity ?? 2.4)));
       const bar01 = (bar - 1) / 4;
-      h.masterGain.gain.setTargetAtTime(0.1 + bar01 * 0.09, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.08 + bar01 * 0.075, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.92 + bar01 * 0.18, now, 0.05);
     } else if (h.sprite === 'ultrasound_unit') {
       const w = Math.max(0.2, Math.min(2.5, Number(p?.intensity ?? 1.2)));
@@ -1304,58 +1589,58 @@ class SoundEngine {
       let dutyGate = 1;
       if (duty < 95) {
         const phase = (timeSec * 3.5) % 1;
-        dutyGate = phase < duty / 100 ? 1.0 : 0.3;
+        dutyGate = phase < duty / 100 ? 1.0 : 0.35;
       }
       const contactMul = item.placedCount > 0 ? 1.0 : 0.45;
-      h.masterGain.gain.setTargetAtTime((0.09 + w01 * 0.1) * dutyGate * contactMul, now, 0.04);
+      h.masterGain.gain.setTargetAtTime((0.08 + w01 * 0.09) * dutyGate * contactMul, now, 0.04);
       h.src1?.playbackRate.setTargetAtTime(Number(p?.freqHz ?? 1) > 2 ? 1.12 : 0.96, now, 0.05);
     } else if (h.sprite === 'laser_hilt') {
       const watts = Math.max(2, Math.min(15, Number(p?.intensity ?? 10)));
       const w01 = (watts - 2) / 13;
-      h.masterGain.gain.setTargetAtTime(0.08 + w01 * 0.06, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.06 + w01 * 0.05, now, 0.05);
     } else if (h.sprite === 'swd_unit') {
-      const watts = Math.max(20, Math.min(250, Number(p?.intensity ?? 120)));
-      const w01 = (watts - 20) / 230;
+      const watts = Math.max(20, Math.min(200, Number(p?.intensity ?? 120)));
+      const w01 = (watts - 20) / 180;
       const isPulsed = p?.mode === 'PULSED';
       const pulseGate = isPulsed ? (Math.sin(timeSec * Math.PI * 8) > 0 ? 1.0 : 0.45) : 1.0;
-      h.masterGain.gain.setTargetAtTime((0.09 + w01 * 0.1) * pulseGate, now, 0.04);
+      h.masterGain.gain.setTargetAtTime((0.07 + w01 * 0.08) * pulseGate, now, 0.04);
     } else if (h.sprite === 'cryo_unit') {
       const mmHg = Math.max(20, Math.min(75, Number(p?.pressureMmHg ?? 45)));
       const mm01 = (mmHg - 20) / 55;
-      const flowMul = p?.flow === 'HIGH' ? 1.15 : p?.flow === 'LOW' ? 0.74 : 0.94;
-      h.masterGain.gain.setTargetAtTime((0.11 + mm01 * 0.1) * flowMul, now, 0.05);
+      const flowMul = p?.flow === 'HIGH' ? 1.12 : p?.flow === 'LOW' ? 0.74 : 0.94;
+      h.masterGain.gain.setTargetAtTime((0.09 + mm01 * 0.085) * flowMul, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.9 + mm01 * 0.18, now, 0.05);
     } else if (h.sprite === 'cpm_device') {
       const speed = Math.max(1, Math.min(4, Number(p?.speed ?? 2)));
       const cycleRate = 0.65 + speed * 0.35;
       const strokeVel = Math.abs(Math.sin(timeSec * cycleRate));
-      h.masterGain.gain.setTargetAtTime(0.1 + speed * 0.028 + strokeVel * 0.05, now, 0.04);
+      h.masterGain.gain.setTargetAtTime(0.08 + speed * 0.025 + strokeVel * 0.045, now, 0.04);
       h.src1?.playbackRate.setTargetAtTime(0.86 + speed * 0.06 + strokeVel * 0.14, now, 0.04);
     } else if (h.sprite === 'infrared_lamp') {
       const ir = Math.max(0.1, Math.min(1, item.irIntensity ?? 0.85));
-      h.masterGain.gain.setTargetAtTime(0.045 + ir * 0.055, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.035 + ir * 0.045, now, 0.05);
     } else if (h.sprite === 'hydro_sink' || h.sprite === 'paraffin_bath') {
       const temp = Number(p?.tempC ?? (h.sprite === 'hydro_sink' ? 74 : 53));
-      const t01 = h.sprite === 'hydro_sink' ? (temp - 65) / 15 : (temp - 48) / 10;
+      const t01 = h.sprite === 'hydro_sink' ? (temp - 65) / 13 : (temp - 48) / 8;
       h.masterGain.gain.setTargetAtTime(
-        (h.sprite === 'hydro_sink' ? 0.16 : 0.075) + Math.max(0, Math.min(1, t01)) * 0.085,
+        (h.sprite === 'hydro_sink' ? 0.13 : 0.065) + Math.max(0, Math.min(1, t01)) * 0.075,
         now,
         0.05
       );
     } else if (h.sprite === 'emg_biofeedback' || h.sprite === 'balance_trainer') {
-      h.masterGain.gain.setTargetAtTime(0.025, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(0.02, now, 0.05);
     } else if (h.sprite === 'magnetotherapy') {
       const mT = Math.max(10, Math.min(100, Number(p?.intensity ?? 45)));
       const mT01 = (mT - 10) / 90;
       const zone = p?.magnetZone ?? 'SCAN';
       const speed = Math.max(1, Math.min(3, Number(p?.speed ?? 2)));
-      const scanGlide = zone === 'SCAN' ? 0.015 + speed * 0.006 : 0;
-      h.masterGain.gain.setTargetAtTime(0.04 + mT01 * 0.04 + scanGlide, now, 0.06);
+      const scanGlide = zone === 'SCAN' ? 0.014 + speed * 0.005 : 0;
+      h.masterGain.gain.setTargetAtTime(0.035 + mT01 * 0.035 + scanGlide, now, 0.06);
       h.filter1?.frequency.setTargetAtTime(420 + mT01 * 180 + (zone === 'SCAN' ? 70 : 0), now, 0.08);
     } else if (h.sprite === 'tilt_table') {
       const spd = Math.max(1, Math.min(3, Number(p?.speed ?? 2)));
       const motorActive = Boolean(item.isMoving);
-      h.masterGain.gain.setTargetAtTime(motorActive ? 0.08 + spd * 0.03 : 0.0002, now, 0.05);
+      h.masterGain.gain.setTargetAtTime(motorActive ? 0.075 + spd * 0.028 : 0.0002, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.76 + spd * 0.11, now, 0.05);
     }
 
@@ -1408,7 +1693,11 @@ class SoundEngine {
       return;
     }
     const ctx = this.ctx;
-    if (!ctx || ctx.state !== 'running') {
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    if (ctx.state !== 'running') {
       return;
     }
     if (devices.length === 0 && this.activeDevices.size === 0) {
@@ -1465,19 +1754,26 @@ class SoundEngine {
       }
       this.activeVoice = null;
     }
+    if (this.deviceBus && this.ctx) {
+      this.deviceBus.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.04);
+    }
     this.disposeEquipMove(this.ctx);
     this.lastDeviceSyncAt = -1;
     this.lastVoiceSyncAt = -1;
     this.lastMoveSyncAt = -1;
     this.nextVoiceAt = 0;
     this.lastVoiceSpikeAt = -1;
+    this.voiceDuckUntil = 0;
     if (!this.enabled) {
       this.clearCaches();
     }
   }
 
   warmup() {
-    this.getCtx();
+    const ctx = this.getCtx();
+    if (ctx) {
+      this.ensureBuses(ctx);
+    }
   }
 }
 
@@ -1486,9 +1782,8 @@ export const soundFx = new SoundEngine();
 if (typeof window !== 'undefined') {
   const unlock = () => {
     soundFx.warmup();
-    window.removeEventListener('pointerdown', unlock, true);
-    window.removeEventListener('keydown', unlock, true);
   };
   window.addEventListener('pointerdown', unlock, { capture: true, passive: true, once: true });
+  window.addEventListener('touchend', unlock, { capture: true, passive: true, once: true });
   window.addEventListener('keydown', unlock, { capture: true, passive: true, once: true });
 }
