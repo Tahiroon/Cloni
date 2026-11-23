@@ -21,10 +21,12 @@ import {
   FppProbeAnchor,
   Language,
 } from '../types/clinic';
+import { getRotatedSliderFraction, useCssRotation } from '../utils/screenOrientation';
 
 interface PhysicalDeviceControllerProps {
   device: FppActiveDeviceState;
   language: Language;
+  isLandscapeLayout?: boolean;
   onUpdate: (next: FppActiveDeviceState) => void;
   onSelectProbeToPlace: (probeId: string) => void;
   onPickUp: () => void;
@@ -56,6 +58,7 @@ const HardwareFader: React.FC<{
 }) => {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const pointerIdRef = useRef<number | null>(null);
+  const cssRotation = useCssRotation();
   const ratio = Math.max(0, Math.min(1, (value - min) / Math.max(1e-5, max - min)));
 
   const commitValue = (raw: number) => {
@@ -65,11 +68,11 @@ const HardwareFader: React.FC<{
     if (clamped !== value) onChange(clamped);
   };
 
-  const applyClientX = (clientX: number) => {
+  const applyClientPoint = (clientX: number, clientY: number) => {
     const el = trackRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const t = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    const t = getRotatedSliderFraction(clientX, clientY, rect, cssRotation);
     commitValue(min + t * (max - min));
   };
 
@@ -109,12 +112,12 @@ const HardwareFader: React.FC<{
               // ignore
             }
             pointerIdRef.current = e.pointerId;
-            applyClientX(e.clientX);
+            applyClientPoint(e.clientX, e.clientY);
           }}
           onPointerMove={(e) => {
             if (pointerIdRef.current !== e.pointerId) return;
             e.stopPropagation();
-            applyClientX(e.clientX);
+            applyClientPoint(e.clientX, e.clientY);
           }}
           onPointerUp={(e) => {
             if (pointerIdRef.current !== e.pointerId) return;
@@ -169,6 +172,7 @@ const HardwareFader: React.FC<{
 export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> = ({
   device,
   language,
+  isLandscapeLayout = false,
   onUpdate,
   onSelectProbeToPlace,
   onPickUp,
@@ -366,7 +370,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const shift = running ? (tickPhase * 14) % 24 : 0;
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none">
+      <div className="w-[min(95%,27rem)] select-none">
         <div className="mx-auto w-24 h-2 rounded-t-md bg-slate-300 border-x-2 border-t-2 border-slate-500" />
         <div className="rounded-2xl bg-gradient-to-b from-[#eef2f6] via-[#dce3ec] to-[#c7d1de] border-[3px] border-slate-500 shadow-[0_14px_34px_rgba(0,0,0,0.62)] text-slate-900 overflow-hidden">
           {renderHardwareTopTrim('TENS / IFC PRO', true)}
@@ -499,7 +503,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const coupled = Boolean(headProbe?.placed);
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none flex items-stretch gap-1.5">
+      <div className="w-[min(95%,27rem)] select-none flex items-stretch gap-1.5">
         <div className="flex-1 rounded-2xl bg-gradient-to-b from-slate-600 via-slate-700 to-slate-800 border-[3px] border-slate-400 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-white overflow-hidden">
           {renderHardwareTopTrim('ULTRASOUND ERA 5cm²', false, { on: 'STOP', off: 'EMIT' })}
 
@@ -600,7 +604,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const deliveredJ = Math.min(targetJ, Math.round(elapsedSec * watts * (mode === 'BIOSTIM' ? 0.85 : 0.65)));
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none flex items-stretch gap-1.5">
+      <div className="w-[min(95%,27rem)] select-none flex items-stretch gap-1.5">
         <div className="flex-1 rounded-2xl bg-gradient-to-b from-[#231f28] via-[#17141b] to-[#0d0a10] border-[3px] border-rose-500/75 shadow-[0_14px_34px_rgba(0,0,0,0.72)] text-white overflow-hidden">
           {renderHardwareTopTrim('HILT 1064nm CLASS IV', false, { on: 'OFF', off: 'EMIT' })}
 
@@ -699,7 +703,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const pct = Math.min(100, Math.round((delivered / Math.max(1, shocks)) * 100));
 
     return (
-      <div className="w-[min(95vw,27.5rem)] select-none flex items-stretch gap-1.5">
+      <div className="w-[min(95%,27.5rem)] select-none flex items-stretch gap-1.5">
         <div className="flex-1 rounded-2xl bg-gradient-to-b from-slate-200 via-slate-300 to-slate-400 border-[3px] border-slate-500 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
           {renderHardwareTopTrim('RADIAL SHOCKWAVE ESWT', true, { on: 'STOP', off: 'PULSE' })}
 
@@ -810,7 +814,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const tuned = Boolean(headProbe?.placed);
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none flex items-stretch gap-1.5">
+      <div className="w-[min(95%,27rem)] select-none flex items-stretch gap-1.5">
         <div className="flex-1 rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-[3px] border-sky-400/75 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-white overflow-hidden">
           {renderHardwareTopTrim('SWD 27.12 MHz', false, { on: 'STOP', off: 'RF ON' })}
 
@@ -891,7 +895,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const activeAmp = running ? Math.round(25 + Math.abs(Math.sin(tickPhase * 1.8)) * 60) : 0;
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-[3px] border-emerald-500/70 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-white overflow-hidden">
+      <div className="w-[min(95%,27rem)] select-none rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-[3px] border-emerald-500/70 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-white overflow-hidden">
         {renderHardwareTopTrim('sEMG BIOFEEDBACK', false, { on: 'HOLD', off: 'REC' })}
 
         <div className="p-2 space-y-1.5">
@@ -984,7 +988,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const headProbe = probes[0];
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none flex items-stretch gap-1.5">
+      <div className="w-[min(95%,27rem)] select-none flex items-stretch gap-1.5">
         <div className="flex-1 rounded-2xl bg-gradient-to-b from-slate-100 via-cyan-50 to-slate-200 border-[3px] border-cyan-500 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
           {renderHardwareTopTrim('CRYO-COMPRESSION', true, { on: 'STOP', off: 'PUMP' })}
 
@@ -1083,7 +1087,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const armY = 26 - Math.sin(rad * 0.85) * 20;
 
     return (
-      <div className="w-[min(95vw,26.5rem)] select-none flex flex-col items-center">
+      <div className="w-[min(95%,26.5rem)] select-none flex flex-col items-center">
         <div className="w-full rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-slate-200 border-[3px] border-sky-500 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-slate-900 overflow-hidden">
           {renderHardwareTopTrim(`CPM KNEE · ${curAngle}°`, true, { on: 'HOLD', off: 'FLEX' })}
           <div className="p-2 space-y-1.5">
@@ -1158,7 +1162,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const safeOk = isHydro ? tempC >= 70 && tempC <= 76 : tempC >= 51 && tempC <= 54;
 
     return (
-      <div className="w-[min(95vw,27rem)] select-none flex items-stretch gap-1.5">
+      <div className="w-[min(95%,27rem)] select-none flex items-stretch gap-1.5">
         <div
           className={`flex-1 rounded-2xl border-[3px] shadow-[0_14px_34px_rgba(0,0,0,0.65)] overflow-hidden ${
             isHydro
@@ -1248,7 +1252,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const copY = 20 + Math.sin(tickPhase * 2.4) * swayR * 0.75;
 
     return (
-      <div className="w-[min(95vw,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-[3px] border-emerald-500/75 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-white overflow-hidden">
+      <div className="w-[min(95%,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-[3px] border-emerald-500/75 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-white overflow-hidden">
         {renderHardwareTopTrim(`BALANCE · L${lvl}`, false, { on: 'STOP', off: 'TEST' })}
         <div className="p-2 space-y-1.5">
           <div className="flex items-center gap-2.5">
@@ -1319,7 +1323,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     ];
 
     return (
-      <div className="w-[min(95vw,27.5rem)] select-none rounded-2xl bg-gradient-to-b from-[#1f2937] via-[#131b26] to-[#0b1018] border-[3px] border-cyan-500/80 shadow-[0_14px_34px_rgba(0,0,0,0.72)] text-white overflow-hidden">
+      <div className="w-[min(95%,27.5rem)] select-none rounded-2xl bg-gradient-to-b from-[#1f2937] via-[#131b26] to-[#0b1018] border-[3px] border-cyan-500/80 shadow-[0_14px_34px_rgba(0,0,0,0.72)] text-white overflow-hidden">
         {renderHardwareTopTrim('PEMF MAGNETO COUCH', false, {
           on: isAr ? 'إيقاف' : 'STOP',
           off: isAr ? 'تشغيل' : 'START',
@@ -1473,7 +1477,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     const fy = 20 + Math.sin(rad) * 16;
 
     return (
-      <div className="w-[min(95vw,27.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-slate-200 border-[3px] border-sky-500 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-slate-900 overflow-hidden">
+      <div className="w-[min(95%,27.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-slate-200 border-[3px] border-sky-500 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-slate-900 overflow-hidden">
         {renderHardwareTopTrim('TILT TABLE · INCLINOMETER', true, {
           on: isAr ? 'إيقاف (0°)' : 'STOP 0°',
           off: isAr ? 'رفع الطاولة' : 'START TILT',
@@ -1603,15 +1607,21 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     }
   };
 
-  // Docked cleanly at the very bottom edge (never covers the focused patient above!)
+  // Docked cleanly at bottom-center in Portrait, OR right-side panel in Landscape so patient remains fully unobstructed on the left
   return (
     <div
       dir="ltr"
-      className="pointer-events-none fixed inset-x-0 bottom-2.5 sm:bottom-4 z-40 flex justify-center px-2"
+      className={
+        isLandscapeLayout
+          ? 'pointer-events-none fixed right-2.5 bottom-2.5 top-[3.1rem] z-40 flex items-end justify-end max-w-[min(48%,28rem)]'
+          : 'pointer-events-none fixed inset-x-0 bottom-2.5 z-40 flex justify-center px-2'
+      }
     >
       <div
         onPointerDown={(e) => e.stopPropagation()}
-        className="pointer-events-auto max-h-[38vh] overflow-y-auto rounded-2xl shadow-2xl"
+        className={`pointer-events-auto overflow-y-auto rounded-2xl shadow-2xl ${
+          isLandscapeLayout ? 'max-h-full w-full' : 'max-h-[42%]'
+        }`}
       >
         {renderChassis()}
       </div>

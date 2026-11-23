@@ -4,6 +4,11 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useViewportProfile } from '../hooks/useViewportProfile';
 import {
+  CssRotationDeg,
+  mapClientDeltaForRotation,
+  mapClientToRotatedNdc,
+} from '../utils/screenOrientation';
+import {
   CATALOG_ITEMS,
   FPP_EXCLUDED_BED_SPRITES,
   getFppDeviceCapability,
@@ -160,6 +165,8 @@ interface ClinicCanvasProps {
   removedTreeIds?: string[];
   selectedTreeId?: string | null;
   firstPersonPatientId?: string | null;
+  cssRotation?: CssRotationDeg;
+  fppSplitShift?: number;
   fppPosture?: FppPatientPosture;
   fppRecenterNonce?: number;
   fppMoveInputRef?: React.MutableRefObject<{ x: number; y: number }>;
@@ -289,6 +296,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
   removedTreeIds = [],
   selectedTreeId = null,
   firstPersonPatientId = null,
+  cssRotation = 0,
+  fppSplitShift = 0,
   fppPosture,
   fppRecenterNonce = 0,
   fppMoveInputRef,
@@ -397,6 +406,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     focusTargetX: 4.5,
     focusTargetY: 0.65,
     focusTargetZ: 16.5,
+    splitShiftBlend: 0,
   });
 
   const catalogMap = useMemo(() => {
@@ -532,6 +542,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     removedTreeIds,
     selectedTreeId,
     firstPersonPatientId,
+    cssRotation,
+    fppSplitShift,
     fppPosture,
     fppMoveInputRef,
     fppActiveDevice,
@@ -572,6 +584,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     removedTreeIds,
     selectedTreeId,
     firstPersonPatientId,
+    cssRotation,
+    fppSplitShift,
     fppPosture,
     fppMoveInputRef,
     fppActiveDevice,
@@ -3416,6 +3430,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const _fppFocusTarget = new THREE.Vector3();
     const _fppFocusQuat = new THREE.Quaternion();
     const _fppFocusLookMat = new THREE.Matrix4();
+    let lastViewOffsetPx = 0;
 
     const updateCameraTransform = () => {
       const w = containerW;
@@ -3447,6 +3462,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         if (Math.abs(camera.fov - 30) > 0.02 || Math.abs(camera.near - 0.5) > 0.002) {
           camera.fov = 30;
           camera.near = 0.5;
+          projDirty = true;
+        }
+        if (lastViewOffsetPx !== 0) {
+          camera.clearViewOffset();
+          lastViewOffsetPx = 0;
           projDirty = true;
         }
       } else {
@@ -3491,12 +3511,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         camera.position.y += Math.sin(Math.PI * s) * 0.42;
         camera.quaternion.copy(_fppIsoQuat).slerp(_fppCamQuat, s);
 
-        const targetFppFov = THREE.MathUtils.lerp(60, 56, fb);
+        const baseFovWalk = aspect < 0.8 ? 62 : aspect > 1.65 ? 54 : 60;
+        const baseFovFocus = aspect < 0.8 ? 58 : aspect > 1.65 ? 51 : 56;
+        const targetFppFov = THREE.MathUtils.lerp(baseFovWalk, baseFovFocus, fb);
         const nextFov = THREE.MathUtils.lerp(30, targetFppFov, s);
         const nextNear = THREE.MathUtils.lerp(0.5, 0.08, s);
         if (Math.abs(camera.fov - nextFov) > 0.02 || Math.abs(camera.near - nextNear) > 0.002) {
           camera.fov = nextFov;
           camera.near = nextNear;
+          projDirty = true;
+        }
+        const targetOffsetPx = w * (fpp.splitShiftBlend ?? 0) * s;
+        if (targetOffsetPx < 0.35) {
+          if (lastViewOffsetPx !== 0) {
+            camera.clearViewOffset();
+            lastViewOffsetPx = 0;
+            projDirty = true;
+          }
+        } else if (Math.abs(targetOffsetPx - lastViewOffsetPx) > 0.35 || projDirty) {
+          camera.setViewOffset(w, h, targetOffsetPx, 0, w, h);
+          lastViewOffsetPx = targetOffsetPx;
           projDirty = true;
         }
       }
@@ -3881,8 +3915,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       ensureFppBoneCache(pEntry.rig, curFppId);
 
       const rect = renderer.domElement.getBoundingClientRect();
-      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const ndc = mapClientToRotatedNdc(clientX, clientY, rect, latestRef.current.cssRotation ?? 0);
+      _ndc.x = ndc.x;
+      _ndc.y = ndc.y;
       _raycaster.setFromCamera(_ndc, camera);
 
       const hits = _raycaster.intersectObject(pEntry.rig.root, true);
@@ -4075,8 +4110,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       }
       if (fppEquipLayer.children.length === 0) return false;
       const rect = renderer.domElement.getBoundingClientRect();
-      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const ndc = mapClientToRotatedNdc(clientX, clientY, rect, latestRef.current.cssRotation ?? 0);
+      _ndc.x = ndc.x;
+      _ndc.y = ndc.y;
       _raycaster.setFromCamera(_ndc, camera);
       const hits = _raycaster.intersectObjects(fppEquipLayer.children, true);
       for (const hit of hits) {
@@ -4358,8 +4394,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       const camBayZ = dCamX * pfX + dCamZ * pfZ;
 
       const rect = renderer.domElement.getBoundingClientRect();
-      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const ndc = mapClientToRotatedNdc(clientX, clientY, rect, latestRef.current.cssRotation ?? 0);
+      _ndc.x = ndc.x;
+      _ndc.y = ndc.y;
       _raycaster.setFromCamera(_ndc, camera);
 
       if (fppEquipLayer.children.length > 0) {
@@ -8487,6 +8524,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           fpp.probeLeanBlend = THREE.MathUtils.damp(fpp.probeLeanBlend, 0, 8, dt);
         }
         fpp.focusBlend = THREE.MathUtils.damp(fpp.focusBlend, focusActive ? 1 : 0, 8.5, dt);
+        fpp.splitShiftBlend = THREE.MathUtils.damp(
+          fpp.splitShiftBlend,
+          latestRef.current.fppSplitShift ?? 0,
+          8.5,
+          dt
+        );
 
         updateCameraTransform();
 
@@ -9672,6 +9715,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           fpp.handshakeOsc = 0;
           fpp.handshakeSmile = 0;
           fpp.probeLeanBlend = 0;
+          fpp.splitShiftBlend = 0;
           fppProbeActionRef.current.active = false;
           fppProbeActionRef.current.setupTimer = 0;
           pushHoverBodyZone(null);
@@ -10602,9 +10646,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
         return;
       }
-      const ddx = e.clientX - fppLastPointerRef.current.x;
-      const ddy = e.clientY - fppLastPointerRef.current.y;
+      const rawDdx = e.clientX - fppLastPointerRef.current.x;
+      const rawDdy = e.clientY - fppLastPointerRef.current.y;
       fppLastPointerRef.current = { x: e.clientX, y: e.clientY };
+      const { dx: ddx, dy: ddy } = mapClientDeltaForRotation(rawDdx, rawDdy, cssRotation);
       if (Math.hypot(e.clientX - dragRef.current.startX, e.clientY - dragRef.current.startY) > 4) {
         dragRef.current.moved = true;
       }
