@@ -100,9 +100,12 @@ export interface HumanoidRig {
   brows?: [THREE.Mesh, THREE.Mesh];
   mouthLower?: THREE.Mesh;
   mouthSeam?: THREE.Mesh;
+  eyePivots?: [THREE.Group, THREE.Group];
+  niqabVeil?: THREE.Object3D;
   isSkinnedGlb: boolean;
   isRealisticScan?: boolean;
   isRocketboxScan?: boolean;
+  isGulfNiqab?: boolean;
   morphMeshes?: MorphMeshRef[];
   smoothedMorphs?: Record<string, number>;
   fppBehavior?: RealisticFppBehaviorState;
@@ -113,6 +116,65 @@ export interface HumanoidRig {
 }
 
 let cachedIrisTex: THREE.CanvasTexture | null = null;
+let cachedGulfIrisTex: THREE.CanvasTexture | null = null;
+function getGulfIrisTexture(): THREE.CanvasTexture {
+  if (cachedGulfIrisTex) return cachedGulfIrisTex;
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  const cx = 128;
+  const cy = 128;
+  const r = 124;
+
+  ctx.clearRect(0, 0, 256, 256);
+
+  // Deep velvety Khaleeji dark-espresso & warm amber-brown iris with defined limbal ring
+  const baseGrad = ctx.createRadialGradient(cx, cy, r * 0.24, cx, cy, r);
+  baseGrad.addColorStop(0, '#442614');
+  baseGrad.addColorStop(0.36, '#331b0d');
+  baseGrad.addColorStop(0.76, '#1f0f07');
+  baseGrad.addColorStop(0.92, '#110703');
+  baseGrad.addColorStop(1, '#0b0402');
+  ctx.fillStyle = baseGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (let i = 0; i < 140; i++) {
+    const a = (i / 140) * Math.PI * 2 + Math.sin(i * 3.1) * 0.04;
+    const innerR = r * (0.34 + (i % 4) * 0.03);
+    const outerR = r * (0.85 + ((i * 5) % 4) * 0.02);
+    ctx.strokeStyle =
+      i % 3 === 0 ? 'rgba(118, 74, 38, 0.30)' : i % 2 === 0 ? 'rgba(68, 36, 16, 0.36)' : 'rgba(18, 9, 4, 0.44)';
+    ctx.lineWidth = i % 4 === 0 ? 2.0 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * innerR, cy + Math.sin(a) * innerR);
+    ctx.lineTo(cx + Math.cos(a + 0.02) * outerR, cy + Math.sin(a + 0.02) * outerR);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = 'rgba(132, 82, 42, 0.32)';
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.41, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const pupilGrad = ctx.createRadialGradient(cx, cy, r * 0.23, cx, cy, r * 0.34);
+  pupilGrad.addColorStop(0, '#040303');
+  pupilGrad.addColorStop(0.84, '#060505');
+  pupilGrad.addColorStop(1, 'rgba(6, 5, 5, 0)');
+  ctx.fillStyle = pupilGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.34, 0, Math.PI * 2);
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  cachedGulfIrisTex = tex;
+  return tex;
+}
 function getIrisTexture(): THREE.CanvasTexture {
   if (cachedIrisTex) return cachedIrisTex;
   const c = document.createElement('canvas');
@@ -467,11 +529,18 @@ const RICH_SKIN_PALETTE = [
   '#412111',
 ];
 
-function resolveRichSkinColor(hexStr: string | undefined, seed = 0): THREE.Color {
-  const c = new THREE.Color(hexStr || '#79472b');
-  // Map both overly pale and overly pitch-black legacy saved skin tones into natural warm brown-to-tan diversity
+function resolveRichSkinColor(
+  hexStr: string | undefined,
+  seed = 0,
+  allowLightSkin = false
+): THREE.Color {
+  const c = new THREE.Color(hexStr || (allowLightSkin ? '#eed0bc' : '#79472b'));
+  // Map overly dark/stale tones cleanly; preserve light/fair Gulf tones when allowLightSkin is enabled
   const lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-  if (lum > 0.36 || lum < 0.014) {
+  if ((!allowLightSkin && lum > 0.36) || lum < 0.014) {
+    if (allowLightSkin) {
+      return new THREE.Color('#eed0bc');
+    }
     const idx = Math.abs(Math.round(lum * 100) + seed) % RICH_SKIN_PALETTE.length;
     return new THREE.Color(RICH_SKIN_PALETTE[idx]);
   }
@@ -511,6 +580,9 @@ const realisticBodyMapCache = new Map<string, RealisticBodyMapPair>();
 const realisticMatCache = new Map<string, THREE.Material>();
 const sudaneseBodyMapCache = new Map<string, RealisticBodyMapPair>();
 const sudaneseMatCache = new Map<string, THREE.Material>();
+const gulfBodyMapCache = new Map<string, RealisticBodyMapPair>();
+const gulfHeadMapCache = new Map<string, RealisticBodyMapPair>();
+const gulfMatCache = new Map<string, THREE.Material>();
 
 function getEnhancedRealisticBodyMaps(
   origMap: THREE.Texture | null | undefined,
@@ -793,6 +865,424 @@ function getSudaneseBodyMaps(
   sudaneseBodyMapCache.set(cacheKey, pair);
   return pair;
 }
+
+function getGulfNiqabBodyMaps(
+  origMap: THREE.Texture | null | undefined,
+  abayaHex: number,
+  skinMul = 1.0
+): RealisticBodyMapPair | null {
+  const sMul = THREE.MathUtils.clamp(skinMul, 0.90, 1.15);
+  const cacheKey = `gbody_${abayaHex.toString(16)}_${sMul.toFixed(2)}`;
+  const cached = gulfBodyMapCache.get(cacheKey);
+  if (cached) return cached;
+
+  const img = origMap?.image as CanvasImageSource & { width?: number; height?: number } | undefined;
+  if (!img || !img.width || !img.height || typeof document === 'undefined') return null;
+
+  const aR = (abayaHex >> 16) & 0xff;
+  const aG = (abayaHex >> 8) & 0xff;
+  const aB = abayaHex & 0xff;
+
+  const w = Math.min(512, img.width);
+  const h = Math.min(512, img.height);
+  const cAlbedo = document.createElement('canvas');
+  cAlbedo.width = w;
+  cAlbedo.height = h;
+  const ctxA = cAlbedo.getContext('2d');
+  if (!ctxA) return null;
+  ctxA.drawImage(img, 0, 0, w, h);
+  const imgData = ctxA.getImageData(0, 0, w, h);
+  const px = imgData.data;
+
+  const cRough = document.createElement('canvas');
+  cRough.width = w;
+  cRough.height = h;
+  const ctxR = cRough.getContext('2d');
+  if (!ctxR) return null;
+  const roughImg = ctxR.createImageData(w, h);
+  const rpx = roughImg.data;
+  const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+  const fairSkinBoost = 1.0 + Math.max(0, sMul - 0.94) * 1.15;
+
+  for (let py = 0; py < h; py++) {
+    const v = (py + 0.5) / h;
+    for (let pxX = 0; pxX < w; pxX++) {
+      const u = (pxX + 0.5) / w;
+      const i = (py * w + pxX) * 4;
+      const r = px[i];
+      const g = px[i + 1];
+      const b = px[i + 2];
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      const isHandsRegion = v < 0.245 && (u < 0.185 || u > 0.815);
+      const isShoesRegion =
+        v < 0.245 && ((u >= 0.185 && u <= 0.345) || (u >= 0.655 && u <= 0.815));
+      const isWarmSkin = r > g + 10 && g > b + 4 && r > 95;
+      let roughByte = 216;
+
+      if (isHandsRegion) {
+        if (isWarmSkin) {
+          px[i] = clamp(Math.round(r * fairSkinBoost), 0, 245);
+          px[i + 1] = clamp(Math.round(g * (fairSkinBoost * 1.04)), 0, 232);
+          px[i + 2] = clamp(Math.round(b * (fairSkinBoost * 1.08)), 0, 218);
+          roughByte = 122; // Natural human hand skin luster
+        } else {
+          roughByte = 135;
+        }
+      } else if (isShoesRegion) {
+        // Sleek dark leather shoes + dark hosiery over instep so no bare foot skin peeks under Abaya
+        const shoeShade = isWarmSkin ? 0.24 : clamp(lum * 0.52 + 0.12, 0.12, 0.42);
+        px[i] = clamp(Math.round(22 * shoeShade * 2.2), 14, 52);
+        px[i + 1] = clamp(Math.round(22 * shoeShade * 2.2), 14, 52);
+        px[i + 2] = clamp(Math.round(26 * shoeShade * 2.2), 16, 58);
+        roughByte = isWarmSkin ? 210 : 108;
+      } else {
+        // Convert cardigan, white shirt, V-neck skin & trousers into rich matte crepe-silk Abaya
+        const foldLum = isWarmSkin ? 0.88 : clamp(lum * 1.25 + 0.42, 0.62, 1.32);
+        px[i] = clamp(Math.round(aR * foldLum), 10, 88);
+        px[i + 1] = clamp(Math.round(aG * foldLum), 10, 88);
+        px[i + 2] = clamp(Math.round(aB * foldLum), 12, 94);
+        roughByte = 218;
+      }
+
+      rpx[i] = roughByte;
+      rpx[i + 1] = roughByte;
+      rpx[i + 2] = roughByte;
+      rpx[i + 3] = 255;
+    }
+  }
+  ctxA.putImageData(imgData, 0, 0);
+  ctxR.putImageData(roughImg, 0, 0);
+
+  const flipY = origMap?.flipY ?? false;
+  const albedoTex = new THREE.CanvasTexture(cAlbedo);
+  albedoTex.colorSpace = THREE.SRGBColorSpace;
+  albedoTex.flipY = flipY;
+  albedoTex.anisotropy = 4;
+  albedoTex.needsUpdate = true;
+
+  const roughTex = new THREE.CanvasTexture(cRough);
+  roughTex.colorSpace = THREE.NoColorSpace;
+  roughTex.flipY = flipY;
+  roughTex.anisotropy = 4;
+  roughTex.needsUpdate = true;
+
+  const pair = { albedo: albedoTex, roughness: roughTex };
+  if (gulfBodyMapCache.size >= 12) {
+    const firstKey = gulfBodyMapCache.keys().next().value;
+    if (firstKey) {
+      const evicted = gulfBodyMapCache.get(firstKey);
+      evicted?.albedo.dispose();
+      evicted?.roughness.dispose();
+      gulfBodyMapCache.delete(firstKey);
+    }
+  }
+  gulfBodyMapCache.set(cacheKey, pair);
+  return pair;
+}
+
+function getGulfNiqabHeadMaps(
+  origMap: THREE.Texture | null | undefined,
+  skinMul = 1.0
+): RealisticBodyMapPair | null {
+  const sMul = THREE.MathUtils.clamp(skinMul, 0.90, 1.15);
+  const cacheKey = `ghead_${sMul.toFixed(2)}`;
+  const cached = gulfHeadMapCache.get(cacheKey);
+  if (cached) return cached;
+
+  const img = origMap?.image as CanvasImageSource & { width?: number; height?: number } | undefined;
+  if (!img || !img.width || !img.height || typeof document === 'undefined') return null;
+
+  const w = Math.min(512, img.width);
+  const h = Math.min(512, img.height);
+  const cAlbedo = document.createElement('canvas');
+  cAlbedo.width = w;
+  cAlbedo.height = h;
+  const ctxA = cAlbedo.getContext('2d');
+  if (!ctxA) return null;
+  ctxA.drawImage(img, 0, 0, w, h);
+  const imgData = ctxA.getImageData(0, 0, w, h);
+  const px = imgData.data;
+
+  const cRough = document.createElement('canvas');
+  cRough.width = w;
+  cRough.height = h;
+  const ctxR = cRough.getContext('2d');
+  if (!ctxR) return null;
+  const roughImg = ctxR.createImageData(w, h);
+  const rpx = roughImg.data;
+  const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+  const fairSkinBoost = 1.0 + Math.max(0, sMul - 0.94) * 1.15;
+
+  for (let py = 0; py < h; py++) {
+    const v = (py + 0.5) / h;
+    for (let pxX = 0; pxX < w; pxX++) {
+      const u = (pxX + 0.5) / w;
+      const i = (py * w + pxX) * 4;
+      const r = px[i];
+      const g = px[i + 1];
+      const b = px[i + 2];
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+      const isEyeAtlas = u >= 0.195 && u <= 0.335 && v >= 0.865 && v <= 0.995;
+      const isHairRegion =
+        v < 0.165 || u < 0.245 || u > 0.755 || (v > 0.74 && u > 0.45);
+      let roughByte = 118;
+
+      if (isEyeAtlas) {
+        // Recolor green/hazel iris ring into warm deep Khaleeji dark-espresso brown while preserving cornea & sclera
+        const dist = Math.hypot((u - 0.264) * 1.1, v - 0.930);
+        if (dist < 0.029 && lum >= 0.11 && lum < 0.62) {
+          const irisDepth = clamp((lum - 0.10) / 0.48, 0.18, 1.0);
+          px[i] = clamp(Math.round(78 * irisDepth + 14), 14, 96);
+          px[i + 1] = clamp(Math.round(42 * irisDepth + 8), 8, 56);
+          px[i + 2] = clamp(Math.round(22 * irisDepth + 5), 5, 32);
+          roughByte = 22;
+        } else if (lum < 0.12) {
+          roughByte = 18;
+        } else {
+          roughByte = 40;
+        }
+      } else if (isHairRegion) {
+        // Matte dark silk under-cap so no brown hair strands show around temples/nape
+        px[i] = clamp(Math.round(16 + lum * 18), 12, 34);
+        px[i + 1] = clamp(Math.round(17 + lum * 18), 13, 35);
+        px[i + 2] = clamp(Math.round(22 + lum * 20), 16, 40);
+        roughByte = 224;
+      } else if (lum < 0.36) {
+        // Keep natural Gulf dark eyebrows & lash-line crisp and defined
+        px[i] = clamp(Math.round(r * 0.88), 0, 255);
+        px[i + 1] = clamp(Math.round(g * 0.86), 0, 255);
+        px[i + 2] = clamp(Math.round(b * 0.86), 0, 255);
+        roughByte = 148;
+      } else {
+        // Fair warm Gulf skin & eyelids
+        px[i] = clamp(Math.round(r * fairSkinBoost), 0, 248);
+        px[i + 1] = clamp(Math.round(g * (fairSkinBoost * 1.04)), 0, 234);
+        px[i + 2] = clamp(Math.round(b * (fairSkinBoost * 1.08)), 0, 220);
+        roughByte = 116;
+      }
+
+      rpx[i] = roughByte;
+      rpx[i + 1] = roughByte;
+      rpx[i + 2] = roughByte;
+      rpx[i + 3] = 255;
+    }
+  }
+  ctxA.putImageData(imgData, 0, 0);
+  ctxR.putImageData(roughImg, 0, 0);
+
+  const flipY = origMap?.flipY ?? false;
+  const albedoTex = new THREE.CanvasTexture(cAlbedo);
+  albedoTex.colorSpace = THREE.SRGBColorSpace;
+  albedoTex.flipY = flipY;
+  albedoTex.anisotropy = 4;
+  albedoTex.needsUpdate = true;
+
+  const roughTex = new THREE.CanvasTexture(cRough);
+  roughTex.colorSpace = THREE.NoColorSpace;
+  roughTex.flipY = flipY;
+  roughTex.anisotropy = 4;
+  roughTex.needsUpdate = true;
+
+  const pair = { albedo: albedoTex, roughness: roughTex };
+  if (gulfHeadMapCache.size >= 8) {
+    const firstKey = gulfHeadMapCache.keys().next().value;
+    if (firstKey) {
+      const evicted = gulfHeadMapCache.get(firstKey);
+      evicted?.albedo.dispose();
+      evicted?.roughness.dispose();
+      gulfHeadMapCache.delete(firstKey);
+    }
+  }
+  gulfHeadMapCache.set(cacheKey, pair);
+  return pair;
+}
+
+/**
+ * Builds a tailored, flowing pleated Abaya SkinnedMesh directly in the Rocketbox
+ * female skeleton's bind space so walking, stairs, sitting, and bed postures deform cleanly.
+ */
+function createRocketboxAbayaSkinnedMesh(
+  bodyMesh: THREE.SkinnedMesh,
+  bodyPivot: THREE.Group,
+  appearance: HumanoidAppearance,
+  abayaHex: number,
+  targetH: number,
+  buildScale: number,
+  cloneOffsetZ: number
+): THREE.SkinnedMesh {
+  const skeleton = bodyMesh.skeleton;
+  const bones = skeleton.bones;
+
+  const idxPelvis = findBoneIdx(bones, ['Bip01_Pelvis', 'Bip01 Pelvis']);
+  const idxSpine = findBoneIdx(bones, ['Bip01_Spine', 'Bip01 Spine', 'Bip01_Pelvis', 'Bip01 Pelvis']);
+  const idxSpine1 = findBoneIdx(bones, ['Bip01_Spine1', 'Bip01 Spine1', 'Bip01_Spine', 'Bip01 Spine']);
+  const idxUL = findBoneIdx(bones, ['Bip01_L_Thigh', 'Bip01 L Thigh']);
+  const idxLL = findBoneIdx(bones, ['Bip01_L_Calf', 'Bip01 L Calf']);
+  const idxUR = findBoneIdx(bones, ['Bip01_R_Thigh', 'Bip01 R Thigh']);
+  const idxLR = findBoneIdx(bones, ['Bip01_R_Calf', 'Bip01 R Calf']);
+
+  const rings = 22;
+  const radialSegs = 44;
+  const cols = radialSegs + 1;
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const colors: number[] = [];
+  const skinIndices: number[] = [];
+  const skinWeights: number[] = [];
+  const indices: number[] = [];
+
+  // Measured post-cloneSkinned world envelope for female-adult-09.glb at 1.49m reference height
+  const hMul = targetH / 1.49;
+  const zShiftRel = cloneOffsetZ - 0.030 * hMul;
+  const profile: Array<{ y: number; cz: number; rx: number; rz: number }> = [
+    { y: 1.060, cz: 0.016, rx: 0.146, rz: 0.124 }, // mid-ribcage (clears upper arms cleanly)
+    { y: 0.940, cz: 0.020, rx: 0.156, rz: 0.136 }, // waist
+    { y: 0.800, cz: 0.010, rx: 0.194, rz: 0.158 }, // hips
+    { y: 0.650, cz: 0.012, rx: 0.200, rz: 0.156 }, // mid-thigh
+    { y: 0.450, cz: 0.010, rx: 0.210, rz: 0.158 }, // knee
+    { y: 0.075, cz: -0.008, rx: 0.232, rz: 0.176 }, // flowing ankle hem
+  ];
+
+  const sampleProfile = (v: number) => {
+    const scaled = v * (profile.length - 1);
+    const i0 = Math.min(profile.length - 2, Math.floor(scaled));
+    const t = scaled - i0;
+    const smooth = t * t * (3 - 2 * t);
+    const p0 = profile[i0];
+    const p1 = profile[i0 + 1];
+    return {
+      y: THREE.MathUtils.lerp(p0.y, p1.y, t),
+      cz: THREE.MathUtils.lerp(p0.cz, p1.cz, smooth),
+      rx: THREE.MathUtils.lerp(p0.rx, p1.rx, smooth),
+      rz: THREE.MathUtils.lerp(p0.rz, p1.rz, smooth),
+    };
+  };
+
+  // Precompute rest skin matrices (bone.matrixWorld * boneInverse) so vertices invert into exact world coordinates
+  bodyPivot.updateMatrixWorld(true);
+  const usedIndices = new Set([idxPelvis, idxSpine, idxSpine1, idxUL, idxLL, idxUR, idxLR]);
+  const restSkinMats = new Map<number, THREE.Matrix4>();
+  for (const bi of usedIndices) {
+    const b = bones[bi];
+    const inv = skeleton.boneInverses[bi];
+    const m = new THREE.Matrix4();
+    if (b && inv) {
+      m.multiplyMatrices(b.matrixWorld, inv);
+    }
+    restSkinMats.set(bi, m);
+  }
+  const blendedMat = new THREE.Matrix4();
+  const invBlendedMat = new THREE.Matrix4();
+  const bElems = blendedMat.elements;
+
+  const worldPt = new THREE.Vector3();
+  const bx = buildScale;
+  const bz = 1 + (buildScale - 1) * 0.75;
+
+  for (let r = 0; r <= rings; r++) {
+    const v = r / rings;
+    const prof = sampleProfile(v);
+    for (let c = 0; c <= radialSegs; c++) {
+      const u = c / radialSegs;
+      const theta = u * Math.PI * 2;
+      const pleatWave = Math.sin(theta * 8 + v * 1.2);
+      const pleatAmp = 0.034 * Math.max(0, v - 0.08);
+      const pleatMul = 1 + pleatWave * pleatAmp;
+      const xT = prof.rx * pleatMul * Math.sin(theta);
+      const zT = prof.cz + prof.rz * pleatMul * Math.cos(theta);
+
+      const sideL = THREE.MathUtils.smoothstep(xT, -0.024, 0.024);
+      const sideR = 1 - sideL;
+      let b0 = idxPelvis, w0 = 0;
+      let b1 = idxUL, w1 = 0;
+      let b2 = idxUR, w2 = 0;
+      let b3 = idxSpine, w3 = 0;
+
+      if (prof.y >= 0.97) {
+        const t = THREE.MathUtils.clamp((prof.y - 0.97) / 0.09, 0, 1);
+        b0 = idxSpine; w0 = 1 - t * 0.65;
+        b3 = idxSpine1; w3 = t * 0.65;
+      } else if (prof.y >= 0.82) {
+        const t = THREE.MathUtils.clamp((prof.y - 0.82) / 0.15, 0, 1);
+        b0 = idxPelvis; w0 = 1 - t * 0.72;
+        b3 = idxSpine; w3 = t * 0.72;
+      } else if (prof.y >= 0.48) {
+        const hipShare = THREE.MathUtils.clamp((prof.y - 0.68) / 0.14, 0, 1) * 0.55;
+        const legShare = 1 - hipShare;
+        b0 = idxPelvis; w0 = hipShare;
+        b1 = idxUL; w1 = legShare * sideL;
+        b2 = idxUR; w2 = legShare * sideR;
+      } else if (prof.y >= 0.36) {
+        const kneeT = THREE.MathUtils.clamp((0.48 - prof.y) / 0.12, 0, 1);
+        b0 = idxUL; w0 = (1 - kneeT) * sideL;
+        b1 = idxUR; w1 = (1 - kneeT) * sideR;
+        b2 = idxLL; w2 = kneeT * sideL;
+        b3 = idxLR; w3 = kneeT * sideR;
+      } else {
+        b0 = idxLL; w0 = sideL;
+        b1 = idxLR; w1 = sideR;
+      }
+
+      const wSum = w0 + w1 + w2 + w3 || 1;
+      const nw0 = w0 / wSum;
+      const nw1 = w1 / wSum;
+      const nw2 = w2 / wSum;
+      const nw3 = w3 / wSum;
+      skinIndices.push(b0, b1, b2, b3);
+      skinWeights.push(nw0, nw1, nw2, nw3);
+
+      const m0 = restSkinMats.get(b0)!.elements;
+      const m1 = restSkinMats.get(b1)!.elements;
+      const m2 = restSkinMats.get(b2)!.elements;
+      const m3 = restSkinMats.get(b3)!.elements;
+      for (let ei = 0; ei < 16; ei++) {
+        bElems[ei] = m0[ei] * nw0 + m1[ei] * nw1 + m2[ei] * nw2 + m3[ei] * nw3;
+      }
+      invBlendedMat.copy(blendedMat).invert();
+
+      worldPt.set(xT * hMul * bx, prof.y * hMul, zT * hMul * bz + zShiftRel);
+      worldPt.applyMatrix4(invBlendedMat);
+      positions.push(worldPt.x, worldPt.y, worldPt.z);
+      uvs.push(u, 1 - v);
+
+      const troughAo = (0.93 + 0.07 * pleatWave) * (1 - 0.06 * v);
+      const isHemTrim = v >= 0.945;
+      const trimBoost = isHemTrim ? 1.18 : 1.0;
+      colors.push(troughAo * trimBoost, troughAo * trimBoost, troughAo * trimBoost);
+    }
+  }
+
+  for (let r = 0; r < rings; r++) {
+    for (let c = 0; c < radialSegs; c++) {
+      const a = r * cols + c;
+      const b = a + cols;
+      indices.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geom.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
+  geom.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+
+  const mat = makeClothMat(abayaHex, appearance, 0.85, 0.46, true, true);
+  const skinnedAbaya = new THREE.SkinnedMesh(geom, mat);
+  skinnedAbaya.name = 'Gulf_Abaya_Skinned';
+  skinnedAbaya.castShadow = true;
+  skinnedAbaya.receiveShadow = true;
+  skinnedAbaya.frustumCulled = false;
+  skinnedAbaya.userData.sharedGlbGeom = false;
+  skinnedAbaya.userData.sharedGlbMat = false;
+  bodyPivot.add(skinnedAbaya);
+  skinnedAbaya.bind(skeleton, new THREE.Matrix4());
+  return skinnedAbaya;
+}
 function getIdBadgeTexture(): THREE.CanvasTexture {
   if (cachedIdBadgeTex) return cachedIdBadgeTex;
   const c = document.createElement('canvas');
@@ -834,7 +1324,29 @@ function getIdBadgeTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-function makeSkinMat(hex: string | number, appearance: HumanoidAppearance, roughness = 0.50) {
+function makeSkinMat(
+  hex: string | number,
+  appearance: HumanoidAppearance,
+  roughness = 0.50,
+  isFairSkin = false
+) {
+  if (isFairSkin) {
+    return new THREE.MeshPhysicalMaterial({
+      color: hex,
+      map: appearance.skinMicroMap ?? null,
+      bumpMap: appearance.skinMicroMap ?? null,
+      bumpScale: 0.0010,
+      roughnessMap: appearance.skinRoughMap ?? null,
+      roughness: Math.max(0.44, roughness - 0.04),
+      metalness: 0.0,
+      clearcoat: 0.045,
+      clearcoatRoughness: 0.46,
+      sheen: 0.16,
+      sheenRoughness: 0.76,
+      sheenColor: new THREE.Color(0xeab59c),
+      envMapIntensity: 0.44,
+    });
+  }
   return new THREE.MeshStandardMaterial({
     color: hex,
     map: appearance.skinMicroMap ?? null,
@@ -1273,12 +1785,15 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   hitMesh.position.y = 0.58;
   root.add(hitMesh);
 
-  const outfitStyle = resolveOutfitStyle(appearance);
-  const skinCol = resolveRichSkinColor(appearance.skinTone, appearance.variantSeed || 0);
-  const darkerSkinCol = skinCol.clone().multiplyScalar(0.76);
+  const requestedGlbKey = appearance.modelKey || pickGlbKey(appearance);
+  const isGulfNiqab = requestedGlbKey === 'char_gulf_niqab_female';
+  const effectiveNiqab = Boolean(appearance.hasNiqab || isGulfNiqab);
+  const outfitStyle: OutfitStyle = isGulfNiqab ? 'abaya' : resolveOutfitStyle(appearance);
+  const skinCol = resolveRichSkinColor(appearance.skinTone, appearance.variantSeed || 0, isGulfNiqab);
+  const darkerSkinCol = skinCol.clone().multiplyScalar(isGulfNiqab ? 0.84 : 0.76);
   const hairCol = new THREE.Color(appearance.hairColor || '#17100c');
-  const shirtCol = new THREE.Color(appearance.shirtColor || '#ece9e1');
-  const pantsCol = new THREE.Color(appearance.pantsColor || '#1e293b');
+  const shirtCol = new THREE.Color(appearance.shirtColor || (isGulfNiqab ? '#101116' : '#ece9e1'));
+  const pantsCol = new THREE.Color(appearance.pantsColor || (isGulfNiqab ? '#101116' : '#1e293b'));
   const shirtLum = 0.2126 * shirtCol.r + 0.7152 * shirtCol.g + 0.0722 * shirtCol.b;
   const seedIdx = Math.abs(appearance.variantSeed || 0);
   const contrastInnerHex =
@@ -1298,7 +1813,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
   const shoePalette = [0x1e1b18, 0x3a2618, 0x1e293b, 0x27272a];
   const shoeLeatherHex = shoePalette[seedIdx % shoePalette.length];
   const isFemaleLook = Boolean(
-    appearance.isFemale ||
+    isGulfNiqab ||
+      appearance.isFemale ||
       appearance.hasHijab ||
       outfitStyle === 'abaya' ||
       outfitStyle === 'abaya_open' ||
@@ -1306,20 +1822,22 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       outfitStyle === 'sudanese_thobe' ||
       (appearance.isStaff && appearance.isFemale !== false)
   );
-  const medicalWear: 'none' | 'lab_coat' | 'scrubs' =
-    appearance.medicalWear ??
-    (appearance.isStaff && appearance.role === 'therapist' ? 'lab_coat' : 'none');
+  const medicalWear: 'none' | 'lab_coat' | 'scrubs' = isGulfNiqab
+    ? 'none'
+    : appearance.medicalWear ??
+      (appearance.isStaff && appearance.role === 'therapist' ? 'lab_coat' : 'none');
   const showStethoscope = Boolean(
-    appearance.hasStethoscope ??
-      (medicalWear !== 'none' || (appearance.isStaff && appearance.role === 'therapist'))
+    !isGulfNiqab &&
+      (appearance.hasStethoscope ??
+        (medicalWear !== 'none' || (appearance.isStaff && appearance.role === 'therapist')))
   );
   const thobeKenarHex =
     shirtLum >= 0.65
       ? (seedIdx % 2 === 0 ? 0xb8893c : 0x7a2338)
       : shirtCol.clone().lerp(new THREE.Color(0xf3dfc1), 0.56).getHex();
   const tarhaCol =
-    appearance.hasNiqab
-      ? new THREE.Color('#141519')
+    effectiveNiqab
+      ? new THREE.Color(isGulfNiqab ? '#121318' : '#141519')
       : medicalWear !== 'none'
         ? new THREE.Color('#e2e8f0')
         : appearance.role === 'receptionist'
@@ -1335,24 +1853,31 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
   const effectiveHijab =
     isFemaleLook &&
-    (appearance.hasHijab !== undefined
-      ? appearance.hasHijab
-      : Boolean(
-          appearance.role === 'receptionist' ||
-            outfitStyle === 'abaya' ||
-            outfitStyle === 'abaya_open' ||
-            outfitStyle === 'sudanese_thobe'
-        ));
+    (isGulfNiqab ||
+      (appearance.hasHijab !== undefined
+        ? appearance.hasHijab
+        : Boolean(
+            appearance.role === 'receptionist' ||
+              outfitStyle === 'abaya' ||
+              outfitStyle === 'abaya_open' ||
+              outfitStyle === 'sudanese_thobe'
+          )));
 
-  const requestedGlbKey = appearance.modelKey || pickGlbKey(appearance);
+  const resolvedGlbKey = requestedGlbKey;
   const glbKey =
-    glbRegistry.getModel(requestedGlbKey) ||
-    (requestedGlbKey !== 'char_patient_realistic_1' && requestedGlbKey !== 'char_sudanese_man_1')
-      ? requestedGlbKey
-      : 'char_man2';
-  const isRocketboxScan = glbKey === 'char_sudanese_man_1';
+    glbRegistry.getModel(resolvedGlbKey) ||
+    (resolvedGlbKey !== 'char_patient_realistic_1' &&
+      resolvedGlbKey !== 'char_sudanese_man_1' &&
+      resolvedGlbKey !== 'char_gulf_niqab_female')
+      ? resolvedGlbKey
+      : resolvedGlbKey === 'char_gulf_niqab_female'
+        ? 'char_woman_suit'
+        : 'char_man2';
+  const isRocketboxScan =
+    glbKey === 'char_sudanese_man_1' || glbKey === 'char_gulf_niqab_female';
+  const isRocketboxGulf = isGulfNiqab && glbKey === 'char_gulf_niqab_female';
   const isRealisticScan = glbKey === 'char_patient_realistic_1' || isRocketboxScan;
-  const targetH = (isRealisticScan ? 1.54 : 1.34) * (appearance.heightScale || 1);
+  const targetH = (isRocketboxGulf ? 1.49 : isRealisticScan ? 1.54 : 1.34) * (appearance.heightScale || 1);
   const buildScale = THREE.MathUtils.clamp(appearance.buildScale ?? 1, 0.90, 1.12);
   const skinLum = 0.2126 * skinCol.r + 0.7152 * skinCol.g + 0.0722 * skinCol.b;
   const skinMul = THREE.MathUtils.clamp(0.84 + (skinLum - 0.12) * 0.85, 0.82, 1.12);
@@ -1388,7 +1913,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     }
 
     const morphMeshes: MorphMeshRef[] = [];
-    let legSkinnedMesh: THREE.SkinnedMesh | null = null;
+    let legSkinnedMesh = null as THREE.SkinnedMesh | null;
+    let gulfBodySkinnedMesh = null as THREE.SkinnedMesh | null;
     const hideSuitLegs =
       !isRealisticScan &&
       medicalWear === 'none' &&
@@ -1404,6 +1930,135 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         mesh.receiveShadow = true;
         if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
           mesh.frustumCulled = false;
+        }
+
+        if (isRocketboxGulf) {
+          const sk = mesh as THREE.SkinnedMesh;
+          const origMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          const firstMatName = (origMats[0] as THREE.Material | undefined)?.name || '';
+
+          if (firstMatName === 'f009_opacity') {
+            // Trim loose hair cards while preserving ONLY the delicate natural Rocketbox eyelashes
+            const uvAttr = mesh.geometry.getAttribute('uv') as THREE.BufferAttribute | undefined;
+            const idxAttr = mesh.geometry.getIndex();
+            if (uvAttr && idxAttr) {
+              const keptIdx: number[] = [];
+              for (let ti = 0; ti < idxAttr.count; ti += 3) {
+                const i0 = idxAttr.getX(ti);
+                const i1 = idxAttr.getX(ti + 1);
+                const i2 = idxAttr.getX(ti + 2);
+                const minU = Math.min(uvAttr.getX(i0), uvAttr.getX(i1), uvAttr.getX(i2));
+                const minV = Math.min(uvAttr.getY(i0), uvAttr.getY(i1), uvAttr.getY(i2));
+                if (minU > 0.78 && minV > 0.76) {
+                  keptIdx.push(i0, i1, i2);
+                }
+              }
+              if (keptIdx.length > 0) {
+                const lashGeom = mesh.geometry.clone();
+                lashGeom.setIndex(keptIdx);
+                mesh.geometry = lashGeom;
+                mesh.userData.sharedGlbGeom = false;
+                if (sk.isSkinnedMesh && sk.morphTargetDictionary && sk.morphTargetInfluences) {
+                  morphMeshes.push({ mesh: sk, dict: sk.morphTargetDictionary });
+                }
+                const origLash = origMats[0] as THREE.MeshStandardMaterial;
+                const lashKey = 'gulf_lash_mat';
+                let lashMat = gulfMatCache.get(lashKey);
+                if (!lashMat) {
+                  lashMat = new THREE.MeshStandardMaterial({
+                    name: 'f009_eyelashes',
+                    color: 0x2a1c16,
+                    map: origLash.map ?? null,
+                    alphaTest: 0.32,
+                    transparent: false,
+                    side: THREE.DoubleSide,
+                    roughness: 0.56,
+                    metalness: 0.0,
+                  });
+                  gulfMatCache.set(lashKey, lashMat);
+                }
+                mesh.userData.sharedGlbMat = true;
+                mesh.material = lashMat;
+              } else {
+                mesh.visible = false;
+              }
+            } else {
+              mesh.visible = false;
+            }
+            return;
+          }
+
+          if (sk.isSkinnedMesh && sk.morphTargetDictionary && sk.morphTargetInfluences) {
+            morphMeshes.push({
+              mesh: sk,
+              dict: sk.morphTargetDictionary,
+            });
+          }
+          if (firstMatName === 'f009_body' && sk.isSkinnedMesh) {
+            gulfBodySkinnedMesh = sk;
+          }
+          const abayaHex = shirtCol.getHex();
+          const sMulKey = skinMul.toFixed(2);
+          const tunedMats = origMats.map((m) => {
+            const orig = m as THREE.MeshStandardMaterial;
+            if (!orig) return orig;
+            const mName = orig.name || '';
+            const isHeadMat = mName === 'f009_head';
+            const matKey = isHeadMat
+              ? `ghead_${sMulKey}`
+              : `gbody_${abayaHex.toString(16)}_${sMulKey}`;
+            const cachedMat = gulfMatCache.get(matKey);
+            if (cachedMat) return cachedMat;
+
+            let mat: THREE.Material;
+            if (isHeadMat) {
+              const headMaps = getGulfNiqabHeadMaps(orig.map, skinMul);
+              mat = new THREE.MeshPhysicalMaterial({
+                name: mName,
+                color: new THREE.Color(0xffffff),
+                map: headMaps?.albedo ?? orig.map ?? null,
+                roughnessMap: headMaps?.roughness ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: new THREE.Vector2(0.95, -0.95),
+                roughness: headMaps ? 1.0 : 0.48,
+                metalness: 0.0,
+                clearcoat: 0.045,
+                clearcoatRoughness: 0.44,
+                sheen: 0.16,
+                sheenRoughness: 0.76,
+                sheenColor: new THREE.Color(0xeab59c).multiplyScalar(skinMul),
+                side: THREE.FrontSide,
+                envMapIntensity: 0.44,
+              });
+            } else {
+              const bodyMaps = getGulfNiqabBodyMaps(orig.map, abayaHex, skinMul);
+              mat = new THREE.MeshPhysicalMaterial({
+                name: mName,
+                color: new THREE.Color(0xffffff),
+                map: bodyMaps?.albedo ?? orig.map ?? null,
+                roughnessMap: bodyMaps?.roughness ?? null,
+                normalMap: orig.normalMap ?? null,
+                normalScale: new THREE.Vector2(0.94, -0.94),
+                roughness: bodyMaps ? 1.0 : 0.80,
+                metalness: 0.0,
+                sheen: 0.26,
+                sheenRoughness: 0.78,
+                sheenColor: new THREE.Color(abayaHex).lerp(new THREE.Color(0xffffff), 0.22),
+                side: THREE.FrontSide,
+                envMapIntensity: 0.40,
+              });
+            }
+
+            if (gulfMatCache.size >= 32) {
+              const firstMatKey = gulfMatCache.keys().next().value;
+              if (firstMatKey) gulfMatCache.delete(firstMatKey);
+            }
+            gulfMatCache.set(matKey, mat);
+            return mat;
+          });
+          mesh.userData.sharedGlbMat = true;
+          mesh.material = tunedMats.length === 1 ? tunedMats[0] : tunedMats;
+          return;
         }
 
         if (isRocketboxScan) {
@@ -1624,7 +2279,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           origMats.length === 1 && (origMats[0] as THREE.Material | undefined)?.name === 'Skin';
 
         if (
-          (medicalWear === 'scrubs' || medicalWear === 'lab_coat') &&
+          (medicalWear === 'scrubs' || medicalWear === 'lab_coat' || isGulfNiqab) &&
           isBodyMesh &&
           !hasSkinOnly
         ) {
@@ -1664,21 +2319,21 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
 
           if (mName === 'Skin') {
             if (meshName.includes('Feet') && isFemaleLook) {
-              mat = makeLeatherMat(0x1f1916, appearance, 0.56);
+              mat = makeLeatherMat(isGulfNiqab ? 0x161414 : 0x1f1916, appearance, 0.50);
             } else {
-              mat = makeSkinMat(skinCol.getHex(), appearance, 0.55);
+              mat = makeSkinMat(skinCol.getHex(), appearance, isGulfNiqab ? 0.48 : 0.55, isGulfNiqab);
             }
           } else if (mName === 'Skin_Darker') {
-            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.60);
+            mat = makeSkinMat(darkerSkinCol.getHex(), appearance, 0.56, isGulfNiqab);
           } else if (mName === 'Eye' || (mName === 'Brown' && (meshName.includes('Head') || parentName.includes('Head')))) {
             // Hide flat low-poly GLB eye cube; replaced by anatomically sculpted 3D sclera/iris/eyelid eyes
             mat = sMats.invisibleMat;
           } else if (mName === 'Eyebrows' || (mName === 'Hair_Brown' && (meshName.includes('Head') || parentName.includes('Head')))) {
-            // Hide boxy GLB eyebrow rectangles; replaced by sculpted curved 3D eyebrows
+            // Hide boxy GLB eyebrow rectangles; replaced by sculpted curved 3D eyebrows (or hidden behind niqab band)
             mat = sMats.invisibleMat;
           } else if (mName === 'Hair' || mName === 'Hair_Blond' || mName === 'Hair_Brown') {
             if (isFemaleLook && effectiveHijab && mName === 'Hair_Blond') {
-              // Completely hide hair mesh under Tarha so zero stray tufts clip out
+              // Completely hide hair mesh under Tarha/Sheila so zero stray tufts clip out
               mat = sMats.invisibleMat;
             } else {
               mat = new THREE.MeshStandardMaterial({
@@ -1752,10 +2407,13 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.78, 0.35);
             }
           } else if (outfitStyle === 'abaya') {
-            if ((mName === 'Black' || mName === 'White') && isSuitBody) {
-              mat = makeClothMat(shirtCol.getHex(), appearance, 0.82, 0.58);
+            if (isGulfNiqab && mName === 'White' && isSuitBody) {
+              // Hide inner white suit shirt completely beneath full Gulf Abaya
+              mat = sMats.invisibleMat;
+            } else if ((mName === 'Black' || mName === 'White') && isSuitBody) {
+              mat = makeClothMat(shirtCol.getHex(), appearance, isGulfNiqab ? 0.78 : 0.82, isGulfNiqab ? 0.54 : 0.58);
             } else if (isSuitFeet) {
-              mat = makeLeatherMat(0x181615, appearance, 0.48);
+              mat = makeLeatherMat(isGulfNiqab ? 0x141315 : 0x181615, appearance, isGulfNiqab ? 0.40 : 0.48);
             } else {
               mat = makeClothMat(targetHex, appearance, orig.roughness ?? 0.82, 0.4);
             }
@@ -1845,8 +2503,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     });
 
-    // Build SkinnedMesh garments directly on the character's skeleton (zero leg/hip clipping!)
-    if (legSkinnedMesh && medicalWear === 'lab_coat') {
+    // Build SkinnedMesh garments directly on stylized character's skeleton (zero leg/hip clipping!)
+    if (!isRealisticScan && legSkinnedMesh && medicalWear === 'lab_coat') {
       // Full closed buttoned white medical lab coat from neck collar cleanly down to mid-thigh (zero inner shirt!)
       createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
         colorHex: 0xf2f4f7,
@@ -1867,7 +2525,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         openFrontGapRad: 0,
         pleated: false,
       });
-    } else if (legSkinnedMesh && medicalWear === 'scrubs') {
+    } else if (!isRealisticScan && legSkinnedMesh && medicalWear === 'scrubs') {
       if (isFemaleLook) {
         // Female full seamless clinical scrub top from neck collar down cleanly over scrub pants (zero blazer/shirt!)
         createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
@@ -1905,26 +2563,50 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           pleated: false,
         });
       }
-    } else if (legSkinnedMesh && medicalWear === 'none') {
+    } else if (!isRealisticScan && legSkinnedMesh && medicalWear === 'none') {
       if (outfitStyle === 'abaya') {
-        createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
-          colorHex: shirtCol.getHex(),
-          zTop: 0.0134,
-          zBot: 0.0012,
-          topRx: 0.00126,
-          topRy: 0.00096,
-          midRx: 0.00186,
-          midRy: 0.00138,
-          botRx: 0.00246,
-          botRy: 0.00168,
-          topCy: -0.00084,
-          botCy: -0.00056,
-          closeBottomCap: true,
-          accentHemHex:
-            !appearance.hasNiqab && !appearance.isPlayer && (appearance.variantSeed || 0) % 2 === 0
-              ? 0xc59b57
-              : undefined,
-        });
+        if (isGulfNiqab) {
+          // Tailored flowing Gulf crepe-silk Abaya rising cleanly from collarbone down to ankle with subtle tonal piping hem
+          createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
+            colorHex: shirtCol.getHex(),
+            zTop: 0.01510,
+            zBot: 0.0011,
+            topRx: 0.00100,
+            topRy: 0.00076,
+            topCy: -0.00056,
+            chestZ: 0.0135,
+            chestRx: 0.00130,
+            chestRy: 0.00108,
+            chestCy: -0.00084,
+            midRx: 0.00190,
+            midRy: 0.00142,
+            botRx: 0.00254,
+            botRy: 0.00172,
+            botCy: -0.00056,
+            closeBottomCap: true,
+            pleated: true,
+            accentHemHex: 0x262934,
+          });
+        } else {
+          createSkinnedGarmentMesh(legSkinnedMesh, appearance, {
+            colorHex: shirtCol.getHex(),
+            zTop: 0.0134,
+            zBot: 0.0012,
+            topRx: 0.00126,
+            topRy: 0.00096,
+            midRx: 0.00186,
+            midRy: 0.00138,
+            botRx: 0.00246,
+            botRy: 0.00168,
+            topCy: -0.00084,
+            botCy: -0.00056,
+            closeBottomCap: true,
+            accentHemHex:
+              !effectiveNiqab && !appearance.isPlayer && (appearance.variantSeed || 0) % 2 === 0
+                ? 0xc59b57
+                : undefined,
+          });
+        }
       } else if (outfitStyle === 'abaya_open') {
         // Soft ivory/light inner tunic tucked over trousers + flowing open-front Abaya outer coat
         if (appearance.isPlayer) {
@@ -2064,29 +2746,49 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       'Wrist.R': 'HandR',
       RightHand: 'HandR',
       Index1L: 'Index1L',
+      'Index1.L': 'Index1L',
       LeftHandIndex1: 'Index1L',
       Index2L: 'Index2L',
+      'Index2.L': 'Index2L',
       LeftHandIndex2: 'Index2L',
+      Index3L: 'Index3L',
+      'Index3.L': 'Index3L',
       LeftHandIndex3: 'Index3L',
       Middle1L: 'Middle1L',
+      'Middle1.L': 'Middle1L',
       LeftHandMiddle1: 'Middle1L',
       Middle2L: 'Middle2L',
+      'Middle2.L': 'Middle2L',
       LeftHandMiddle2: 'Middle2L',
+      Middle3L: 'Middle3L',
+      'Middle3.L': 'Middle3L',
       LeftHandMiddle3: 'Middle3L',
       Ring1L: 'Ring1L',
+      'Ring1.L': 'Ring1L',
       LeftHandRing1: 'Ring1L',
       Ring2L: 'Ring2L',
+      'Ring2.L': 'Ring2L',
       LeftHandRing2: 'Ring2L',
+      Ring3L: 'Ring3L',
+      'Ring3.L': 'Ring3L',
       LeftHandRing3: 'Ring3L',
       Pinky1L: 'Pinky1L',
+      'Pinky1.L': 'Pinky1L',
       LeftHandPinky1: 'Pinky1L',
       Pinky2L: 'Pinky2L',
+      'Pinky2.L': 'Pinky2L',
       LeftHandPinky2: 'Pinky2L',
+      Pinky3L: 'Pinky3L',
+      'Pinky3.L': 'Pinky3L',
       LeftHandPinky3: 'Pinky3L',
       Thumb1L: 'Thumb1L',
+      'Thumb1.L': 'Thumb1L',
       LeftHandThumb1: 'Thumb1L',
       Thumb2L: 'Thumb2L',
+      'Thumb2.L': 'Thumb2L',
       LeftHandThumb2: 'Thumb2L',
+      Thumb3L: 'Thumb3L',
+      'Thumb3.L': 'Thumb3L',
       LeftHandThumb3: 'Thumb3L',
       Index1R: 'Index1R',
       'Index1.R': 'Index1R',
@@ -2094,6 +2796,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       Index2R: 'Index2R',
       'Index2.R': 'Index2R',
       RightHandIndex2: 'Index2R',
+      Index3R: 'Index3R',
+      'Index3.R': 'Index3R',
       RightHandIndex3: 'Index3R',
       Middle1R: 'Middle1R',
       'Middle1.R': 'Middle1R',
@@ -2101,6 +2805,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       Middle2R: 'Middle2R',
       'Middle2.R': 'Middle2R',
       RightHandMiddle2: 'Middle2R',
+      Middle3R: 'Middle3R',
+      'Middle3.R': 'Middle3R',
       RightHandMiddle3: 'Middle3R',
       Ring1R: 'Ring1R',
       'Ring1.R': 'Ring1R',
@@ -2108,6 +2814,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       Ring2R: 'Ring2R',
       'Ring2.R': 'Ring2R',
       RightHandRing2: 'Ring2R',
+      Ring3R: 'Ring3R',
+      'Ring3.R': 'Ring3R',
       RightHandRing3: 'Ring3R',
       Pinky1R: 'Pinky1R',
       'Pinky1.R': 'Pinky1R',
@@ -2115,6 +2823,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       Pinky2R: 'Pinky2R',
       'Pinky2.R': 'Pinky2R',
       RightHandPinky2: 'Pinky2R',
+      Pinky3R: 'Pinky3R',
+      'Pinky3.R': 'Pinky3R',
       RightHandPinky3: 'Pinky3R',
       Thumb1R: 'Thumb1R',
       'Thumb1.R': 'Thumb1R',
@@ -2122,6 +2832,8 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       Thumb2R: 'Thumb2R',
       'Thumb2.R': 'Thumb2R',
       RightHandThumb2: 'Thumb2R',
+      Thumb3R: 'Thumb3R',
+      'Thumb3.R': 'Thumb3R',
       RightHandThumb3: 'Thumb3R',
       UpperLegL: 'UpperLegL',
       'UpperLeg.L': 'UpperLegL',
@@ -2499,7 +3211,26 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           placket.position.set(0, 0.038, 0.122);
           collarGrp.add(bandCollar, placket);
           bones['Chest'].bone.add(collarGrp);
-        } else if (outfitStyle === 'abaya' && !appearance.hasNiqab && (appearance.variantSeed || 0) % 2 === 0) {
+        } else if (outfitStyle === 'abaya' && isGulfNiqab) {
+          // Tailored central Gulf Abaya satin placket seam + discreet tonal cuff & sleeve drape on both forearms
+          const abayaCoutureGrp = new THREE.Group();
+          abayaCoutureGrp.scale.setScalar(0.01);
+          const pipingMat = makeClothMat(
+            shirtCol.clone().lerp(new THREE.Color(0x3a3d49), 0.32).getHex(),
+            appearance,
+            0.52,
+            0.48
+          );
+          const seamCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(0, 0.045, bustFrontZ - 0.002),
+            new THREE.Vector3(0, -0.040, bustFrontZ + 0.003),
+            new THREE.Vector3(0, -0.140, lowerChestZ + 0.004),
+          ]);
+          const seamMesh = new THREE.Mesh(new THREE.TubeGeometry(seamCurve, 12, 0.0055, 6, false), pipingMat);
+          seamMesh.scale.set(1.2, 1.0, 0.35);
+          abayaCoutureGrp.add(seamMesh);
+          bones['Chest'].bone.add(abayaCoutureGrp);
+        } else if (outfitStyle === 'abaya' && !effectiveNiqab && (appearance.variantSeed || 0) % 2 === 0) {
           const abayaTrimGrp = new THREE.Group();
           abayaTrimGrp.scale.setScalar(0.01);
           const embMat = makeMetalMat(0xc59b57, appearance, 0.42, 0.55);
@@ -2594,6 +3325,33 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     }
 
+    // Authentic flared Gulf Abaya bell sleeves & satin wrist cuffs framing fair hands cleanly
+    if (isGulfNiqab) {
+      const sleeveMat = makeClothMat(shirtCol.getHex(), appearance, 0.78, 0.54, true);
+      const cuffTrimMat = makeClothMat(
+        shirtCol.clone().lerp(new THREE.Color(0x3a3d49), 0.30).getHex(),
+        appearance,
+        0.54,
+        0.46
+      );
+      for (const armBoneKey of ['LowerArmL', 'LowerArmR'] as const) {
+        if (!bones[armBoneKey]) continue;
+        const sleeveGrp = new THREE.Group();
+        sleeveGrp.scale.setScalar(0.01);
+        const flaredCuff = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.064, 0.044, 0.132, 20, 1, true),
+          sleeveMat
+        );
+        flaredCuff.position.set(0, 0.188, 0);
+        flaredCuff.castShadow = true;
+        const cuffTrim = new THREE.Mesh(new THREE.TorusGeometry(0.063, 0.0052, 8, 22), cuffTrimMat);
+        cuffTrim.rotation.x = Math.PI / 2;
+        cuffTrim.position.set(0, 0.254, 0);
+        sleeveGrp.add(flaredCuff, cuffTrim);
+        bones[armBoneKey].bone.add(sleeveGrp);
+      }
+    }
+
     // Subtle wristwatch on clinicians and select adult patients
     if (
       !isRealisticScan &&
@@ -2638,10 +3396,13 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
     let brows: [THREE.Mesh, THREE.Mesh] | undefined;
     let mouthLower: THREE.Mesh | undefined;
     let mouthSeam: THREE.Mesh | undefined;
+    let eyePivots: [THREE.Group, THREE.Group] | undefined;
+    let niqabVeil: THREE.Object3D | undefined;
 
     // Realistic Human Facial Anatomy + Authentic Headwear, Tarha & Contoured 3D Niqab
     if (!isRealisticScan && bones['Head']) {
       // 1) Lifelike 3D Human Facial Features aligned to exact GLB face-surface Z (~0.150..0.177)
+      // Performance optimization: for Gulf Niqabi character, skip all hidden facial geometry (brows, nostrils, lips, teeth, eyewear)!
       {
         const faceGrp = new THREE.Group();
         faceGrp.scale.setScalar(0.01);
@@ -2650,51 +3411,91 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         const eyeZ = isFemaleLook ? 0.1450 : 0.1438;
 
         const scleraMat = sMats.sclera;
-        const irisMat = sMats.iris;
+        const irisMat = isGulfNiqab
+          ? new THREE.MeshPhysicalMaterial({
+              map: getGulfIrisTexture(),
+              roughness: 0.05,
+              metalness: 0.0,
+              clearcoat: 1.0,
+              clearcoatRoughness: 0.03,
+              ior: 1.42,
+              transparent: true,
+              alphaTest: 0.15,
+              envMapIntensity: 0.90,
+            })
+          : sMats.iris;
         const catchlightMat = sMats.catchlight;
-        const browMat = new THREE.MeshStandardMaterial({
-          color: hairCol.getHex(),
-          bumpMap: getHairStrandBump(),
-          bumpScale: 0.0022,
-          roughness: 0.68,
-          metalness: 0.0,
-        });
-        const lidMat = colorMat(skinCol.clone().multiplyScalar(0.80).getHex(), 0.54, 0.0);
-        const lowerLidMat = colorMat(skinCol.clone().multiplyScalar(0.86).getHex(), 0.56, 0.0);
-        const blinkSkinMat = colorMat(skinCol.clone().multiplyScalar(0.90).getHex(), 0.54, 0.0);
+        const lidMat = colorMat(
+          skinCol.clone().multiplyScalar(isGulfNiqab ? 0.86 : 0.80).getHex(),
+          isGulfNiqab ? 0.48 : 0.54,
+          0.0
+        );
+        const lowerLidMat = colorMat(
+          skinCol.clone().multiplyScalar(isGulfNiqab ? 0.90 : 0.86).getHex(),
+          isGulfNiqab ? 0.50 : 0.56,
+          0.0
+        );
+        const blinkSkinMat = colorMat(
+          skinCol.clone().multiplyScalar(isGulfNiqab ? 0.93 : 0.90).getHex(),
+          isGulfNiqab ? 0.48 : 0.54,
+          0.0
+        );
         const lashMat = sMats.lash;
+        const browMat = !isGulfNiqab
+          ? new THREE.MeshStandardMaterial({
+              color: hairCol.getHex(),
+              bumpMap: getHairStrandBump(),
+              bumpScale: 0.0022,
+              roughness: 0.68,
+              metalness: 0.0,
+            })
+          : null;
         const lidList: THREE.Mesh[] = [];
         const browList: THREE.Mesh[] = [];
+        const pivotList: THREE.Group[] = [];
 
         for (const side of [-1, 1]) {
-          // Sclera orb nested softly into eye orbit
+          // Rotatable eyeball pivot for FPP clinician gaze tracking & natural micro-saccades
+          const eyePivot = new THREE.Group();
+          eyePivot.position.set(side * eyeX, eyeY, eyeZ);
+
           const sclera = new THREE.Mesh(sGeoms.sclera, scleraMat);
           sclera.userData.sharedGlbGeom = true;
           sclera.userData.sharedGlbMat = true;
-          sclera.scale.set(0.98, 0.74, 0.76);
-          sclera.position.set(side * eyeX, eyeY, eyeZ);
+          sclera.scale.set(isGulfNiqab ? 1.02 : 0.98, isGulfNiqab ? 0.72 : 0.74, 0.78);
 
-          // Procedural hazel-brown radial iris + corneal clearcoat + crisp catchlight
           const iris = new THREE.Mesh(sGeoms.iris, irisMat);
           iris.userData.sharedGlbGeom = true;
-          iris.userData.sharedGlbMat = true;
-          iris.position.set(side * eyeX, eyeY, eyeZ + 0.0106);
+          iris.userData.sharedGlbMat = !isGulfNiqab;
+          iris.position.set(0, 0, 0.0108);
 
           const catchlight = new THREE.Mesh(sGeoms.catchlight, catchlightMat);
           catchlight.userData.sharedGlbGeom = true;
           catchlight.userData.sharedGlbMat = true;
-          catchlight.position.set(side * eyeX + 0.0021, eyeY + 0.0021, eyeZ + 0.0110);
+          catchlight.position.set(0.0021, 0.0021, 0.0112);
 
-          // Upper & lower eyelid contours + natural lash rim + blink cap
+          eyePivot.add(sclera, iris, catchlight);
+          if (isGulfNiqab) {
+            // Subtle secondary warm corneal catchlight for lifelike FPP eye depth
+            const subCatch = new THREE.Mesh(sGeoms.catchlight, catchlightMat);
+            subCatch.userData.sharedGlbGeom = true;
+            subCatch.userData.sharedGlbMat = true;
+            subCatch.scale.setScalar(0.58);
+            subCatch.position.set(-0.0018, -0.0015, 0.0111);
+            eyePivot.add(subCatch);
+            pivotList.push(eyePivot);
+          }
+
+          // Upper & lower eyelid contours + kohl-lined Gulf lash contour + blink cap
           const upperLid = new THREE.Mesh(sGeoms.upperLid, lidMat);
           upperLid.userData.sharedGlbGeom = true;
           upperLid.position.set(side * eyeX, eyeY + 0.0020, eyeZ + 0.0066);
-          upperLid.rotation.set(0.22, 0, Math.PI * 0.04);
+          upperLid.rotation.set(0.22, 0, side * Math.PI * 0.04);
 
           const lowerLid = new THREE.Mesh(sGeoms.lowerLid, lowerLidMat);
           lowerLid.userData.sharedGlbGeom = true;
           lowerLid.position.set(side * eyeX, eyeY - 0.0046, eyeZ + 0.0062);
-          lowerLid.rotation.set(Math.PI - 0.24, 0, Math.PI * 0.04);
+          lowerLid.rotation.set(Math.PI - 0.24, 0, side * Math.PI * 0.04);
 
           const blinkLid = new THREE.Mesh(sGeoms.blinkLid, blinkSkinMat);
           blinkLid.userData.sharedGlbGeom = true;
@@ -2710,89 +3511,109 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           lashRim.userData.sharedGlbGeom = true;
           lashRim.userData.sharedGlbMat = true;
           lashRim.position.set(side * eyeX, eyeY + 0.0008, eyeZ + 0.0086);
-          lashRim.rotation.set(0.18, 0, Math.PI * 0.06);
+          lashRim.rotation.set(0.18, 0, side * Math.PI * (isGulfNiqab ? 0.08 : 0.06));
+          if (isGulfNiqab) {
+            lashRim.scale.set(1.06, 1.08, 1.0);
+            // Delicate dark kohl waterline definition along lower rim
+            const lowerLash = new THREE.Mesh(sGeoms.lowerLid, lashMat);
+            lowerLash.userData.sharedGlbGeom = true;
+            lowerLash.userData.sharedGlbMat = true;
+            lowerLash.scale.set(0.96, 0.65, 0.75);
+            lowerLash.position.set(side * eyeX, eyeY - 0.0038, eyeZ + 0.0074);
+            lowerLash.rotation.set(Math.PI - 0.22, 0, side * Math.PI * 0.04);
+            faceGrp.add(lowerLash);
+          }
 
-          const browGeom = isFemaleLook
-            ? side === -1
-              ? sGeoms.browFemaleL
-              : sGeoms.browFemaleR
-            : side === -1
-              ? sGeoms.browMaleL
-              : sGeoms.browMaleR;
-          const browMesh = new THREE.Mesh(browGeom, browMat);
-          browMesh.userData.sharedGlbGeom = true;
-          browMesh.scale.set(1.0, 0.72, 0.65);
-          browList.push(browMesh);
+          faceGrp.add(eyePivot, upperLid, lowerLid, blinkLid, lashRim);
 
-          faceGrp.add(sclera, iris, catchlight, upperLid, lowerLid, blinkLid, lashRim, browMesh);
+          if (!isGulfNiqab && browMat) {
+            const browGeom = isFemaleLook
+              ? side === -1
+                ? sGeoms.browFemaleL
+                : sGeoms.browFemaleR
+              : side === -1
+                ? sGeoms.browMaleL
+                : sGeoms.browMaleR;
+            const browMesh = new THREE.Mesh(browGeom, browMat);
+            browMesh.userData.sharedGlbGeom = true;
+            browMesh.scale.set(1.0, 0.72, 0.65);
+            browList.push(browMesh);
+            faceGrp.add(browMesh);
+          }
         }
         if (lidList.length === 2) {
           blinkLids = [lidList[0], lidList[1]];
+        }
+        if (pivotList.length === 2) {
+          eyePivots = [pivotList[0], pivotList[1]];
         }
         if (browList.length === 2) {
           brows = [browList[0], browList[1]];
         }
 
-        // Subtle nostril shadows under nose tip (nose tip is at z=0.177)
-        const nostrilMat = colorMat(skinCol.clone().multiplyScalar(0.68).getHex(), 0.70, 0.0);
-        const nostrilY = isFemaleLook ? 0.0425 : 0.0470;
-        const nostrilZ = isFemaleLook ? 0.1630 : 0.1620;
-        for (const side of [-1, 1]) {
-          const nostril = new THREE.Mesh(sGeoms.nostril, nostrilMat);
-          nostril.userData.sharedGlbGeom = true;
-          nostril.scale.set(1.05, 0.62, 0.70);
-          nostril.position.set(side * 0.0078, nostrilY, nostrilZ);
-          faceGrp.add(nostril);
+        if (!isGulfNiqab) {
+          // Subtle nostril shadows under nose tip (nose tip is at z=0.177)
+          const nostrilMat = colorMat(skinCol.clone().multiplyScalar(0.68).getHex(), 0.70, 0.0);
+          const nostrilY = isFemaleLook ? 0.0425 : 0.0470;
+          const nostrilZ = isFemaleLook ? 0.1630 : 0.1620;
+          for (const side of [-1, 1]) {
+            const nostril = new THREE.Mesh(sGeoms.nostril, nostrilMat);
+            nostril.userData.sharedGlbGeom = true;
+            nostril.scale.set(1.05, 0.62, 0.70);
+            nostril.position.set(side * 0.0078, nostrilY, nostrilZ);
+            faceGrp.add(nostril);
+          }
+
+          // Sculpted natural lips aligned flush on mouthFaceZ (z=0.1545..0.1566)
+          const lipHex = skinCol
+            .clone()
+            .lerp(new THREE.Color(isFemaleLook ? 0x82443a : 0x6f3f34), isFemaleLook ? 0.50 : 0.36)
+            .getHex();
+          const lipMat = colorMat(lipHex, isFemaleLook ? 0.38 : 0.48, 0.0);
+          const seamMat = colorMat(skinCol.clone().multiplyScalar(0.55).getHex(), 0.65, 0.0);
+          const mouthY = isFemaleLook ? 0.0172 : 0.0252;
+          const mouthZ = isFemaleLook ? 0.1552 : 0.1566;
+          const upperLipCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(-0.018, mouthY + 0.0008, mouthZ - 0.006),
+            new THREE.Vector3(-0.007, mouthY + 0.0040, mouthZ + 0.0018),
+            new THREE.Vector3(0, mouthY + 0.0026, mouthZ + 0.0024),
+            new THREE.Vector3(0.007, mouthY + 0.0040, mouthZ + 0.0018),
+            new THREE.Vector3(0.018, mouthY + 0.0008, mouthZ - 0.006),
+          ]);
+          const upperLip = new THREE.Mesh(new THREE.TubeGeometry(upperLipCurve, 14, 0.0035, 8, false), lipMat);
+          upperLip.scale.set(1.0, 0.76, 0.80);
+
+          const lowerLipCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(-0.015, mouthY - 0.0005, mouthZ - 0.005),
+            new THREE.Vector3(0, mouthY - 0.0042, mouthZ + 0.0026),
+            new THREE.Vector3(0.015, mouthY - 0.0005, mouthZ - 0.005),
+          ]);
+          const lowerLip = new THREE.Mesh(
+            new THREE.TubeGeometry(lowerLipCurve, 12, isFemaleLook ? 0.0043 : 0.0040, 8, false),
+            lipMat
+          );
+          lowerLip.scale.set(1.0, 0.78, 0.82);
+
+          const mouthSeamMesh = new THREE.Mesh(
+            new THREE.TubeGeometry(
+              new THREE.CatmullRomCurve3([
+                new THREE.Vector3(-0.017, mouthY + 0.0004, mouthZ - 0.005),
+                new THREE.Vector3(0, mouthY - 0.0004, mouthZ + 0.0030),
+                new THREE.Vector3(0.017, mouthY + 0.0004, mouthZ - 0.005),
+              ]),
+              12,
+              0.0010,
+              6,
+              false
+            ),
+            seamMat
+          );
+          mouthLower = lowerLip;
+          mouthSeam = mouthSeamMesh;
+
+          faceGrp.add(upperLip, lowerLip, mouthSeamMesh);
         }
 
-        // Sculpted natural lips aligned flush on mouthFaceZ (z=0.1545..0.1566)
-        const lipHex = skinCol
-          .clone()
-          .lerp(new THREE.Color(isFemaleLook ? 0x82443a : 0x6f3f34), isFemaleLook ? 0.50 : 0.36)
-          .getHex();
-        const lipMat = colorMat(lipHex, isFemaleLook ? 0.38 : 0.48, 0.0);
-        const seamMat = colorMat(skinCol.clone().multiplyScalar(0.55).getHex(), 0.65, 0.0);
-        const mouthY = isFemaleLook ? 0.0172 : 0.0252;
-        const mouthZ = isFemaleLook ? 0.1552 : 0.1566;
-        const upperLipCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(-0.018, mouthY + 0.0008, mouthZ - 0.006),
-          new THREE.Vector3(-0.007, mouthY + 0.0040, mouthZ + 0.0018),
-          new THREE.Vector3(0, mouthY + 0.0026, mouthZ + 0.0024),
-          new THREE.Vector3(0.007, mouthY + 0.0040, mouthZ + 0.0018),
-          new THREE.Vector3(0.018, mouthY + 0.0008, mouthZ - 0.006),
-        ]);
-        const upperLip = new THREE.Mesh(new THREE.TubeGeometry(upperLipCurve, 14, 0.0035, 8, false), lipMat);
-        upperLip.scale.set(1.0, 0.76, 0.80);
-
-        const lowerLipCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(-0.015, mouthY - 0.0005, mouthZ - 0.005),
-          new THREE.Vector3(0, mouthY - 0.0042, mouthZ + 0.0026),
-          new THREE.Vector3(0.015, mouthY - 0.0005, mouthZ - 0.005),
-        ]);
-        const lowerLip = new THREE.Mesh(
-          new THREE.TubeGeometry(lowerLipCurve, 12, isFemaleLook ? 0.0043 : 0.0040, 8, false),
-          lipMat
-        );
-        lowerLip.scale.set(1.0, 0.78, 0.82);
-
-        const mouthSeamMesh = new THREE.Mesh(
-          new THREE.TubeGeometry(
-            new THREE.CatmullRomCurve3([
-              new THREE.Vector3(-0.017, mouthY + 0.0004, mouthZ - 0.005),
-              new THREE.Vector3(0, mouthY - 0.0004, mouthZ + 0.0030),
-              new THREE.Vector3(0.017, mouthY + 0.0004, mouthZ - 0.005),
-            ]),
-            12,
-            0.0010,
-            6,
-            false
-          ),
-          seamMat
-        );
-        mouthLower = lowerLip;
-        mouthSeam = mouthSeamMesh;
-
-        faceGrp.add(upperLip, lowerLip, mouthSeamMesh);
         bones['Head'].bone.add(faceGrp);
       }
 
@@ -3016,7 +3837,7 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
           backTail.position.set(0, -0.056, -0.004);
           scarfGrp.add(tarhaWrapMesh, backTail);
 
-          if (!appearance.hasNiqab) {
+          if (!effectiveNiqab) {
             // Sleek matte inner undercap band visible only along the top forehead rim (y=0.138..0.166)
             const underCapRim = new THREE.Mesh(
               new THREE.CylinderGeometry(0.104, 0.110, 0.028, 28, 1, true, -Math.PI * 0.36, Math.PI * 0.72),
@@ -3027,24 +3848,26 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             scarfGrp.add(underCapRim);
           }
 
-          // 2) Contoured 3-Part 3D Niqab (ONLY when appearance.hasNiqab === true):
-          // Wraps forehead down to just above eyes (y=0.118), leaves crisp horizontal eye-slit, and drapes face veil from y=0.086 down to chest
-          if (appearance.hasNiqab) {
-            const niqabMat = makeClothMat(0x131418, appearance, 0.86, 0.52, true);
+          // 2) Contoured Multi-Layer 3D Gulf Niqab (ONLY when effectiveNiqab === true):
+          // Covers forehead down to brow edge (y=0.114), frames expressive eyes with clean slit & slim nose bridge, and drapes face veil smoothly down over chest
+          if (effectiveNiqab) {
+            const niqabMat = makeClothMat(isGulfNiqab ? 0x0f1014 : 0x131418, appearance, 0.84, 0.48, true);
+            const niqabTrimMat = makeClothMat(isGulfNiqab ? 0x20232d : 0x1a1c22, appearance, 0.56, 0.44, true);
 
-            // Forehead Niqab Band hugging forehead & temples cleanly above upper eyelids (y=0.118..0.168, front z~0.174)
-            const fbRows = 5;
-            const fbCols = 22;
+            // Forehead Niqab Band hugging forehead & temples cleanly above upper eyelids (y=0.114..0.172)
+            const fbRows = isGulfNiqab ? 7 : 5;
+            const fbCols = isGulfNiqab ? 26 : 22;
             const fbPos: number[] = [];
             const fbUvs: number[] = [];
             const fbIdx: number[] = [];
             for (let r = 0; r <= fbRows; r++) {
               const v = r / fbRows;
-              const y = THREE.MathUtils.lerp(0.168, 0.118, v);
+              const y = THREE.MathUtils.lerp(0.172, isGulfNiqab ? 0.114 : 0.118, v);
               for (let c = 0; c <= fbCols; c++) {
                 const u = c / fbCols;
-                const ang = THREE.MathUtils.lerp(-Math.PI * 0.56, Math.PI * 0.56, u);
-                fbPos.push(0.116 * Math.sin(ang), y, headCz + 0.125 * Math.cos(ang));
+                const ang = THREE.MathUtils.lerp(-Math.PI * 0.58, Math.PI * 0.58, u);
+                const bandFold = isGulfNiqab ? Math.sin(v * Math.PI) * 0.0022 : 0;
+                fbPos.push((0.117 + bandFold) * Math.sin(ang), y, headCz + (0.126 + bandFold) * Math.cos(ang));
                 fbUvs.push(u, 1 - v);
               }
             }
@@ -3063,23 +3886,24 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             const foreheadBand = new THREE.Mesh(fbGeom, niqabMat);
             foreheadBand.castShadow = true;
 
-            // Contoured Lower Face Veil (y=-0.075..0.088) curving smoothly over nose tip (z=0.186) & chin down to chest
-            const veilRows = 12;
-            const veilCols = 24;
+            // Contoured Lower Face Veil (y=-0.095..0.088) curving smoothly over nose tip & chin down onto chest
+            const veilRows = isGulfNiqab ? 16 : 12;
+            const veilCols = isGulfNiqab ? 28 : 24;
             const vPos: number[] = [];
             const vUvs: number[] = [];
             const vIdx: number[] = [];
+            const veilBottomY = isGulfNiqab ? -0.102 : -0.075;
             for (let r = 0; r <= veilRows; r++) {
               const v = r / veilRows;
-              const vy = THREE.MathUtils.lerp(0.088, -0.075, v);
-              const noseBulge = Math.exp(-Math.pow((v - 0.22) / 0.20, 2)) * 0.016;
-              const rx = THREE.MathUtils.lerp(0.108, 0.128, v);
-              const rz = THREE.MathUtils.lerp(0.118, 0.124, v) + noseBulge;
+              const vy = THREE.MathUtils.lerp(0.088, veilBottomY, v);
+              const noseBulge = Math.exp(-Math.pow((v - 0.18) / 0.18, 2)) * 0.017;
+              const rx = THREE.MathUtils.lerp(0.109, isGulfNiqab ? 0.136 : 0.128, v);
+              const rz = THREE.MathUtils.lerp(0.119, isGulfNiqab ? 0.132 : 0.124, v) + noseBulge;
               for (let c = 0; c <= veilCols; c++) {
                 const u = c / veilCols;
-                const ang = THREE.MathUtils.lerp(-Math.PI * 0.52, Math.PI * 0.52, u);
-                const centerPin = Math.cos(ang * 2.0) * 0.005 * (1 - v);
-                const drapeWave = Math.sin(u * Math.PI * 7) * 0.0022 * v;
+                const ang = THREE.MathUtils.lerp(-Math.PI * 0.54, Math.PI * 0.54, u);
+                const centerPin = Math.cos(ang * 2.0) * 0.0055 * (1 - v);
+                const drapeWave = Math.sin(u * Math.PI * (isGulfNiqab ? 9 : 7)) * (isGulfNiqab ? 0.0028 : 0.0022) * v;
                 const vx = rx * Math.sin(ang);
                 const vz = headCz + (rz + centerPin + drapeWave) * Math.cos(ang * 0.85);
                 vPos.push(vx, vy, vz);
@@ -3100,6 +3924,9 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             veilGeom.computeVertexNormals();
             const faceVeil = new THREE.Mesh(veilGeom, niqabMat);
             faceVeil.castShadow = true;
+            if (isGulfNiqab) {
+              niqabVeil = faceVeil;
+            }
 
             // Slim nose-bridge divider between left and right eye openings
             const bridgeCurve = new THREE.CatmullRomCurve3([
@@ -3108,12 +3935,45 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
               new THREE.Vector3(0, 0.086, 0.173),
             ]);
             const noseBridgeStrap = new THREE.Mesh(
-              new THREE.TubeGeometry(bridgeCurve, 8, 0.0065, 6, false),
+              new THREE.TubeGeometry(bridgeCurve, 8, 0.0062, 6, false),
               niqabMat
             );
             noseBridgeStrap.scale.set(1.0, 1.0, 0.42);
 
             scarfGrp.add(foreheadBand, faceVeil, noseBridgeStrap);
+
+            if (isGulfNiqab) {
+              // Subtle tailored satin piping along upper eye-slit edge & forehead hem (high FPP couture detail)
+              const slitRimCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(-0.086, 0.088, 0.120),
+                new THREE.Vector3(-0.044, 0.087, 0.156),
+                new THREE.Vector3(0, 0.088, 0.176),
+                new THREE.Vector3(0.044, 0.087, 0.156),
+                new THREE.Vector3(0.086, 0.088, 0.120),
+              ]);
+              const slitPiping = new THREE.Mesh(
+                new THREE.TubeGeometry(slitRimCurve, 18, 0.0026, 6, false),
+                niqabTrimMat
+              );
+              const browPipingCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(-0.088, 0.115, 0.126),
+                new THREE.Vector3(-0.045, 0.114, 0.160),
+                new THREE.Vector3(0, 0.115, 0.174),
+                new THREE.Vector3(0.045, 0.114, 0.160),
+                new THREE.Vector3(0.088, 0.115, 0.126),
+              ]);
+              const browPiping = new THREE.Mesh(
+                new THREE.TubeGeometry(browPipingCurve, 18, 0.0024, 6, false),
+                niqabTrimMat
+              );
+              // Flowing rear Gulf Sheila tail layered softly over upper back
+              const sheilaRearLayer = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.104, 0.148, 0.24, 22, 1, true, Math.PI * 0.54, Math.PI * 0.92),
+                tarhaMat
+              );
+              sheilaRearLayer.position.set(0, -0.068, -0.012);
+              scarfGrp.add(slitPiping, browPiping, sheilaRearLayer);
+            }
           }
 
           bones['Head'].bone.add(scarfGrp);
@@ -3122,16 +3982,31 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
             const chestDrape = new THREE.Group();
             chestDrape.scale.setScalar(0.01);
 
-            if (appearance.hasNiqab) {
-              // Continuous flowing black Khimar / Niqab front drape over collarbones & upper chest
-              const niqabChestMat = makeClothMat(0x131418, appearance, 0.86, 0.52, true);
+            if (effectiveNiqab) {
+              // Continuous flowing black Khimar / Niqab front apron over collarbones & chest + asymmetric Gulf Sheila shoulder wrap
+              const niqabChestMat = makeClothMat(isGulfNiqab ? 0x0f1014 : 0x131418, appearance, 0.84, 0.50, true);
               const khimarShawl = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.112, 0.168, 0.24, 28, 1, false),
+                new THREE.CylinderGeometry(0.112, isGulfNiqab ? 0.176 : 0.168, isGulfNiqab ? 0.27 : 0.24, 28, 1, false),
                 niqabChestMat
               );
-              khimarShawl.scale.set(1.02, 1.0, 0.94);
-              khimarShawl.position.set(0, 0.020, 0.056);
+              khimarShawl.scale.set(1.03, 1.0, 0.95);
+              khimarShawl.position.set(0, isGulfNiqab ? 0.008 : 0.020, 0.056);
               chestDrape.add(khimarShawl);
+
+              if (isGulfNiqab) {
+                const sheilaFoldCurve = new THREE.CatmullRomCurve3([
+                  new THREE.Vector3(-0.086, 0.132, 0.068),
+                  new THREE.Vector3(-0.072, 0.062, 0.150),
+                  new THREE.Vector3(-0.032, -0.018, 0.184),
+                  new THREE.Vector3(0.048, -0.082, 0.168),
+                ]);
+                const sheilaChestFold = new THREE.Mesh(
+                  new THREE.TubeGeometry(sheilaFoldCurve, 18, 0.026, 10, false),
+                  tarhaMat
+                );
+                sheilaChestFold.scale.set(1.22, 1.0, 0.42);
+                chestDrape.add(sheilaChestFold);
+              }
             } else {
               // Clean low collarbone collar + graceful side shoulder drape (stays tight to shoulders so outfit & stethoscope show clearly!)
               const collarBase = new THREE.Mesh(
@@ -3202,10 +4077,11 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
         bones['Head'].bone.add(beardGrp);
       }
 
-      // Eyewear variants (round, square, half_rim, sunglasses) on stylized characters
-      const styEyewear: EyewearStyle =
-        appearance.eyewearStyle ??
-        (!appearance.isStaff && !appearance.isPlayer && seedIdx % 4 === 0 ? 'round' : 'none');
+      // Eyewear variants (round, square, half_rim, sunglasses) — skipped cleanly when covered by Gulf niqab
+      const styEyewear: EyewearStyle = isGulfNiqab
+        ? 'none'
+        : appearance.eyewearStyle ??
+          (!appearance.isStaff && !appearance.isPlayer && seedIdx % 4 === 0 ? 'round' : 'none');
       if (styEyewear !== 'none') {
         const glassGrp = new THREE.Group();
         glassGrp.scale.setScalar(0.01);
@@ -3331,9 +4207,271 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       }
     }
 
+    // Bespoke tailored Abaya skirt, flared sleeve cuffs, layered Sheila & 4-part contoured Niqab for real human Rocketbox female
+    if (isRocketboxGulf && bones['Head'] && bones['Chest']) {
+      const hMul = targetH / 1.49;
+      const cloneOffsetZ = skinnedModel.children[0]?.position.z ?? 0.030 * hMul;
+      const zShiftRel = cloneOffsetZ - 0.030 * hMul;
+      const bxGulf = buildScale;
+      const bzGulf = 1 + (buildScale - 1) * 0.75;
+      const abayaHex = shirtCol.getHex();
+      const sheilaHex = new THREE.Color('#101116').getHex();
+      const niqabHex = 0x0d0e13;
+      const satinTrimHex = 0x222632;
+
+      if (gulfBodySkinnedMesh) {
+        createRocketboxAbayaSkinnedMesh(
+          gulfBodySkinnedMesh,
+          bodyPivot,
+          appearance,
+          abayaHex,
+          targetH,
+          buildScale,
+          cloneOffsetZ
+        );
+      }
+
+      const sheilaMat = makeClothMat(sheilaHex, appearance, 0.85, 0.46, true);
+      const niqabMat = makeClothMat(niqabHex, appearance, 0.84, 0.48, true);
+      const satinTrimMat = makeClothMat(satinTrimHex, appearance, 0.56, 0.44, true);
+
+      // Flared Gulf Abaya bell sleeve cuffs anchored along Forearm -> Wrist
+      if (bones['LowerArmL'] && bones['HandL'] && bones['LowerArmR'] && bones['HandR']) {
+        const cuffGeom = new THREE.CylinderGeometry(0.048 * hMul, 0.034 * hMul, 0.105 * hMul, 20, 1, true);
+        const cuffTrimGeom = new THREE.TorusGeometry(0.048 * hMul, 0.0020 * hMul, 6, 20);
+        const yAxis = new THREE.Vector3(0, 1, 0);
+        for (const isL of [true, false]) {
+          const faBone = isL ? bones['LowerArmL'].bone : bones['LowerArmR'].bone;
+          const haBone = isL ? bones['HandL'].bone : bones['HandR'].bone;
+          const faW = new THREE.Vector3();
+          const haW = new THREE.Vector3();
+          faBone.getWorldPosition(faW);
+          haBone.getWorldPosition(haW);
+          const dir = haW.clone().sub(faW).normalize();
+          const cuffGrp = new THREE.Group();
+          const bell = new THREE.Mesh(cuffGeom, sheilaMat);
+          bell.castShadow = true;
+          const piping = new THREE.Mesh(cuffTrimGeom, satinTrimMat);
+          piping.rotation.x = Math.PI / 2;
+          piping.position.y = 0.0525 * hMul;
+          cuffGrp.add(bell, piping);
+          cuffGrp.position.copy(faW).lerp(haW, 0.72);
+          cuffGrp.quaternion.setFromUnitVectors(yAxis, dir);
+          root.add(cuffGrp);
+          cuffGrp.updateMatrixWorld(true);
+          faBone.attach(cuffGrp);
+        }
+      }
+
+      // Upper chest & collar Sheila shawl drape aligned to post-cloneSkinned world chest coordinates
+      const chestGrp = new THREE.Group();
+      const chestDrapeGeom = new THREE.CylinderGeometry(
+        0.084 * hMul,
+        0.162 * hMul,
+        0.215 * hMul,
+        30,
+        1,
+        false
+      );
+      const chestDrape = new THREE.Mesh(chestDrapeGeom, sheilaMat);
+      chestDrape.castShadow = true;
+      chestDrape.scale.set(1.04 * bxGulf, 1.0, 0.88 * bzGulf);
+      chestDrape.position.set(0, 1.158 * hMul, 0.012 * hMul * bzGulf + zShiftRel);
+      chestDrape.rotation.x = 0.10;
+
+      const asymFold = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.082 * hMul, 0.148 * hMul, 0.195 * hMul, 24, 1, true, -0.55, Math.PI * 1.15),
+        sheilaMat
+      );
+      asymFold.castShadow = true;
+      asymFold.scale.set(1.06 * bxGulf, 1.0, 0.90 * bzGulf);
+      asymFold.position.set(0.015 * hMul, 1.170 * hMul, 0.018 * hMul * bzGulf + zShiftRel);
+      asymFold.rotation.set(0.11, -0.22, -0.18);
+
+      const placketGeom = new THREE.BoxGeometry(0.011 * hMul, 0.28 * hMul, 0.004 * hMul);
+      const placket = new THREE.Mesh(placketGeom, satinTrimMat);
+      placket.position.set(0, 0.98 * hMul, 0.122 * hMul * bzGulf + zShiftRel);
+
+      chestGrp.add(chestDrape, asymFold, placket);
+      root.add(chestGrp);
+      chestGrp.updateMatrixWorld(true);
+      bones['Chest'].bone.attach(chestGrp);
+
+      // Head-anchored Sheila hood + hair bun drape + 4-part contoured Niqab aligned to actual post-cloneSkinned head coordinates
+      const headGrp = new THREE.Group();
+      const headCz = -0.001 * hMul + zShiftRel;
+
+      // 1) Sheila cranial wrap enveloping brow crown (1.504), sides (±0.085), and rear hair bun (minZ=-0.156)
+      const shRows = 16;
+      const shCols = 32;
+      const shPos: number[] = [];
+      const shUvs: number[] = [];
+      const shIdx: number[] = [];
+      for (let r = 0; r <= shRows; r++) {
+        const v = r / shRows; // 0 = crown top (y=1.504), 1 = neck drape (y=1.235)
+        const y = THREE.MathUtils.lerp(1.504, 1.235, v) * hMul;
+        const capArch = Math.pow(Math.min(1, v / 0.27), 0.40);
+        const rx = THREE.MathUtils.lerp(0.026, 0.085, capArch) * (v > 0.72 ? 1.06 : 1.0) * hMul * bxGulf;
+        const rzFront = THREE.MathUtils.lerp(0.028, 0.089, capArch) * hMul * bzGulf;
+        const bunCurve = Math.exp(-Math.pow((v - 0.59) / 0.25, 2)) * 0.064;
+        const rzBack = (THREE.MathUtils.lerp(0.028, 0.095, capArch) + bunCurve) * hMul * bzGulf;
+        for (let c = 0; c <= shCols; c++) {
+          const u = c / shCols;
+          const ang = THREE.MathUtils.lerp(-Math.PI, Math.PI, u);
+          const isFrontFace = Math.abs(ang) < Math.PI * 0.36 && y < 1.406 * hMul;
+          const faceArchBias = isFrontFace ? -0.014 * hMul * bzGulf : 0;
+          const rz = Math.cos(ang) >= 0 ? rzFront + faceArchBias : rzBack;
+          const x = rx * Math.sin(ang);
+          const z = headCz + rz * Math.cos(ang);
+          shPos.push(x, y, z);
+          shUvs.push(u, 1 - v);
+        }
+      }
+      for (let r = 0; r < shRows; r++) {
+        for (let c = 0; c < shCols; c++) {
+          const a = r * (shCols + 1) + c;
+          const b = a + (shCols + 1);
+          shIdx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+      }
+      const sheilaHoodGeom = new THREE.BufferGeometry();
+      sheilaHoodGeom.setAttribute('position', new THREE.Float32BufferAttribute(shPos, 3));
+      sheilaHoodGeom.setAttribute('uv', new THREE.Float32BufferAttribute(shUvs, 2));
+      sheilaHoodGeom.setIndex(shIdx);
+      sheilaHoodGeom.computeVertexNormals();
+      const sheilaHood = new THREE.Mesh(sheilaHoodGeom, sheilaMat);
+      sheilaHood.castShadow = true;
+
+      // Flowing rear Sheila tail draped over upper back
+      const rearTail = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.078 * hMul, 0.114 * hMul, 0.24 * hMul, 20, 1, true, Math.PI * 0.62, Math.PI * 0.76),
+        sheilaMat
+      );
+      rearTail.castShadow = true;
+      rearTail.scale.set(1.06 * bxGulf, 1.0, 1.18 * bzGulf);
+      rearTail.position.set(0, 1.20 * hMul, headCz - 0.036 * hMul * bzGulf);
+      rearTail.rotation.x = -0.14;
+
+      // 2) Tailored Forehead Band (y=1.442..1.398) sitting cleanly above natural Rocketbox eyes (y=1.3844)
+      const fbRows = 6;
+      const fbCols = 24;
+      const fbPos: number[] = [];
+      const fbUvs: number[] = [];
+      const fbIdx: number[] = [];
+      for (let r = 0; r <= fbRows; r++) {
+        const v = r / fbRows;
+        const y = THREE.MathUtils.lerp(1.442, 1.398, v) * hMul;
+        const rx = THREE.MathUtils.lerp(0.078, 0.083, v) * hMul * bxGulf;
+        const rz = (THREE.MathUtils.lerp(0.085, 0.090, v) + Math.sin(v * Math.PI) * 0.002) * hMul * bzGulf;
+        for (let c = 0; c <= fbCols; c++) {
+          const u = c / fbCols;
+          const ang = THREE.MathUtils.lerp(-Math.PI * 0.56, Math.PI * 0.56, u);
+          fbPos.push(rx * Math.sin(ang), y, headCz + rz * Math.cos(ang * 0.90));
+          fbUvs.push(u, 1 - v);
+        }
+      }
+      for (let r = 0; r < fbRows; r++) {
+        for (let c = 0; c < fbCols; c++) {
+          const a = r * (fbCols + 1) + c;
+          const b = a + (fbCols + 1);
+          fbIdx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+      }
+      const fbGeom = new THREE.BufferGeometry();
+      fbGeom.setAttribute('position', new THREE.Float32BufferAttribute(fbPos, 3));
+      fbGeom.setAttribute('uv', new THREE.Float32BufferAttribute(fbUvs, 2));
+      fbGeom.setIndex(fbIdx);
+      fbGeom.computeVertexNormals();
+      const foreheadBand = new THREE.Mesh(fbGeom, niqabMat);
+      foreheadBand.castShadow = true;
+
+      const browPipingCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-0.072 * hMul * bxGulf, 1.398 * hMul, headCz + 0.030 * hMul * bzGulf),
+        new THREE.Vector3(-0.038 * hMul * bxGulf, 1.398 * hMul, headCz + 0.076 * hMul * bzGulf),
+        new THREE.Vector3(0, 1.399 * hMul, headCz + 0.090 * hMul * bzGulf),
+        new THREE.Vector3(0.038 * hMul * bxGulf, 1.398 * hMul, headCz + 0.076 * hMul * bzGulf),
+        new THREE.Vector3(0.072 * hMul * bxGulf, 1.398 * hMul, headCz + 0.030 * hMul * bzGulf),
+      ]);
+      const browPiping = new THREE.Mesh(
+        new THREE.TubeGeometry(browPipingCurve, 18, 0.0017 * hMul, 6, false),
+        satinTrimMat
+      );
+
+      // 3) Slim Nose Bridge Strap (y=1.368..1.399) placed in front of nasal bridge without scaling offset Z
+      const bridgeCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 1.399 * hMul, headCz + 0.090 * hMul * bzGulf),
+        new THREE.Vector3(0, 1.384 * hMul, headCz + 0.091 * hMul * bzGulf),
+        new THREE.Vector3(0, 1.368 * hMul, headCz + 0.095 * hMul * bzGulf),
+      ]);
+      const bridgeGeom = new THREE.TubeGeometry(bridgeCurve, 8, 0.0048 * hMul, 6, false);
+      const noseBridgeStrap = new THREE.Mesh(bridgeGeom, niqabMat);
+
+      // 4) Contoured Pleated Face Veil inside veilPivot (anchored at nose bridge so breathing/speech tilts lower drape forward)
+      const veilPivotY = 1.368 * hMul;
+      const veilPivotZ = headCz + 0.086 * hMul * bzGulf;
+      const veilPivot = new THREE.Group();
+      veilPivot.position.set(0, veilPivotY, veilPivotZ);
+
+      const veilRows = 18;
+      const veilCols = 32;
+      const vPos: number[] = [];
+      const vUvs: number[] = [];
+      const vIdx: number[] = [];
+      for (let r = 0; r <= veilRows; r++) {
+        const v = r / veilRows;
+        const yWorld = THREE.MathUtils.lerp(1.368, 1.186, v) * hMul;
+        const noseBulge = Math.exp(-Math.pow((v - 0.14) / 0.14, 2)) * 0.023;
+        const rx = THREE.MathUtils.lerp(0.080, 0.110, v) * hMul * bxGulf;
+        const rz = (THREE.MathUtils.lerp(0.089, 0.106, v) + noseBulge) * hMul * bzGulf;
+        for (let c = 0; c <= veilCols; c++) {
+          const u = c / veilCols;
+          const ang = THREE.MathUtils.lerp(-Math.PI * 0.56, Math.PI * 0.56, u);
+          const centerPin = Math.cos(ang * 2.0) * 0.004 * (1 - v) * hMul * bzGulf;
+          const drapeWave = Math.sin(u * Math.PI * 9) * 0.0022 * v * hMul * bzGulf;
+          const xW = rx * Math.sin(ang);
+          const zW = headCz + (rz + centerPin + drapeWave) * Math.cos(ang * 0.88);
+          vPos.push(xW, yWorld - veilPivotY, zW - veilPivotZ);
+          vUvs.push(u, 1 - v);
+        }
+      }
+      for (let r = 0; r < veilRows; r++) {
+        for (let c = 0; c < veilCols; c++) {
+          const a = r * (veilCols + 1) + c;
+          const b = a + (veilCols + 1);
+          vIdx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+      }
+      const veilGeom = new THREE.BufferGeometry();
+      veilGeom.setAttribute('position', new THREE.Float32BufferAttribute(vPos, 3));
+      veilGeom.setAttribute('uv', new THREE.Float32BufferAttribute(vUvs, 2));
+      veilGeom.setIndex(vIdx);
+      veilGeom.computeVertexNormals();
+      const faceVeil = new THREE.Mesh(veilGeom, niqabMat);
+      faceVeil.castShadow = true;
+
+      const slitRimCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-0.074 * hMul * bxGulf, 0, headCz + 0.032 * hMul * bzGulf - veilPivotZ),
+        new THREE.Vector3(-0.036 * hMul * bxGulf, 0, headCz + 0.077 * hMul * bzGulf - veilPivotZ),
+        new THREE.Vector3(0, 0.001 * hMul, headCz + 0.095 * hMul * bzGulf - veilPivotZ),
+        new THREE.Vector3(0.036 * hMul * bxGulf, 0, headCz + 0.077 * hMul * bzGulf - veilPivotZ),
+        new THREE.Vector3(0.074 * hMul * bxGulf, 0, headCz + 0.032 * hMul * bzGulf - veilPivotZ),
+      ]);
+      const slitPiping = new THREE.Mesh(
+        new THREE.TubeGeometry(slitRimCurve, 18, 0.0017 * hMul, 6, false),
+        satinTrimMat
+      );
+      veilPivot.add(faceVeil, slitPiping);
+      niqabVeil = veilPivot;
+
+      headGrp.add(sheilaHood, rearTail, foreheadBand, browPiping, noseBridgeStrap, veilPivot);
+      root.add(headGrp);
+      headGrp.updateMatrixWorld(true);
+      bones['Head'].bone.attach(headGrp);
+    }
+
     // Orientation-proof accessories for scanned models + clinical orthoses via world-space attach()
     if (isRealisticScan && bones['Head']) {
-      const realEyewear: EyewearStyle = appearance.eyewearStyle ?? 'none';
+      const realEyewear: EyewearStyle = isGulfNiqab ? 'none' : (appearance.eyewearStyle ?? 'none');
       if (realEyewear !== 'none' && bones['EyeL'] && bones['EyeR']) {
         const pL = new THREE.Vector3();
         const pR = new THREE.Vector3();
@@ -3610,31 +4748,35 @@ export function createHumanoid3D(appearance: HumanoidAppearance): HumanoidRig {
       brows,
       mouthLower,
       mouthSeam,
+      eyePivots,
+      niqabVeil,
       isSkinnedGlb: true,
       isRealisticScan,
       isRocketboxScan,
+      isGulfNiqab,
       morphMeshes: isRealisticScan ? morphMeshes : undefined,
       smoothedMorphs: isRealisticScan ? {} : undefined,
-      fppBehavior: isRealisticScan
-        ? {
-            lastTimeSec: -1,
-            nextGlanceAt: 4.5,
-            glanceUntil: 0,
-            glanceYaw: 0,
-            glancePitch: 0,
-            nextSaccadeAt: 1.4,
-            sacYaw: 0,
-            sacPitch: 0,
-            nextNodAt: 3.4,
-            nodUntil: 0,
-            nodStrength: 0,
-            curHeadYaw: 0,
-            curHeadPitch: 0,
-            curEyeYaw: 0,
-            curEyePitch: 0,
-            curGestureAmp: 0,
-          }
-        : undefined,
+      fppBehavior:
+        isRealisticScan || isGulfNiqab
+          ? {
+              lastTimeSec: -1,
+              nextGlanceAt: 4.5,
+              glanceUntil: 0,
+              glanceYaw: 0,
+              glancePitch: 0,
+              nextSaccadeAt: 1.4,
+              sacYaw: 0,
+              sacPitch: 0,
+              nextNodAt: 3.4,
+              nodUntil: 0,
+              nodStrength: 0,
+              curHeadYaw: 0,
+              curHeadPitch: 0,
+              curEyeYaw: 0,
+              curEyePitch: 0,
+              curGestureAmp: 0,
+            }
+          : undefined,
       hipHeight: measuredHipH,
       heightScale: hScale,
       bones,
@@ -3782,6 +4924,40 @@ function applyNaturalHandFingers(
   );
   applyCharEuler(b[`Thumb2${side}`], 0.18 * baseCurl, 0, curlSign * 0.28 * baseCurl);
   applyCharEuler(b[`Thumb3${side}`], 0.12 * baseCurl, 0, curlSign * 0.20 * baseCurl);
+}
+
+/** Relaxes or curls all 5 fingers naturally on stylized woman_suit.glb hands (zero allocations). */
+function applyStylizedWomanFingers(
+  b: Record<string, SkinnedBoneRef>,
+  side: 'L' | 'R',
+  baseCurl: number
+) {
+  const c = THREE.MathUtils.clamp(baseCurl, 0, 1);
+  const iCurl = c * 0.72;
+  const mCurl = c * 0.88;
+  const rCurl = c * 1.04;
+  const pCurl = c * 1.18;
+
+  applyLocalHandPose(b[`Index1${side}`], -0.68 * iCurl, 0, 0);
+  applyLocalHandPose(b[`Index2${side}`], -0.58 * iCurl, 0, 0);
+  applyLocalHandPose(b[`Index3${side}`], -0.44 * iCurl, 0, 0);
+
+  applyLocalHandPose(b[`Middle1${side}`], -0.68 * mCurl, 0, 0);
+  applyLocalHandPose(b[`Middle2${side}`], -0.58 * mCurl, 0, 0);
+  applyLocalHandPose(b[`Middle3${side}`], -0.44 * mCurl, 0, 0);
+
+  applyLocalHandPose(b[`Ring1${side}`], -0.68 * rCurl, 0, 0);
+  applyLocalHandPose(b[`Ring2${side}`], -0.58 * rCurl, 0, 0);
+  applyLocalHandPose(b[`Ring3${side}`], -0.44 * rCurl, 0, 0);
+
+  applyLocalHandPose(b[`Pinky1${side}`], -0.68 * pCurl, 0, 0);
+  applyLocalHandPose(b[`Pinky2${side}`], -0.58 * pCurl, 0, 0);
+  applyLocalHandPose(b[`Pinky3${side}`], -0.44 * pCurl, 0, 0);
+
+  const thumbSign = side === 'L' ? -1 : 1;
+  applyLocalHandPose(b[`Thumb1${side}`], 0.14 * c, thumbSign * 0.22 * c, thumbSign * 0.34 * c);
+  applyLocalHandPose(b[`Thumb2${side}`], 0.18 * c, 0, thumbSign * 0.24 * c);
+  applyLocalHandPose(b[`Thumb3${side}`], 0.12 * c, 0, thumbSign * 0.18 * c);
 }
 
 function dampMorphTarget(
@@ -3936,6 +5112,8 @@ export function animateHumanoid3D(
 
   const isRealScan = Boolean(rig.isRealisticScan);
   const isRocketbox = Boolean(rig.isRocketboxScan);
+  const isGulfNiqab = Boolean(rig.isGulfNiqab);
+  const useFppPoise = isRealScan || isGulfNiqab;
   const rbArmOffset = isRocketbox ? 0.76 : 0;
   const fppBeh = rig.fppBehavior;
   let frameDt = 0.016;
@@ -4002,7 +5180,15 @@ export function animateHumanoid3D(
     blinkAmt = Math.sin(((cyclePos - 0.24) / 0.15) * Math.PI);
   }
   const stimBlink = Math.max(sSpike * 0.85, highDiscomfort * 0.22);
-  const effBlinkAmt = Math.min(1, Math.max(blinkAmt, stimBlink));
+  const painLidNarrow =
+    isGulfNiqab && isFppSession
+      ? Math.min(
+          0.20,
+          (!hasRelief ? THREE.MathUtils.clamp((vasPain - 4) / 6, 0, 1) * 0.10 : 0) +
+            effDiscomfort * 0.16
+        )
+      : 0;
+  const effBlinkAmt = Math.min(1, Math.max(blinkAmt, stimBlink, painLidNarrow));
 
   if (rig.blinkLids) {
     const lidRx = THREE.MathUtils.lerp(-0.98, 0.42, effBlinkAmt);
@@ -4025,6 +5211,15 @@ export function animateHumanoid3D(
   const speakingActive =
     isSpeaking &&
     ((lieBlend ?? (pose === 'lying' ? 1 : 0)) < 0.2 || proneW < 0.35);
+  if (rig.niqabVeil) {
+    const veilSpeakPulse = speakingActive
+      ? Math.max(0, Math.sin(t * 9.5) * 0.65 + Math.sin(t * 14.3) * 0.35)
+      : 0;
+    const veilBreathLift = Math.max(0, breathWave) * (0.008 + highDiscomfort * 0.006);
+    const veilMotion = veilSpeakPulse * 0.015 + veilBreathLift;
+    rig.niqabVeil.scale.set(1, 1, 1 + veilMotion);
+    rig.niqabVeil.rotation.x = -veilMotion;
+  }
   const hsSmile = THREE.MathUtils.clamp(handshakeSmile, 0, 1) * Math.max(0, 1 - effDiscomfort * 1.1);
   if (rig.mouthLower && rig.mouthSeam) {
     if (speakingActive) {
@@ -4131,8 +5326,6 @@ export function animateHumanoid3D(
         12,
         frameDt
       );
-      dampMorphTarget(rig, 'AK_44_MouthSmileLeft', smileAmt * 0.85, 7, frameDt);
-      dampMorphTarget(rig, 'AK_45_MouthSmileRight', smileAmt * 0.80, 7, frameDt);
       const nodBrowBoost = fppBeh && timeSec < fppBeh.nodUntil ? 0.10 * calmFactor : 0;
       dampMorphTarget(
         rig,
@@ -4157,32 +5350,38 @@ export function animateHumanoid3D(
         10,
         frameDt
       );
-      dampMorphTarget(rig, 'AK_30_MouthFrownLeft', Math.min(0.88, winceWave * 0.32 + stimFrownBoost), 9, frameDt);
-      dampMorphTarget(rig, 'AK_31_MouthFrownRight', Math.min(0.88, winceWave * 0.32 + stimFrownBoost), 9, frameDt);
 
-      if (speakingActive) {
-        const sylGate = THREE.MathUtils.clamp(0.65 + 0.55 * Math.sin(timeSec * 4.2 + 0.3), 0, 1);
-        const jaw = Math.max(0, Math.sin(timeSec * 11.4) * 0.44 + Math.sin(timeSec * 16.9) * 0.26 + 0.12) * sylGate;
-        const phPhase = (timeSec * 5.2) % 4;
-        const vAA = Math.max(0, 1 - Math.abs(phPhase - 0.6)) * 0.38 * sylGate;
-        const vO = Math.max(0, 1 - Math.abs(phPhase - 1.6)) * 0.32 * sylGate;
-        const vE = Math.max(0, 1 - Math.abs(phPhase - 2.6)) * 0.34 * sylGate;
-        const vU = Math.max(0, 1 - Math.abs(phPhase - 3.4)) * 0.26 * sylGate;
-        const vPP = jaw < 0.12 ? 0.22 : 0;
+      // Performance optimization: skip hidden mouth/jaw/viseme blendshapes when wearing Niqab
+      if (!isGulfNiqab) {
+        dampMorphTarget(rig, 'AK_44_MouthSmileLeft', smileAmt * 0.85, 7, frameDt);
+        dampMorphTarget(rig, 'AK_45_MouthSmileRight', smileAmt * 0.80, 7, frameDt);
+        dampMorphTarget(rig, 'AK_30_MouthFrownLeft', Math.min(0.88, winceWave * 0.32 + stimFrownBoost), 9, frameDt);
+        dampMorphTarget(rig, 'AK_31_MouthFrownRight', Math.min(0.88, winceWave * 0.32 + stimFrownBoost), 9, frameDt);
 
-        dampMorphTarget(rig, 'AK_25_JawOpen', jaw * 0.36, 24, frameDt);
-        dampMorphTarget(rig, 'AA_VI_10_aa', vAA, 22, frameDt);
-        dampMorphTarget(rig, 'AA_VI_13_O', vO, 22, frameDt);
-        dampMorphTarget(rig, 'AA_VI_11_E', vE, 22, frameDt);
-        dampMorphTarget(rig, 'AA_VI_14_U', vU, 22, frameDt);
-        dampMorphTarget(rig, 'AA_VI_01_PP', vPP, 24, frameDt);
-      } else {
-        dampMorphTarget(rig, 'AK_25_JawOpen', stimGaspJaw, 18, frameDt);
-        dampMorphTarget(rig, 'AA_VI_10_aa', stimGaspJaw * 0.45, 16, frameDt);
-        dampMorphTarget(rig, 'AA_VI_13_O', stimKind === 'cold' ? stimGaspJaw * 0.35 : 0, 14, frameDt);
-        dampMorphTarget(rig, 'AA_VI_11_E', 0, 14, frameDt);
-        dampMorphTarget(rig, 'AA_VI_14_U', 0, 14, frameDt);
-        dampMorphTarget(rig, 'AA_VI_01_PP', 0, 14, frameDt);
+        if (speakingActive) {
+          const sylGate = THREE.MathUtils.clamp(0.65 + 0.55 * Math.sin(timeSec * 4.2 + 0.3), 0, 1);
+          const jaw = Math.max(0, Math.sin(timeSec * 11.4) * 0.44 + Math.sin(timeSec * 16.9) * 0.26 + 0.12) * sylGate;
+          const phPhase = (timeSec * 5.2) % 4;
+          const vAA = Math.max(0, 1 - Math.abs(phPhase - 0.6)) * 0.38 * sylGate;
+          const vO = Math.max(0, 1 - Math.abs(phPhase - 1.6)) * 0.32 * sylGate;
+          const vE = Math.max(0, 1 - Math.abs(phPhase - 2.6)) * 0.34 * sylGate;
+          const vU = Math.max(0, 1 - Math.abs(phPhase - 3.4)) * 0.26 * sylGate;
+          const vPP = jaw < 0.12 ? 0.22 : 0;
+
+          dampMorphTarget(rig, 'AK_25_JawOpen', jaw * 0.36, 24, frameDt);
+          dampMorphTarget(rig, 'AA_VI_10_aa', vAA, 22, frameDt);
+          dampMorphTarget(rig, 'AA_VI_13_O', vO, 22, frameDt);
+          dampMorphTarget(rig, 'AA_VI_11_E', vE, 22, frameDt);
+          dampMorphTarget(rig, 'AA_VI_14_U', vU, 22, frameDt);
+          dampMorphTarget(rig, 'AA_VI_01_PP', vPP, 24, frameDt);
+        } else {
+          dampMorphTarget(rig, 'AK_25_JawOpen', stimGaspJaw, 18, frameDt);
+          dampMorphTarget(rig, 'AA_VI_10_aa', stimGaspJaw * 0.45, 16, frameDt);
+          dampMorphTarget(rig, 'AA_VI_13_O', stimKind === 'cold' ? stimGaspJaw * 0.35 : 0, 14, frameDt);
+          dampMorphTarget(rig, 'AA_VI_11_E', 0, 14, frameDt);
+          dampMorphTarget(rig, 'AA_VI_14_U', 0, 14, frameDt);
+          dampMorphTarget(rig, 'AA_VI_01_PP', 0, 14, frameDt);
+        }
       }
     } else {
       // Mixamo FACS h_expressions.* & h_teeth.* blendshapes (eyelid-gaze follow-through, micro-expressions, consonant/vowel lip-sync)
@@ -4688,14 +5887,19 @@ export function animateHumanoid3D(
         isRealScan,
         isRocketbox
       );
-      if (isRealScan) {
-        const lieHandPron = supineW * 1.05 + proneW * 0.25 + rightW * 0.35 - leftW * 0.35;
+      if (isRealScan || isGulfNiqab) {
+        const lieHandPron = (isGulfNiqab ? 0.68 : 1.0) * (supineW * 1.05 + proneW * 0.25 + rightW * 0.35 - leftW * 0.35);
         applyLocalHandPose(b['HandL'], -highDiscomfort * 0.14, lieHandPron, 0, isRocketbox);
         applyLocalHandPose(b['HandR'], -highDiscomfort * 0.14, -lieHandPron, 0, isRocketbox);
       }
       const lieCurlGrip = THREE.MathUtils.clamp(0.28 + highDiscomfort * 0.32 + sSpike * 0.24, 0, 0.92);
-      applyNaturalHandFingers(b, 'L', lieCurlGrip, isRealScan, isRocketbox);
-      applyNaturalHandFingers(b, 'R', lieCurlGrip, isRealScan, isRocketbox);
+      if (isGulfNiqab && !isRealScan) {
+        applyStylizedWomanFingers(b, 'L', lieCurlGrip);
+        applyStylizedWomanFingers(b, 'R', lieCurlGrip);
+      } else {
+        applyNaturalHandFingers(b, 'L', lieCurlGrip, isRealScan, isRocketbox);
+        applyNaturalHandFingers(b, 'R', lieCurlGrip, isRealScan, isRocketbox);
+      }
 
       applyCharEuler(
         b['Neck'],
@@ -4712,6 +5916,11 @@ export function animateHumanoid3D(
       if (isRealScan) {
         applyCharEuler(b['EyeL'], 0.04, Math.sin(t * 0.45) * 0.05 - lieHeadAvertYaw * 0.25, 0);
         applyCharEuler(b['EyeR'], 0.04, Math.sin(t * 0.45) * 0.05 - lieHeadAvertYaw * 0.25, 0);
+      }
+      if (rig.eyePivots) {
+        const lieEyeYaw = THREE.MathUtils.clamp(Math.sin(t * 0.45) * 0.05 - lieHeadAvertYaw * 0.22, -0.14, 0.14);
+        rig.eyePivots[0].rotation.set(0.03, lieEyeYaw, 0);
+        rig.eyePivots[1].rotation.set(0.03, lieEyeYaw, 0);
       }
       return;
     }
@@ -4802,15 +6011,15 @@ export function animateHumanoid3D(
 
     // Subtle clinical guarding vs. visible post-treatment relaxation in FPP
     const fppPainGuard =
-      isRealScan && isFppSession && lie < 0.25 && !hasRelief
+      useFppPoise && isFppSession && lie < 0.25 && !hasRelief
         ? THREE.MathUtils.clamp((vasPain - 3.5) / 6.5, 0, 1)
         : 0;
-    const fppReliefEase = isRealScan && isFppSession && hasRelief && lie < 0.25 ? 1 : 0;
+    const fppReliefEase = useFppPoise && isFppSession && hasRelief && lie < 0.25 ? 1 : 0;
 
     // Gentle torso/chest orientation toward the clinician when walking around the patient in FPP
     let fppClinicianYawRaw = 0;
     if (
-      isRealScan &&
+      useFppPoise &&
       isFppSession &&
       lookTargetWorld &&
       lie < 0.2 &&
@@ -4824,13 +6033,13 @@ export function animateHumanoid3D(
       fppClinicianYawRaw = THREE.MathUtils.clamp(dy, -0.78, 0.78);
     }
     const fppTorsoFollowYaw =
-      isRealScan && isFppSession && fppBeh
+      useFppPoise && isFppSession && fppBeh
         ? THREE.MathUtils.clamp(fppBeh.curHeadYaw * 0.24 + fppClinicianYawRaw * 0.08, -0.18, 0.18) * (1 - lie)
         : 0;
 
     // Subtle seated posture micro-adjustments while listening in FPP (~every 8-11s)
     const fppSitMicro =
-      isRealScan && isFppSession && sit > 0.5 && lie < 0.1 && !speakingActive
+      useFppPoise && isFppSession && sit > 0.5 && lie < 0.1 && !speakingActive
         ? Math.pow(Math.max(0, (Math.sin(t * 0.34 + 0.8) - 0.52) / 0.48), 2)
         : 0;
 
@@ -4925,7 +6134,7 @@ export function animateHumanoid3D(
     const pickTorsoLean = activePickFile ? THREE.MathUtils.lerp(0.095, 0.025, pickGrasp) * pickReach : 0;
     const placeTorsoLean = activePlaceFile ? 0.23 * placeReach : 0;
     const fppStandEngageLean =
-      isRealScan && isFppSession && sit < 0.35 && lie < 0.15
+      useFppPoise && isFppSession && sit < 0.35 && lie < 0.15
         ? (speakingActive ? 0.032 : 0.016) - fppPainGuard * 0.022 + fppReliefEase * 0.010
         : 0;
     const torsoStandX =
@@ -5010,7 +6219,7 @@ export function animateHumanoid3D(
 
     const restShrug = seatedActivity === 'rest' ? Math.sin(t * 1.1) * 0.022 * sit * (1 - lie) : 0;
     const fppBreathShrug =
-      isRealScan && isFppSession
+      useFppPoise && isFppSession
         ? (breathWave * 0.014 + fppPainGuard * 0.016 - fppReliefEase * 0.014) * (1 - lie)
         : 0;
     const stimShrugL = highDiscomfort * 0.042 + sSpike * 0.038 + absTwitch * twUpperL * 0.042;
@@ -5226,7 +6435,7 @@ export function animateHumanoid3D(
     let idleLookYawOff = 0;
 
     // Natural FPP standing attentive poise (gentle asymmetrical contrapposto + relaxed forearm ease)
-    const fppStandIdle = isRealScan && isFppSession && sit < 0.35 && lie < 0.1 ? standIdleAmt : 0;
+    const fppStandIdle = useFppPoise && isFppSession && sit < 0.35 && lie < 0.1 ? standIdleAmt : 0;
     const fppGuardBlend = fppStandIdle * fppPainGuard;
     const fppCalmStandLSwing = fppStandIdle * (-0.06 - 0.04 * standWeight);
     const fppCalmStandRSwing = fppStandIdle * (-0.08 - fppGuardBlend * 0.14);
@@ -5289,7 +6498,7 @@ export function animateHumanoid3D(
 
     // Expressive phrased human two-hand conversational gestures in FPP (both standing & seated)
     const fppSpeakHandLift =
-      isRealScan && isFppSession && speakingActive && lie < 0.1 && !activeDrink && !hsActive
+      useFppPoise && isFppSession && speakingActive && lie < 0.1 && !activeDrink && !hsActive
         ? 0.22 + Math.sin(timeSec * 2.9) * 0.08
         : 0;
     if (fppBeh) {
@@ -5300,7 +6509,7 @@ export function animateHumanoid3D(
         frameDt
       );
     }
-    const gestFade = fppBeh ? fppBeh.curGestureAmp : 0;
+    const gestFade = (fppBeh ? fppBeh.curGestureAmp : 0) * (isGulfNiqab ? 0.72 : 1);
     const gestPhrase = THREE.MathUtils.clamp(
       0.42 + 0.58 * Math.sin(timeSec * 1.45 + Math.cos(timeSec * 0.62 + actorSeed) * 1.15),
       0.08,
@@ -5483,13 +6692,17 @@ export function animateHumanoid3D(
     let handExtX = 0;
     let handPronY = 0;
     let handLatZ = 0;
-    const lieHandPronGoal = supineW * 1.05 + proneW * 0.25 + rightW * 0.35 - leftW * 0.35;
-    if (isRealScan && gestFade > 0.02 && !activeDrink && !hsActive) {
+    const lieHandPronGoal =
+      (isGulfNiqab ? 0.68 : 1.0) * (supineW * 1.05 + proneW * 0.25 + rightW * 0.35 - leftW * 0.35);
+    if (useFppPoise && gestFade > 0.02 && !activeDrink && !hsActive) {
       // Natural open-palm supination & wrist inflection phrased with speech
-      const palmOpenR = isRocketbox ? -0.30 : -0.14 + Math.max(0, gestWaveR) * 0.22;
-      handPronY = THREE.MathUtils.lerp(-1.15 * sit, palmOpenR + Math.cos(timeSec * 2.8) * 0.16, gestFade);
-      handExtX = THREE.MathUtils.lerp(-0.16 * sit, Math.sin(timeSec * 3.1) * 0.16 - 0.06, gestFade);
-      handLatZ = THREE.MathUtils.lerp(-0.08 * sit, Math.sin(timeSec * 2.1) * 0.08, gestFade);
+      const palmOpenR = isRocketbox ? -0.30 : isGulfNiqab ? -0.10 + Math.max(0, gestWaveR) * 0.16 : -0.14 + Math.max(0, gestWaveR) * 0.22;
+      const sitPronRestR = isGulfNiqab ? -0.78 * sit : -1.15 * sit;
+      const sitExtRest = isGulfNiqab ? -0.10 * sit : -0.16 * sit;
+      const sitLatRest = isGulfNiqab ? -0.05 * sit : -0.08 * sit;
+      handPronY = THREE.MathUtils.lerp(sitPronRestR, palmOpenR + Math.cos(timeSec * 2.8) * 0.14, gestFade);
+      handExtX = THREE.MathUtils.lerp(sitExtRest, Math.sin(timeSec * 3.1) * 0.12 - 0.05, gestFade);
+      handLatZ = THREE.MathUtils.lerp(sitLatRest, Math.sin(timeSec * 2.1) * 0.06, gestFade);
     } else if (lie < 0.05 && sit < 0.2 && !activeDrink) {
       if (activePickFile) {
         handPronY = THREE.MathUtils.lerp(-0.55 * pickReach, -0.34, pickGrasp);
@@ -5499,11 +6712,11 @@ export function animateHumanoid3D(
       } else if (carryFileArm) {
         handPronY = -0.34;
       }
-    } else if (isRealScan && (sit >= 0.2 || lie >= 0.05)) {
+    } else if (useFppPoise && (sit >= 0.2 || lie >= 0.05)) {
       // Palms resting gently & naturally ON top of thighs (or flat on bed while lying)
-      handExtX = THREE.MathUtils.lerp(-0.16 * sit + fppSitMicro * 0.05, 0, lie);
-      handPronY = THREE.MathUtils.lerp(-1.15 * sit + fppSitMicro * 0.12, -lieHandPronGoal, lie);
-      handLatZ = THREE.MathUtils.lerp(-0.08 * sit, 0, lie);
+      handExtX = THREE.MathUtils.lerp((isGulfNiqab ? -0.10 : -0.16) * sit + fppSitMicro * 0.05, 0, lie);
+      handPronY = THREE.MathUtils.lerp((isGulfNiqab ? -0.78 : -1.15) * sit + fppSitMicro * 0.10, -lieHandPronGoal, lie);
+      handLatZ = THREE.MathUtils.lerp((isGulfNiqab ? -0.05 : -0.08) * sit, 0, lie);
     }
     if (hsActive) {
       const hsHandExtX = (isRealScan ? 0.05 : -0.04) + handshakeOsc * 0.04;
@@ -5514,16 +6727,19 @@ export function animateHumanoid3D(
       handLatZ = THREE.MathUtils.lerp(handLatZ, hsHandLatZ, hsArmBlend);
     }
     applyLocalHandPose(b['HandR'], handExtX, handPronY, handLatZ, isRocketbox);
-    if (isRealScan) {
+    if (useFppPoise) {
+      const sitPronRestL = isGulfNiqab ? 0.78 * sit : 1.15 * sit;
+      const sitExtRestL = isGulfNiqab ? -0.10 * sit : -0.16 * sit;
+      const sitLatRestL = isGulfNiqab ? 0.04 * sit : -0.08 * sit;
       const handLExtX =
         gestFade > 0.02
-          ? THREE.MathUtils.lerp(-0.16 * sit, Math.sin(timeSec * 2.5 + 1.0) * 0.09, gestFade * 0.7)
-          : THREE.MathUtils.lerp(-0.16 * sit, 0, lie);
+          ? THREE.MathUtils.lerp(sitExtRestL, Math.sin(timeSec * 2.5 + 1.0) * 0.08, gestFade * 0.7)
+          : THREE.MathUtils.lerp(sitExtRestL, 0, lie);
       const handLPronY =
         gestFade > 0.02
-          ? THREE.MathUtils.lerp(1.15 * sit, isRocketbox ? 0.28 : 0.18, gestFade * 0.7)
-          : THREE.MathUtils.lerp(1.15 * sit, lieHandPronGoal, lie);
-      const handLLatZ = THREE.MathUtils.lerp(-0.08 * sit, 0, lie);
+          ? THREE.MathUtils.lerp(sitPronRestL, isRocketbox ? 0.28 : isGulfNiqab ? 0.14 : 0.18, gestFade * 0.7)
+          : THREE.MathUtils.lerp(sitPronRestL, lieHandPronGoal, lie);
+      const handLLatZ = THREE.MathUtils.lerp(sitLatRestL, 0, lie);
       applyLocalHandPose(b['HandL'], handLExtX, handLPronY, handLLatZ, isRocketbox);
     }
 
@@ -5541,7 +6757,7 @@ export function animateHumanoid3D(
               : 0
         : 0;
     const effStdGrip = Math.max(gripAmt, hsActive ? hsArmBlend * hsClasp : 0);
-    if (isRealScan) {
+    if (useFppPoise) {
       const tenseCurlBoost = highDiscomfort * 0.30 + sSpike * 0.22 + fppGuardBlend * 0.14;
       const gestFingerFlex = gestFade * (0.06 * Math.sin(timeSec * 3.1));
       const relaxedCurlL =
@@ -5558,8 +6774,13 @@ export function animateHumanoid3D(
       if (hsActive) {
         rightCurl = THREE.MathUtils.lerp(rightCurl, hsClasp, hsArmBlend);
       }
-      applyNaturalHandFingers(b, 'L', Math.min(0.92, relaxedCurlL), true, isRocketbox);
-      applyNaturalHandFingers(b, 'R', Math.min(0.92, rightCurl), true, isRocketbox);
+      if (isGulfNiqab && !isRealScan) {
+        applyStylizedWomanFingers(b, 'L', Math.min(0.92, relaxedCurlL));
+        applyStylizedWomanFingers(b, 'R', Math.min(0.92, rightCurl));
+      } else {
+        applyNaturalHandFingers(b, 'L', Math.min(0.92, relaxedCurlL), true, isRocketbox);
+        applyNaturalHandFingers(b, 'R', Math.min(0.92, rightCurl), true, isRocketbox);
+      }
     } else {
       const f1Curl = -0.68 * effStdGrip;
       const f2Curl = -0.56 * effStdGrip;
@@ -5625,7 +6846,20 @@ export function animateHumanoid3D(
       const clampedYaw = THREE.MathUtils.clamp(dYaw, -0.58, 0.58);
       const eyeRefY =
         rig.root.position.y +
-        (isRealScan ? (sit > 0.5 ? (seatHeight > 0.45 ? 1.22 : 1.08) : 1.44) : 1.02) * hScale;
+        (isRealScan
+          ? sit > 0.5
+            ? seatHeight > 0.45
+              ? isGulfNiqab ? 1.18 : 1.22
+              : isGulfNiqab ? 1.04 : 1.08
+            : isGulfNiqab ? 1.38 : 1.44
+          : isGulfNiqab
+            ? sit > 0.5
+              ? seatHeight > 0.45
+                ? 1.06
+                : 0.96
+              : 1.20
+            : 1.02) *
+          hScale;
       const targetPitch = THREE.MathUtils.clamp(
         -Math.atan2(lookTargetWorld.y - eyeRefY, Math.max(0.35, distXZ)),
         -0.30,
@@ -5637,7 +6871,7 @@ export function animateHumanoid3D(
           ? Math.sin(t * 4.4) * 0.032
           : Math.sin(t * 0.7) * 0.014;
 
-      if (isRealScan && fppBeh) {
+      if (useFppPoise && fppBeh) {
         // Spontaneous occasional thoughtful look-away (~1.1s every ~7s) & realistic eye micro-saccades
         if (timeSec >= fppBeh.nextGlanceAt && !isSpeaking && !hsActive) {
           const sideG = Math.sin(timeSec * 13.7 + actorSeed) >= 0 ? 1 : -1;
@@ -5694,7 +6928,7 @@ export function animateHumanoid3D(
         finalLookYaw = clampedYaw;
         finalLookPitch = targetPitch + speakNod;
       }
-    } else if (isRealScan && fppBeh) {
+    } else if (useFppPoise && fppBeh) {
       // Outside FPP or lying: relax cached offsets back toward natural center
       fppBeh.curHeadYaw = THREE.MathUtils.damp(fppBeh.curHeadYaw, lookYaw, 6, frameDt);
       fppBeh.curHeadPitch = THREE.MathUtils.damp(fppBeh.curHeadPitch, lookPitch, 6, frameDt);
@@ -5719,7 +6953,7 @@ export function animateHumanoid3D(
       THREE.MathUtils.lerp(finalLookPitch, -0.02 + finalLookPitch, sit) + stimHeadAvertPitch;
     const expressiveTilt =
       headTiltZ +
-      (isRealScan && isFppSession && lie < 0.2
+      (useFppPoise && isFppSession && lie < 0.2
         ? (isSpeaking ? Math.sin(t * 1.8) * 0.032 : Math.sin(t * 0.48) * 0.024)
         : 0) +
       stimHeadAvertRoll;
@@ -5739,6 +6973,12 @@ export function animateHumanoid3D(
     if (isRealScan) {
       applyCharEuler(b['EyeL'], residualEyePitch, residualEyeYaw - stimHeadAvertYaw * 0.22, 0);
       applyCharEuler(b['EyeR'], residualEyePitch, residualEyeYaw - stimHeadAvertYaw * 0.22, 0);
+    }
+    if (rig.eyePivots) {
+      const eyePitch = THREE.MathUtils.clamp(residualEyePitch, -0.10, 0.10);
+      const eyeYaw = THREE.MathUtils.clamp(residualEyeYaw - stimHeadAvertYaw * 0.22, -0.16, 0.16);
+      rig.eyePivots[0].rotation.set(eyePitch, eyeYaw, 0);
+      rig.eyePivots[1].rotation.set(eyePitch, eyeYaw, 0);
     }
     return;
   }

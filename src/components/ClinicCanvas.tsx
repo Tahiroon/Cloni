@@ -3326,6 +3326,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           shirtColor: p.shirtColor,
           pantsColor: p.pantsColor,
           hasHijab: p.hasHijab,
+          hasNiqab: p.hasNiqab,
           hasTurban: p.hasTurban,
           outfitStyle: p.outfitStyle,
           shirtStyle: p.shirtStyle,
@@ -3363,7 +3364,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     });
     const unsubAssetLoaded = glbRegistry.onAssetLoaded((key) => {
       if (disposed) return;
-      if (key === 'char_sudanese_man_1' || key === 'char_patient_realistic_1') {
+      if (
+        key === 'char_sudanese_man_1' ||
+        key === 'char_patient_realistic_1' ||
+        key === 'char_gulf_niqab_female'
+      ) {
         upgradeTier2PatientRigs(key);
       }
       if (!sceneAssetsInitialized) return;
@@ -4998,6 +5003,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             shirtColor: p.shirtColor,
             pantsColor: p.pantsColor,
             hasHijab: p.hasHijab,
+            hasNiqab: p.hasNiqab,
             hasTurban: p.hasTurban,
             outfitStyle: p.outfitStyle,
             shirtStyle: p.shirtStyle,
@@ -5017,7 +5023,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             ...pbrCharMaps,
           });
           const needsTier2Upgrade = Boolean(
-            (p.modelKey === 'char_patient_realistic_1' || p.modelKey === 'char_sudanese_man_1') &&
+            (p.modelKey === 'char_patient_realistic_1' ||
+              p.modelKey === 'char_sudanese_man_1' ||
+              p.modelKey === 'char_gulf_niqab_female') &&
               !glbRegistry.getModel(p.modelKey)
           );
           actorsLayer.add(rig.root);
@@ -5119,7 +5127,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const scanOffsetScale =
           p.modelKey === 'char_patient_realistic_1' || p.modelKey === 'char_sudanese_man_1'
             ? 1.54 / 1.34
-            : 1;
+            : p.modelKey === 'char_gulf_niqab_female'
+              ? 1.49 / 1.34
+              : 1;
         const tiltDegRad =
           spr === 'tilt_table'
             ? tiltRig

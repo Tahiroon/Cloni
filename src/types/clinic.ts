@@ -388,6 +388,7 @@ export interface PatientEntity {
   shirtColor: string;
   pantsColor: string;
   hasHijab?: boolean;
+  hasNiqab?: boolean;
   hasBeard?: boolean;
   hasTurban?: boolean;
   outfitStyle?: 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe';

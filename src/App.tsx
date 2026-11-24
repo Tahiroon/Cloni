@@ -92,6 +92,16 @@ const SUDANESE_SKINS = [
   '#412111', // أسمر غامق
 ];
 
+const GULF_FAIR_SKINS = [
+  '#f4d9c8', // قمحية خليجية فاتحة ناعمة
+  '#eed0bc', // بشرة فاتحة دافئة
+  '#e8c4ab', // حنطية فاتحة دافئة
+  '#f6e1d3', // عاجية ناعمة
+  '#e2b99b', // قمحية دافئة متوازنة
+];
+
+const GULF_NIQAB_ABAYA_COLORS = ['#101115', '#14161d', '#17141b', '#12171b'];
+
 const MALE_CASUAL_LOOKS: Array<{ shirt: string; pants: string; shirtStyle: 'tshirt' | 'shirt' }> = [
   // Bright / Light Shirts paired with Deep / Dark Trousers
   { shirt: '#f8fafc', pants: '#172554', shirtStyle: 'shirt' },   // Crisp White + Deep Navy
@@ -1149,15 +1159,26 @@ export default function App() {
             candidates.sort((a, b) => countModel(a) - countModel(b));
             chosenModelKey = candidates[0];
           }
+        } else if (chosenCase.age >= 18) {
+          const gulfNiqabCount = prev.filter((p) => p.modelKey === 'char_gulf_niqab_female').length;
+          if (
+            fallbackCase.id === 'case_rotator_cuff' ||
+            (gulfNiqabCount < 2 && (gulfNiqabCount === 0 || Math.random() < 0.38))
+          ) {
+            chosenModelKey = 'char_gulf_niqab_female';
+          }
         }
         const useRealisticModel = chosenModelKey === 'char_patient_realistic_1';
         const useSudaneseRealisticModel = chosenModelKey === 'char_sudanese_man_1';
+        const useGulfNiqabModel = chosenModelKey === 'char_gulf_niqab_female';
 
-        const skin = useSudaneseRealisticModel
-          ? SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)]
-          : useRealisticModel
-            ? SUDANESE_SKINS[Math.floor(Math.random() * Math.min(5, SUDANESE_SKINS.length))]
-            : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
+        const skin = useGulfNiqabModel
+          ? GULF_FAIR_SKINS[Math.floor(Math.random() * GULF_FAIR_SKINS.length)]
+          : useSudaneseRealisticModel
+            ? SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)]
+            : useRealisticModel
+              ? SUDANESE_SKINS[Math.floor(Math.random() * Math.min(5, SUDANESE_SKINS.length))]
+              : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
         const hairColor =
           chosenCase.age >= 54
@@ -1189,6 +1210,7 @@ export default function App() {
         let shirtColor = '#ece9e1';
         let pantsColor = '#1e293b';
         let hasHijab = false;
+        let hasNiqab = false;
         let hasTurban = false;
         let headwearStyle: HeadwearStyle = 'none';
         let facialHairStyle: FacialHairStyle = 'none';
@@ -1229,6 +1251,16 @@ export default function App() {
           headwearStyle = !shouldUseRealisticFirst && chosenCase.age <= 34 && Math.random() < 0.35 ? 'cap' : 'none';
           hasTurban = false;
           facialHairStyle = 'none';
+        } else if (useGulfNiqabModel) {
+          outfitStyle = 'abaya';
+          hasHijab = true;
+          hasNiqab = true;
+          const abayaCol = pickDistinct(
+            GULF_NIQAB_ABAYA_COLORS,
+            (c) => `char_gulf_niqab_female_${c}_${c}_none`
+          );
+          shirtColor = abayaCol;
+          pantsColor = abayaCol;
         } else if (isFemale) {
           hasHijab = true; // Women wear a Tarha/Hijab or Sudanese Thobe cleanly
           const thobeChance = chosenCase.age >= 48 ? 0.72 : chosenCase.age >= 28 ? 0.36 : 0.16;
@@ -1294,10 +1326,10 @@ export default function App() {
           }
         }
 
-        // Assign distinct eyewear style (~42% of adult patients, prioritizing unused shapes)
+        // Assign distinct eyewear style (~42% of adult patients, prioritizing unused shapes; skipped for niqab)
         let eyewearStyle: EyewearStyle = 'none';
         let eyewearColor: string | undefined;
-        if (chosenCase.age >= 18) {
+        if (chosenCase.age >= 18 && !useGulfNiqabModel) {
           const glassesChance = chosenCase.age >= 42 ? 0.52 : 0.36;
           if (Math.random() < glassesChance) {
             const usedEyewear = new Set(prev.map((p) => p.eyewearStyle).filter(Boolean));
@@ -1324,6 +1356,7 @@ export default function App() {
           shirtColor,
           pantsColor,
           hasHijab,
+          hasNiqab,
           hasTurban,
           outfitStyle,
           shirtStyle,
