@@ -736,7 +736,7 @@ export function createFppRoomBackdrop3D(
 
   const roomFillLight = new THREE.PointLight(0xfff4e8, 1.06, 12.0, 1.05);
   roomFillLight.castShadow = false;
-  roomFillLight.position.set(0.18, 2.38, 1.72);
+  roomFillLight.position.set(0.20, 1.92, 1.56);
   group.add(roomFillLight);
 
   const examKeySpot = new THREE.SpotLight(
@@ -751,12 +751,12 @@ export function createFppRoomBackdrop3D(
   examKeySpot.target.position.set(0, 0.42, -0.2);
   if (enableShadows) {
     examKeySpot.castShadow = true;
-    examKeySpot.shadow.mapSize.set(1024, 1024);
+    examKeySpot.shadow.mapSize.set(768, 768);
     examKeySpot.shadow.camera.near = 0.4;
     examKeySpot.shadow.camera.far = 7.8;
     examKeySpot.shadow.bias = -0.0004;
     examKeySpot.shadow.normalBias = 0.016;
-    examKeySpot.shadow.radius = 2.5;
+    examKeySpot.shadow.radius = 1.6;
   }
   group.add(examKeySpot, examKeySpot.target);
 

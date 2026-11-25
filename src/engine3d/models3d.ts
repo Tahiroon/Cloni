@@ -459,11 +459,9 @@ export function buildClinicWorld3D(
         '#include <color_fragment>',
         `#include <color_fragment>
         float nMacro = gNoise(vGrassWorldXZ * 0.14);
-        float nMid = gNoise(vGrassWorldXZ * 0.55 + vec2(11.3, 4.7));
-        float nFine = gNoise(vGrassWorldXZ * 1.65 + vec2(23.1, 9.4));
-        float mixFactor = nMacro * 0.62 + nMid * 0.38;
-        float nPatch = gNoise(vGrassWorldXZ * 0.44 + vec2(5.2, 17.8)) * 0.6 + nFine * 0.4;
-        float bareEarth = smoothstep(0.68, 0.85, nPatch);
+        float nPatch = gNoise(vGrassWorldXZ * 0.52 + vec2(11.3, 4.7));
+        float mixFactor = nMacro * 0.62 + nPatch * 0.38;
+        float bareEarth = smoothstep(0.72, 0.88, nPatch * 0.72 + nMacro * 0.28);
         vec3 lushTone = vec3(0.76, 0.96, 0.68);
         vec3 dryStraw = vec3(1.08, 1.02, 0.76);
         vec3 deepShade = vec3(0.66, 0.80, 0.60);
@@ -471,7 +469,7 @@ export function buildClinicWorld3D(
         vec3 tint = mix(deepShade, lushTone, smoothstep(0.2, 0.58, mixFactor));
         tint = mix(tint, dryStraw, smoothstep(0.58, 0.92, mixFactor) * 0.64);
         diffuseColor.rgb *= tint;
-        diffuseColor.rgb = mix(diffuseColor.rgb, soilColor * (0.86 + 0.28 * nFine), bareEarth * 0.78);`
+        diffuseColor.rgb = mix(diffuseColor.rgb, soilColor * (0.86 + 0.28 * nPatch), bareEarth * 0.78);`
       );
   };
   const asphaltMat = trackMat(
@@ -547,27 +545,23 @@ export function buildClinicWorld3D(
     })
   );
   const glassMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0x9ec5e0,
       roughness: 0.08,
-      metalness: 0.08,
+      metalness: 0.12,
       transparent: true,
-      opacity: 0.34,
-      reflectivity: 0.92,
-      ior: 1.5,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.04,
+      opacity: 0.36,
       envMapIntensity: 1.05,
     })
   );
   const etchedGlassMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: 0xe2eef7,
-      roughness: 0.32,
-      metalness: 0.02,
+      roughness: 0.28,
+      metalness: 0.04,
       transparent: true,
       opacity: 0.54,
-      clearcoat: 0.35,
+      envMapIntensity: 0.75,
     })
   );
   const warmLedMat = trackMat(
@@ -2769,7 +2763,7 @@ interface SharedCatalogMats {
   redAccent: THREE.MeshStandardMaterial;
   emeraldAccent: THREE.MeshStandardMaterial;
   amberAccent: THREE.MeshStandardMaterial;
-  frostGlassMat: THREE.MeshPhysicalMaterial;
+  frostGlassMat: THREE.MeshStandardMaterial;
   aoPlaneMat: THREE.MeshBasicMaterial;
   barkMat: THREE.MeshStandardMaterial;
   travertineMat: THREE.MeshStandardMaterial;
@@ -2779,7 +2773,7 @@ interface SharedCatalogMats {
   palmCardMat: THREE.MeshStandardMaterial;
   oliveCardMat: THREE.MeshStandardMaterial;
   cypressCardMat: THREE.MeshStandardMaterial;
-  solarCellMat: THREE.MeshPhysicalMaterial;
+  solarCellMat: THREE.MeshStandardMaterial;
   receptionScreenMat: THREE.MeshStandardMaterial;
   windTime: { value: number };
 }
@@ -2859,15 +2853,13 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
     redAccent: makeMat({ color: 0xdc2626, roughness: 0.34, metalness: 0.12 }),
     emeraldAccent: makeMat({ color: 0x10b981, roughness: 0.34, metalness: 0.12 }),
     amberAccent: makeMat({ color: 0xf59e0b, roughness: 0.32, metalness: 0.16 }),
-    frostGlassMat: new THREE.MeshPhysicalMaterial({
+    frostGlassMat: new THREE.MeshStandardMaterial({
       color: 0xdbeafe,
       transparent: true,
       opacity: 0.54,
       roughness: 0.16,
-      metalness: 0.04,
-      ior: 1.5,
-      clearcoat: 0.85,
-      clearcoatRoughness: 0.08,
+      metalness: 0.06,
+      envMapIntensity: 0.85,
     }),
     aoPlaneMat: new THREE.MeshBasicMaterial({
       map: textures.contactShadow,
@@ -2924,12 +2916,11 @@ function getSharedCatalogMats(textures: TextureBundle): SharedCatalogMats {
       roughness: 0.84,
       metalness: 0.0,
     }),
-    solarCellMat: new THREE.MeshPhysicalMaterial({
+    solarCellMat: new THREE.MeshStandardMaterial({
       map: textures.solarCell,
-      roughness: 0.14,
-      metalness: 0.22,
-      clearcoat: 0.92,
-      clearcoatRoughness: 0.1,
+      roughness: 0.16,
+      metalness: 0.25,
+      envMapIntensity: 0.95,
     }),
     receptionScreenMat: new THREE.MeshStandardMaterial({
       map: textures.receptionScreen,

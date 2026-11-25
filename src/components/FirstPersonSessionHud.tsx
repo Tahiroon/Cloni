@@ -1147,7 +1147,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       <div className="flex flex-col gap-1.5">
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto flex items-center justify-between gap-2 rounded-2xl bg-slate-950/92 backdrop-blur-md border border-white/15 px-3 py-1.5 text-white shadow-lg"
+          className="pointer-events-auto flex items-center justify-between gap-2 rounded-2xl bg-slate-950/95 border border-white/15 px-3 py-1.5 text-white shadow-lg"
         >
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-7 h-7 rounded-lg bg-sky-500/15 border border-sky-400/30 flex items-center justify-center shrink-0">
@@ -1255,7 +1255,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             <div
               dir={isAr ? 'rtl' : 'ltr'}
               onPointerDown={(e) => e.stopPropagation()}
-              className="pointer-events-auto max-w-[18.5rem] sm:max-w-xs rounded-2xl bg-slate-950/92 backdrop-blur-md border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2"
+              className="pointer-events-auto max-w-[18.5rem] sm:max-w-xs rounded-2xl bg-slate-950/95 border border-sky-400/35 text-white px-3 py-2 shadow-xl flex items-start justify-between gap-2"
             >
               <div className="min-w-0 text-xs leading-relaxed">
                 <div className="text-[10px] font-extrabold text-sky-300 mb-0.5">
@@ -1288,7 +1288,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             type="button"
             onClick={() => setPostureOpen((v) => !v)}
             aria-expanded={postureOpen}
-            className={`h-8 px-2.5 rounded-xl border shadow-lg flex items-center gap-1.5 text-[11px] font-extrabold backdrop-blur-md transition-colors cursor-pointer ${
+            className={`h-8 px-2.5 rounded-xl border shadow-lg flex items-center gap-1.5 text-[11px] font-extrabold transition-colors cursor-pointer ${
               postureOpen
                 ? 'bg-sky-500 border-sky-300 text-slate-950'
                 : 'bg-slate-950/90 hover:bg-slate-900 border-white/15 text-slate-100'
@@ -1308,7 +1308,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           {postureOpen && (
             <div
               dir="ltr"
-              className="w-[15.5rem] rounded-2xl bg-slate-950/95 backdrop-blur-md border border-white/15 p-2 shadow-2xl text-white space-y-1.5"
+              className="w-[15.5rem] rounded-2xl bg-slate-950/96 border border-white/15 p-2 shadow-2xl text-white space-y-1.5"
             >
               {stationNameEn && (
                 <div className="px-1 pb-1 border-b border-white/10 text-[10px] font-bold text-sky-400 truncate">
@@ -2057,7 +2057,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
           ) : (
             <div
               onPointerDown={(e) => e.stopPropagation()}
-              className="pointer-events-auto fixed left-4 bottom-4 z-30 hidden md:flex flex-col gap-1.5 max-w-[min(42vw,28rem)] rounded-2xl bg-slate-950/88 backdrop-blur-md border border-white/15 px-3.5 py-2.5 text-white shadow-2xl"
+              className="pointer-events-auto fixed left-4 bottom-4 z-30 hidden md:flex flex-col gap-1.5 max-w-[min(42vw,28rem)] rounded-2xl bg-slate-950/94 border border-white/15 px-3.5 py-2.5 text-white shadow-2xl"
             >
               <div className="flex items-center justify-between gap-3 text-[11px] font-black text-sky-300">
                 <span className="flex items-center gap-1.5">
@@ -3090,7 +3090,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
         <div
           dir={isAr ? 'rtl' : 'ltr'}
           onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-sm flex items-center justify-center p-4"
+          className="pointer-events-auto fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center p-4"
         >
           <div
             className={`w-full max-w-sm rounded-2xl border p-4 sm:p-5 shadow-2xl space-y-3.5 ${surfaceCls}`}

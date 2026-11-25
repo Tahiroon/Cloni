@@ -132,7 +132,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = React.memo(({
         className="hidden md:flex fixed bottom-3 left-1/2 -translate-x-1/2 z-30 flex-col items-center gap-1.5 pointer-events-none max-w-[96vw]"
       >
         <div
-          className={`pointer-events-auto flex items-center gap-1.5 p-1.5 rounded-2xl border backdrop-blur-md ${dockSurface}`}
+          className={`pointer-events-auto flex items-center gap-1.5 p-1.5 rounded-2xl border ${dockSurface}`}
         >
           {/* Store [B] */}
           <button

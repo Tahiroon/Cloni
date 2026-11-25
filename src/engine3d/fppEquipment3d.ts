@@ -1560,7 +1560,7 @@ export function createFppEquipment3D(
         })
       );
       const gelMat = trackMat(
-        new THREE.MeshPhysicalMaterial({
+        new THREE.MeshStandardMaterial({
           color: 0x38bdf8,
           emissive: 0x0284c7,
           emissiveIntensity: 0.08,
@@ -1770,7 +1770,7 @@ export function createFppEquipment3D(
     gelHolster.position.set(0.195, 0.65, 0.03);
     const gelBottle = new THREE.Mesh(
       trackGeom(new THREE.CylinderGeometry(0.032, 0.032, 0.14, 12)),
-      trackMat(new THREE.MeshPhysicalMaterial({ color: 0x0284c7, roughness: 0.24, transparent: true, opacity: 0.86 }))
+      trackMat(new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.24, transparent: true, opacity: 0.86 }))
     );
     gelBottle.position.set(0.195, 0.74, 0.03);
     const gelCap = new THREE.Mesh(trackGeom(new THREE.ConeGeometry(0.02, 0.045, 10)), bodyWhiteMat);
@@ -1818,7 +1818,7 @@ export function createFppEquipment3D(
     headDisc.rotation.x = Math.PI / 2;
     headDisc.position.z = -0.005;
     const gelMat = trackMat(
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         color: 0x7dd3fc,
         transparent: true,
         opacity: 0.44,
@@ -2258,7 +2258,7 @@ export function createFppEquipment3D(
     screenFace.rotation.x = -0.2;
 
     const iceMat = trackMat(
-      new THREE.MeshPhysicalMaterial({ color: 0x7dd3fc, roughness: 0.22, transparent: true, opacity: 0.78 })
+      new THREE.MeshStandardMaterial({ color: 0x7dd3fc, roughness: 0.22, transparent: true, opacity: 0.78 })
     );
     const iceTank = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.145, 0.13, 0.30, 20)), iceMat);
     iceTank.position.set(0, 0.58, 0);
@@ -2277,7 +2277,7 @@ export function createFppEquipment3D(
     cuffGroup.position.set(0.21, 0.50, 0);
     cuffGroup.rotation.set(0, 0, -Math.PI / 2);
     const cuffMat = trackMat(
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         color: 0x0284c7,
         emissive: 0x06b6d4,
         emissiveIntensity: 0,
@@ -2608,12 +2608,12 @@ export function createFppEquipment3D(
       const tubRim = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.335, 0.024, 0.275)), slateFrameMat);
       tubRim.position.set(0, 0.744, 0);
       const waxMat = trackMat(
-        new THREE.MeshPhysicalMaterial({
+        new THREE.MeshStandardMaterial({
           color: 0xfde68a,
           emissive: 0xf59e0b,
           emissiveIntensity: 0.04,
           roughness: 0.2,
-          clearcoat: 0.6,
+          envMapIntensity: 0.9,
         })
       );
       const waxPool = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.26, 0.018, 0.20)), waxMat);
@@ -2683,7 +2683,7 @@ export function createFppEquipment3D(
     const activeToolGroup = new THREE.Group();
     activeToolGroup.position.set(-0.08, 0.764, 0.04);
     const dialMat = trackMat(
-      new THREE.MeshPhysicalMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.78, roughness: 0.2 })
+      new THREE.MeshStandardMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.78, roughness: 0.2 })
     );
     const dialFace = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.032, 0.032, 0.006, 18)), dialMat);
     dialFace.position.y = 0.005;
@@ -2709,7 +2709,7 @@ export function createFppEquipment3D(
     iastm.position.set(0.06, 0.758, 0.06);
     const goni = new THREE.Mesh(
       trackGeom(new THREE.RingGeometry(0.02, 0.036, 16)),
-      trackMat(new THREE.MeshPhysicalMaterial({ color: 0xbae6fd, transparent: true, opacity: 0.75, side: THREE.DoubleSide }))
+      trackMat(new THREE.MeshStandardMaterial({ color: 0xbae6fd, transparent: true, opacity: 0.75, side: THREE.DoubleSide }))
     );
     goni.rotation.x = -Math.PI / 2;
     goni.position.set(-0.1, 0.756, -0.06);

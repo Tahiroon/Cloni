@@ -73,7 +73,6 @@ const EXTENDED_MODEL_PATHS: Record<string, string> = {
   hand_right: '/models/chars/hand_right.glb',
   char_sudanese_man_1: '/models/chars/patient_sudanese_1.glb',
   char_patient_realistic_1: '/models/chars/patient_scanned_1.glb',
-  char_gulf_niqab_female: '/models/chars/patient_gulf_niqab_female.glb',
 };
 
 const EXTRA_TEXTURE_ASSETS: Array<{ key: string; url: string; contentType: string }> = [
@@ -245,7 +244,7 @@ function refineGlbAssets(obj: THREE.Object3D) {
           tex.magFilter = THREE.LinearFilter;
           tex.minFilter = THREE.LinearMipmapLinearFilter;
           tex.generateMipmaps = true;
-          tex.anisotropy = Math.min(16, Math.max(1, maxGlbAnisotropy));
+          tex.anisotropy = Math.min(4, Math.max(1, maxGlbAnisotropy));
           tex.needsUpdate = true;
         }
         if ('roughness' in std) {

@@ -92,16 +92,6 @@ const SUDANESE_SKINS = [
   '#412111', // أسمر غامق
 ];
 
-const GULF_FAIR_SKINS = [
-  '#f4d9c8', // قمحية خليجية فاتحة ناعمة
-  '#eed0bc', // بشرة فاتحة دافئة
-  '#e8c4ab', // حنطية فاتحة دافئة
-  '#f6e1d3', // عاجية ناعمة
-  '#e2b99b', // قمحية دافئة متوازنة
-];
-
-const GULF_NIQAB_ABAYA_COLORS = ['#101115', '#14161d', '#17141b', '#12171b'];
-
 const MALE_CASUAL_LOOKS: Array<{ shirt: string; pants: string; shirtStyle: 'tshirt' | 'shirt' }> = [
   // Bright / Light Shirts paired with Deep / Dark Trousers
   { shirt: '#f8fafc', pants: '#172554', shirtStyle: 'shirt' },   // Crisp White + Deep Navy
@@ -1159,26 +1149,13 @@ export default function App() {
             candidates.sort((a, b) => countModel(a) - countModel(b));
             chosenModelKey = candidates[0];
           }
-        } else if (chosenCase.age >= 18) {
-          const gulfNiqabCount = prev.filter((p) => p.modelKey === 'char_gulf_niqab_female').length;
-          if (
-            fallbackCase.id === 'case_rotator_cuff' ||
-            (gulfNiqabCount < 2 && (gulfNiqabCount === 0 || Math.random() < 0.38))
-          ) {
-            chosenModelKey = 'char_gulf_niqab_female';
-          }
         }
         const useRealisticModel = chosenModelKey === 'char_patient_realistic_1';
         const useSudaneseRealisticModel = chosenModelKey === 'char_sudanese_man_1';
-        const useGulfNiqabModel = chosenModelKey === 'char_gulf_niqab_female';
 
-        const skin = useGulfNiqabModel
-          ? GULF_FAIR_SKINS[Math.floor(Math.random() * GULF_FAIR_SKINS.length)]
-          : useSudaneseRealisticModel
-            ? SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)]
-            : useRealisticModel
-              ? SUDANESE_SKINS[Math.floor(Math.random() * Math.min(5, SUDANESE_SKINS.length))]
-              : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
+        const skin = useRealisticModel
+          ? SUDANESE_SKINS[Math.floor(Math.random() * Math.min(5, SUDANESE_SKINS.length))]
+          : SUDANESE_SKINS[Math.floor(Math.random() * SUDANESE_SKINS.length)];
 
         const hairColor =
           chosenCase.age >= 54
@@ -1251,16 +1228,6 @@ export default function App() {
           headwearStyle = !shouldUseRealisticFirst && chosenCase.age <= 34 && Math.random() < 0.35 ? 'cap' : 'none';
           hasTurban = false;
           facialHairStyle = 'none';
-        } else if (useGulfNiqabModel) {
-          outfitStyle = 'abaya';
-          hasHijab = true;
-          hasNiqab = true;
-          const abayaCol = pickDistinct(
-            GULF_NIQAB_ABAYA_COLORS,
-            (c) => `char_gulf_niqab_female_${c}_${c}_none`
-          );
-          shirtColor = abayaCol;
-          pantsColor = abayaCol;
         } else if (isFemale) {
           hasHijab = true; // Women wear a Tarha/Hijab or Sudanese Thobe cleanly
           const thobeChance = chosenCase.age >= 48 ? 0.72 : chosenCase.age >= 28 ? 0.36 : 0.16;
@@ -1326,10 +1293,10 @@ export default function App() {
           }
         }
 
-        // Assign distinct eyewear style (~42% of adult patients, prioritizing unused shapes; skipped for niqab)
+        // Assign distinct eyewear style (~42% of adult patients, prioritizing unused shapes)
         let eyewearStyle: EyewearStyle = 'none';
         let eyewearColor: string | undefined;
-        if (chosenCase.age >= 18 && !useGulfNiqabModel) {
+        if (chosenCase.age >= 18) {
           const glassesChance = chosenCase.age >= 42 ? 0.52 : 0.36;
           if (Math.random() < glassesChance) {
             const usedEyewear = new Set(prev.map((p) => p.eyewearStyle).filter(Boolean));
@@ -1917,6 +1884,7 @@ export default function App() {
 
     const hasReceptionDesk = clinic.placedItems.some((it) => it.catalogId === 'reception_desk');
     const hasFileCabinet = clinic.placedItems.some((it) => it.catalogId === 'file_cabinet');
+    const placedItemById = new Map(clinic.placedItems.map((it) => [it.instanceId, it] as const));
 
     const standingIdleMap = new Map<string, number>();
     const seatedWaitAccumMap = new Map<string, number>();
@@ -1924,7 +1892,7 @@ export default function App() {
     const tick = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
       const nowMs = performance.now();
-      const dtSec = Math.min(0.26, Math.max(0.016, (nowMs - lastTickMs) / 1000));
+      const dtSec = Math.min(0.28, Math.max(0.016, (nowMs - lastTickMs) / 1000));
       const dtMs = dtSec * 1000;
       lastTickMs = nowMs;
 
@@ -2383,7 +2351,7 @@ export default function App() {
               // Waiting patients strictly stay in Reception chairs / Reception standing area until explicitly called by the user.
             } else if (updated.state === 'walking_to_station') {
               const station = updated.assignedStationId
-                ? clinic.placedItems.find((it) => it.instanceId === updated.assignedStationId)
+                ? placedItemById.get(updated.assignedStationId)
                 : undefined;
               const arrivedAtStation = Boolean(
                 station &&
@@ -2415,7 +2383,7 @@ export default function App() {
               changed = true;
             } else if (updated.state === 'in_treatment') {
               const stItem = updated.assignedStationId
-                ? clinic.placedItems.find((it) => it.instanceId === updated.assignedStationId)
+                ? placedItemById.get(updated.assignedStationId)
                 : undefined;
               const stBoost = stItem ? catalogById.get(stItem.catalogId)?.speedBonus || 0 : 0;
               const nextProg = Math.min(
@@ -2484,7 +2452,7 @@ export default function App() {
 
         return changed ? nextList : prev;
       });
-    }, 160);
+    }, 200);
 
     return () => clearInterval(tick);
   }, [
@@ -2687,53 +2655,75 @@ export default function App() {
     [patients, clinic.placedItems, catalogById, triggerFppBlinkTransition]
   );
 
-  // Handle tapping a patient
-  const handleTapPatient = (patient: PatientEntity) => {
-    if (visitingFriend) return;
-    soundFx.tap();
-
-    if (patient.state === 'arriving' || patient.state === 'checkin_at_desk') {
-      addFloatingFeedback(
-        patient.gridX,
-        patient.gridY,
-        clinic.language === 'ar' ? 'جاري تسجيل الملف في الاستقبال...' : 'Preparing chart at reception...',
-        '#0ea5e9'
-      );
-      return;
-    }
-
-    if (
-      patient.state === 'waiting_checkin' ||
-      patient.state === 'walking_to_wait' ||
-      patient.state === 'walking_to_water' ||
-      patient.state === 'drinking_water'
-    ) {
-      setSelectedBedPatientId(null);
-      setSelectedWaitingPatientId((cur) => (cur === patient.id ? null : patient.id));
-      return;
-    }
-
-    if (patient.state === 'walking_to_station') {
-      setSelectedWaitingPatientId(null);
-      addFloatingFeedback(
-        patient.gridX,
-        patient.gridY,
-        clinic.language === 'ar' ? 'المريض في طريقه إلى السرير...' : 'Walking to treatment bed...',
-        '#38bdf8'
-      );
-      return;
-    }
-
-    if (patient.state === 'ready_for_exam' || patient.state === 'in_exam') {
-      setSelectedWaitingPatientId(null);
-      setSelectedBedPatientId((cur) => (cur === patient.id ? null : patient.id));
-    }
+  const latestActionRef = useRef({
+    clinic,
+    patients,
+    placementDraft,
+    visitingFriend,
+    editMode,
+  });
+  latestActionRef.current = {
+    clinic,
+    patients,
+    placementDraft,
+    visitingFriend,
+    editMode,
   };
 
+  // Handle tapping a patient
+  const handleTapPatient = useCallback(
+    (patient: PatientEntity) => {
+      const { visitingFriend: curVisiting, clinic: curClinic } = latestActionRef.current;
+      if (curVisiting) return;
+      soundFx.tap();
+
+      if (patient.state === 'arriving' || patient.state === 'checkin_at_desk') {
+        addFloatingFeedback(
+          patient.gridX,
+          patient.gridY,
+          curClinic.language === 'ar'
+            ? 'جاري تسجيل الملف في الاستقبال...'
+            : 'Preparing chart at reception...',
+          '#0ea5e9'
+        );
+        return;
+      }
+
+      if (
+        patient.state === 'waiting_checkin' ||
+        patient.state === 'walking_to_wait' ||
+        patient.state === 'walking_to_water' ||
+        patient.state === 'drinking_water'
+      ) {
+        setSelectedBedPatientId(null);
+        setSelectedWaitingPatientId((cur) => (cur === patient.id ? null : patient.id));
+        return;
+      }
+
+      if (patient.state === 'walking_to_station') {
+        setSelectedWaitingPatientId(null);
+        addFloatingFeedback(
+          patient.gridX,
+          patient.gridY,
+          curClinic.language === 'ar' ? 'المريض في طريقه إلى السرير...' : 'Walking to treatment bed...',
+          '#38bdf8'
+        );
+        return;
+      }
+
+      if (patient.state === 'ready_for_exam' || patient.state === 'in_exam') {
+        setSelectedWaitingPatientId(null);
+        setSelectedBedPatientId((cur) => (cur === patient.id ? null : patient.id));
+      }
+    },
+    [addFloatingFeedback]
+  );
+
   // Smart context tap on Reception Desk: opens Smart Waiting Queue or staff hiring
-  const handleTapReceptionDesk = () => {
-    if (visitingFriend) return;
-    const receptionistHired = clinic.staff.some((s) => s.role === 'receptionist' && s.hired);
+  const handleTapReceptionDesk = useCallback(() => {
+    const { visitingFriend: curVisiting, clinic: curClinic } = latestActionRef.current;
+    if (curVisiting) return;
+    const receptionistHired = curClinic.staff.some((s) => s.role === 'receptionist' && s.hired);
     if (!receptionistHired) {
       soundFx.tap();
       setStoreFilter('staff');
@@ -2744,7 +2734,7 @@ export default function App() {
     soundFx.tap();
     setSelectedWaitingPatientId(null);
     setWaitingQueueOpen(true);
-  };
+  }, []);
 
   // Finalize patient discharge + XP/coins/stars payout
   const finishTreatmentAndReward = useCallback(
@@ -3184,199 +3174,212 @@ export default function App() {
     });
   };
 
-  const handleConfirmPlacement = (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => {
-    if (!placementDraft) return;
-    soundFx.placeItem();
+  const handleConfirmPlacement = useCallback(
+    (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => {
+      const { placementDraft: curDraft, clinic: curClinic } = latestActionRef.current;
+      if (!curDraft) return;
+      soundFx.placeItem();
 
-    const finalRotation = rotation ?? placementDraft.rotation;
-    const room = clinic.rooms.find(
-      (r) => gx >= r.minX - 0.05 && gx < r.maxX + 1 && gy >= r.minY - 0.05 && gy < r.maxY + 1
-    );
-    const roomId = room ? room.id : 'outdoor';
-
-    const nextPlacedItems = placementDraft.movingInstanceId
-      ? clinic.placedItems.map((it) =>
-          it.instanceId === placementDraft.movingInstanceId
-            ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
-            : it
-        )
-      : [
-          ...clinic.placedItems,
-          {
-            instanceId: 'item_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-            catalogId: placementDraft.catalogItem.id,
-            gridX: gx,
-            gridY: gy,
-            rotation: finalRotation,
-            roomId,
-          },
-        ];
-
-    if (placementDraft.movingInstanceId) {
-      // Moving existing item
-      const movedId = placementDraft.movingInstanceId;
-      const updatedBoxes = buildObstacleBoxes(
-        clinic.rooms,
-        nextPlacedItems,
-        itemFootprints,
-        clinic.removedTreeIds || []
+      const finalRotation = rotation ?? curDraft.rotation;
+      const room = curClinic.rooms.find(
+        (r) => gx >= r.minX - 0.05 && gx < r.maxX + 1 && gy >= r.minY - 0.05 && gy < r.maxY + 1
       );
-      const updatedSeats = buildWaitSeatSlots(nextPlacedItems, clinic.rooms);
-      setClinic((prev) => ({
-        ...prev,
-        placedItems: prev.placedItems.map((it) =>
-          it.instanceId === movedId
-            ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
-            : it
-        ),
-      }));
-      setPatients((prevPts) =>
-        prevPts.map((pt) => {
-          let nextPt = pt;
-          if (pt.attachedDevices?.some((d) => d.instanceId === movedId)) {
-            const filtered = pt.attachedDevices.filter((d) => d.instanceId !== movedId);
-            nextPt = {
-              ...nextPt,
-              attachedDevices: filtered.length > 0 ? filtered : undefined,
-            };
-          }
-          if (nextPt.waitingSeatKey && nextPt.waitingSeatKey.startsWith(movedId + '_')) {
-            const matchingSeat = updatedSeats.find((s) => s.seatKey === nextPt.waitingSeatKey);
-            if (matchingSeat && nextPt.state === 'waiting_checkin') {
-              return {
+      const roomId = room ? room.id : 'outdoor';
+
+      const nextPlacedItems = curDraft.movingInstanceId
+        ? curClinic.placedItems.map((it) =>
+            it.instanceId === curDraft.movingInstanceId
+              ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
+              : it
+          )
+        : [
+            ...curClinic.placedItems,
+            {
+              instanceId: 'item_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              catalogId: curDraft.catalogItem.id,
+              gridX: gx,
+              gridY: gy,
+              rotation: finalRotation,
+              roomId,
+            },
+          ];
+
+      if (curDraft.movingInstanceId) {
+        // Moving existing item
+        const movedId = curDraft.movingInstanceId;
+        const updatedBoxes = buildObstacleBoxes(
+          curClinic.rooms,
+          nextPlacedItems,
+          itemFootprints,
+          curClinic.removedTreeIds || []
+        );
+        const updatedSeats = buildWaitSeatSlots(nextPlacedItems, curClinic.rooms);
+        setClinic((prev) => ({
+          ...prev,
+          placedItems: prev.placedItems.map((it) =>
+            it.instanceId === movedId
+              ? { ...it, gridX: gx, gridY: gy, rotation: finalRotation, roomId }
+              : it
+          ),
+        }));
+        setPatients((prevPts) =>
+          prevPts.map((pt) => {
+            let nextPt = pt;
+            if (pt.attachedDevices?.some((d) => d.instanceId === movedId)) {
+              const filtered = pt.attachedDevices.filter((d) => d.instanceId !== movedId);
+              nextPt = {
                 ...nextPt,
-                gridX: matchingSeat.seatTileX,
-                gridY: matchingSeat.seatTileY,
-                targetX: matchingSeat.seatTileX,
-                targetY: matchingSeat.seatTileY,
-                seatApproachX: matchingSeat.approachTileX,
-                seatApproachY: matchingSeat.approachTileY,
-                seatFacingRad: matchingSeat.facingRad,
-                seatHeight: matchingSeat.seatHeight,
+                attachedDevices: filtered.length > 0 ? filtered : undefined,
               };
             }
-          }
-          if (
-            nextPt.state !== 'in_treatment' &&
-            nextPt.state !== 'ready_for_exam' &&
-            !(nextPt.state === 'waiting_checkin' && nextPt.isSeatedWait) &&
-            !isTileWalkable(nextPt.gridX, nextPt.gridY, 0.21, updatedBoxes)
-          ) {
-            const safe = findNearestWalkableTile(nextPt.gridX, nextPt.gridY, 0.22, updatedBoxes);
-            return { ...nextPt, gridX: safe.x, gridY: safe.y };
-          }
-          return nextPt;
-        })
-      );
-      addFloatingFeedback(gx, gy, clinic.language === 'ar' ? 'تم النقل ✓' : 'Moved ✓', '#38bdf8');
-    } else {
-      // Purchasing new item
-      const item = placementDraft.catalogItem;
-      if (clinic.coins < item.priceCoins) return;
+            if (nextPt.waitingSeatKey && nextPt.waitingSeatKey.startsWith(movedId + '_')) {
+              const matchingSeat = updatedSeats.find((s) => s.seatKey === nextPt.waitingSeatKey);
+              if (matchingSeat && nextPt.state === 'waiting_checkin') {
+                return {
+                  ...nextPt,
+                  gridX: matchingSeat.seatTileX,
+                  gridY: matchingSeat.seatTileY,
+                  targetX: matchingSeat.seatTileX,
+                  targetY: matchingSeat.seatTileY,
+                  seatApproachX: matchingSeat.approachTileX,
+                  seatApproachY: matchingSeat.approachTileY,
+                  seatFacingRad: matchingSeat.facingRad,
+                  seatHeight: matchingSeat.seatHeight,
+                };
+              }
+            }
+            if (
+              nextPt.state !== 'in_treatment' &&
+              nextPt.state !== 'ready_for_exam' &&
+              !(nextPt.state === 'waiting_checkin' && nextPt.isSeatedWait) &&
+              !isTileWalkable(nextPt.gridX, nextPt.gridY, 0.21, updatedBoxes)
+            ) {
+              const safe = findNearestWalkableTile(nextPt.gridX, nextPt.gridY, 0.22, updatedBoxes);
+              return { ...nextPt, gridX: safe.x, gridY: safe.y };
+            }
+            return nextPt;
+          })
+        );
+        addFloatingFeedback(
+          gx,
+          gy,
+          curClinic.language === 'ar' ? 'تم النقل ✓' : 'Moved ✓',
+          '#38bdf8'
+        );
+      } else {
+        // Purchasing new item
+        const item = curDraft.catalogItem;
+        if (curClinic.coins < item.priceCoins) return;
 
-      const newPlaced = nextPlacedItems[nextPlacedItems.length - 1];
-      const updatedBoxes = buildObstacleBoxes(
-        clinic.rooms,
-        nextPlacedItems,
-        itemFootprints,
-        clinic.removedTreeIds || []
-      );
+        const newPlaced = nextPlacedItems[nextPlacedItems.length - 1];
+        const updatedBoxes = buildObstacleBoxes(
+          curClinic.rooms,
+          nextPlacedItems,
+          itemFootprints,
+          curClinic.removedTreeIds || []
+        );
 
+        setClinic((prev) => ({
+          ...prev,
+          coins: prev.coins >= 900000 ? 999999 : prev.coins - item.priceCoins,
+          satisfaction: Math.min(100, prev.satisfaction + Math.min(2, item.satisfactionBonus)),
+          placedItems: [...prev.placedItems, newPlaced],
+        }));
+        setPatients((prevPts) =>
+          prevPts.map((pt) => {
+            if (
+              pt.state !== 'in_treatment' &&
+              pt.state !== 'ready_for_exam' &&
+              !(pt.state === 'waiting_checkin' && pt.isSeatedWait) &&
+              !isTileWalkable(pt.gridX, pt.gridY, 0.21, updatedBoxes)
+            ) {
+              const safe = findNearestWalkableTile(pt.gridX, pt.gridY, 0.22, updatedBoxes);
+              return { ...pt, gridX: safe.x, gridY: safe.y };
+            }
+            return pt;
+          })
+        );
+
+        if (item.category === 'equipment') {
+          bumpMission('buy_equipment', 1);
+        }
+
+        addFloatingFeedback(
+          gx,
+          gy,
+          curClinic.language === 'ar' ? 'تم التثبيت ✓' : 'Placed ✓',
+          '#34d399'
+        );
+      }
+
+      setPlacementDraft(null);
+    },
+    [itemFootprints, addFloatingFeedback, bumpMission]
+  );
+
+  const handleSellMovingDraft = useCallback(
+    (instanceId: string) => {
+      const { clinic: curClinic } = latestActionRef.current;
+      const targetItem = curClinic.placedItems.find((it) => it.instanceId === instanceId);
+      if (targetItem) {
+        if (
+          targetItem.catalogId === 'file_cabinet' &&
+          curClinic.placedItems.filter((it) => it.catalogId === 'file_cabinet').length <= 1
+        ) {
+          soundFx.alert();
+          addFloatingFeedback(
+            targetItem.gridX,
+            targetItem.gridY,
+            curClinic.language === 'ar'
+              ? 'لا يمكن بيع آخر رف ملفات بالاستقبال'
+              : 'Keep at least 1 records shelf',
+            '#f87171'
+          );
+          setPlacementDraft(null);
+          return;
+        }
+        if (
+          targetItem.catalogId === 'reception_desk' &&
+          curClinic.placedItems.filter((it) => it.catalogId === 'reception_desk').length <= 1
+        ) {
+          soundFx.alert();
+          addFloatingFeedback(
+            targetItem.gridX,
+            targetItem.gridY,
+            curClinic.language === 'ar'
+              ? 'لا يمكن بيع مكتب الاستقبال الوحيد'
+              : 'Keep at least 1 reception desk',
+            '#f87171'
+          );
+          setPlacementDraft(null);
+          return;
+        }
+      }
+      const cat = targetItem ? catalogById.get(targetItem.catalogId) : undefined;
+      const refund = cat ? Math.round(cat.priceCoins * 0.7) : 30;
+      soundFx.coin();
       setClinic((prev) => ({
         ...prev,
-        coins: prev.coins >= 900000 ? 999999 : prev.coins - item.priceCoins,
-        satisfaction: Math.min(100, prev.satisfaction + Math.min(2, item.satisfactionBonus)),
-        placedItems: [...prev.placedItems, newPlaced],
+        coins: Math.max(999999, prev.coins + refund),
+        placedItems: prev.placedItems.filter((it) => it.instanceId !== instanceId),
       }));
       setPatients((prevPts) =>
         prevPts.map((pt) => {
-          if (
-            pt.state !== 'in_treatment' &&
-            pt.state !== 'ready_for_exam' &&
-            !(pt.state === 'waiting_checkin' && pt.isSeatedWait) &&
-            !isTileWalkable(pt.gridX, pt.gridY, 0.21, updatedBoxes)
-          ) {
-            const safe = findNearestWalkableTile(pt.gridX, pt.gridY, 0.22, updatedBoxes);
-            return { ...pt, gridX: safe.x, gridY: safe.y };
-          }
-          return pt;
+          if (!pt.attachedDevices?.some((d) => d.instanceId === instanceId)) return pt;
+          const filtered = pt.attachedDevices.filter((d) => d.instanceId !== instanceId);
+          return {
+            ...pt,
+            attachedDevices: filtered.length > 0 ? filtered : undefined,
+          };
         })
       );
-
-      if (item.category === 'equipment') {
-        bumpMission('buy_equipment', 1);
+      if (targetItem) {
+        addFloatingFeedback(targetItem.gridX, targetItem.gridY, `+${refund}`, '#fbbf24');
       }
-
-      addFloatingFeedback(
-        gx,
-        gy,
-        clinic.language === 'ar' ? 'تم التثبيت ✓' : 'Placed ✓',
-        '#34d399'
-      );
-    }
-
-    setPlacementDraft(null);
-  };
-
-  const handleSellMovingDraft = (instanceId: string) => {
-    const targetItem = clinic.placedItems.find((it) => it.instanceId === instanceId);
-    if (targetItem) {
-      if (
-        targetItem.catalogId === 'file_cabinet' &&
-        clinic.placedItems.filter((it) => it.catalogId === 'file_cabinet').length <= 1
-      ) {
-        soundFx.alert();
-        addFloatingFeedback(
-          targetItem.gridX,
-          targetItem.gridY,
-          clinic.language === 'ar'
-            ? 'لا يمكن بيع آخر رف ملفات بالاستقبال'
-            : 'Keep at least 1 records shelf',
-          '#f87171'
-        );
-        setPlacementDraft(null);
-        return;
-      }
-      if (
-        targetItem.catalogId === 'reception_desk' &&
-        clinic.placedItems.filter((it) => it.catalogId === 'reception_desk').length <= 1
-      ) {
-        soundFx.alert();
-        addFloatingFeedback(
-          targetItem.gridX,
-          targetItem.gridY,
-          clinic.language === 'ar'
-            ? 'لا يمكن بيع مكتب الاستقبال الوحيد'
-            : 'Keep at least 1 reception desk',
-          '#f87171'
-        );
-        setPlacementDraft(null);
-        return;
-      }
-    }
-    const cat = targetItem ? catalogById.get(targetItem.catalogId) : undefined;
-    const refund = cat ? Math.round(cat.priceCoins * 0.7) : 30;
-    soundFx.coin();
-    setClinic((prev) => ({
-      ...prev,
-      coins: Math.max(999999, prev.coins + refund),
-      placedItems: prev.placedItems.filter((it) => it.instanceId !== instanceId),
-    }));
-    setPatients((prevPts) =>
-      prevPts.map((pt) => {
-        if (!pt.attachedDevices?.some((d) => d.instanceId === instanceId)) return pt;
-        const filtered = pt.attachedDevices.filter((d) => d.instanceId !== instanceId);
-        return {
-          ...pt,
-          attachedDevices: filtered.length > 0 ? filtered : undefined,
-        };
-      })
-    );
-    if (targetItem) {
-      addFloatingFeedback(targetItem.gridX, targetItem.gridY, `+${refund}`, '#fbbf24');
-    }
-    setPlacementDraft(null);
-  };
+      setPlacementDraft(null);
+    },
+    [catalogById, addFloatingFeedback]
+  );
 
   const handleConfirmUnlockRoom = (room: ClinicRoom, specialty: RoomSpecialty) => {
     if (clinic.coins < room.unlockCost) return;
@@ -3697,6 +3700,212 @@ export default function App() {
     setEditMode((v) => !v);
   }, []);
 
+  const handleFppActiveBedDeviceChange = useCallback((next: FppActiveDeviceState | null) => {
+    setFppActiveDevice((prev) => {
+      if (next && (prev?.instanceId ?? prev?.catalogId) !== (next.instanceId ?? next.catalogId)) {
+        soundFx.tap();
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSceneReady = useCallback(() => setSceneReady(true), []);
+
+  const handleTapLockedRoom = useCallback((room: ClinicRoom) => {
+    if (!latestActionRef.current.visitingFriend) {
+      soundFx.tap();
+      setUnlockTargetRoom(room);
+    }
+  }, []);
+
+  const handleTapWorldTree = useCallback((tree: WorldTreeDef) => {
+    if (!latestActionRef.current.visitingFriend) {
+      soundFx.tap();
+      setSelectedWorldTree(tree);
+    }
+  }, []);
+
+  const handleTapPlacedItem = useCallback(
+    (item: PlacedItem) => {
+      const { visitingFriend: curVisiting, editMode: curEditMode } = latestActionRef.current;
+      if (curVisiting || !curEditMode) return;
+      const cat = catalogById.get(item.catalogId);
+      if (!cat) return;
+      soundFx.tap();
+      setPlacementDraft({
+        catalogItem: cat,
+        movingInstanceId: item.instanceId,
+        rotation: item.rotation,
+        hoverX: item.gridX,
+        hoverY: item.gridY,
+      });
+    },
+    [catalogById]
+  );
+
+  const handleStartDragPlacedItem = useCallback(
+    (item: PlacedItem) => {
+      const { visitingFriend: curVisiting, editMode: curEditMode } = latestActionRef.current;
+      if (curVisiting || !curEditMode) return;
+      const cat = catalogById.get(item.catalogId);
+      if (!cat) return;
+      setPlacementDraft({
+        catalogItem: cat,
+        movingInstanceId: item.instanceId,
+        rotation: item.rotation,
+        hoverX: item.gridX,
+        hoverY: item.gridY,
+      });
+    },
+    [catalogById]
+  );
+
+  const handleSwitchEditingItem = useCallback(
+    (nextItem: PlacedItem, commitCurrent = true) => {
+      const {
+        visitingFriend: curVisiting,
+        editMode: curEditMode,
+        placementDraft: curDraft,
+        clinic: curClinic,
+      } = latestActionRef.current;
+      if (curVisiting || !curEditMode) return;
+      const nextCat = catalogById.get(nextItem.catalogId);
+      if (!nextCat) return;
+      soundFx.tap();
+      if (commitCurrent && curDraft?.movingInstanceId) {
+        const prev = curDraft;
+        const targetRoom = curClinic.rooms.find(
+          (r) =>
+            prev.hoverX >= r.minX - 0.05 &&
+            prev.hoverX < r.maxX + 1 &&
+            prev.hoverY >= r.minY - 0.05 &&
+            prev.hoverY < r.maxY + 1
+        );
+        const nextRoomId = targetRoom ? targetRoom.id : 'outdoor';
+        const isMoved = curClinic.placedItems.some(
+          (it) =>
+            it.instanceId === prev.movingInstanceId &&
+            (it.gridX !== prev.hoverX ||
+              it.gridY !== prev.hoverY ||
+              it.rotation !== prev.rotation)
+        );
+        if (isMoved) {
+          setClinic((cur) => ({
+            ...cur,
+            placedItems: cur.placedItems.map((it) =>
+              it.instanceId === prev.movingInstanceId
+                ? {
+                    ...it,
+                    gridX: prev.hoverX,
+                    gridY: prev.hoverY,
+                    rotation: prev.rotation,
+                    roomId: nextRoomId,
+                  }
+                : it
+            ),
+          }));
+        }
+      }
+      setPlacementDraft({
+        catalogItem: nextCat,
+        movingInstanceId: nextItem.instanceId,
+        rotation: nextItem.rotation,
+        hoverX: nextItem.gridX,
+        hoverY: nextItem.gridY,
+      });
+    },
+    [catalogById]
+  );
+
+  const handleInspectItem = useCallback(
+    (item: PlacedItem) => {
+      const assignedPatient = latestActionRef.current.patients.find(
+        (pt) => pt.assignedStationId === item.instanceId && pt.state !== 'treated_leaving'
+      );
+      if (assignedPatient) {
+        handleTapPatient(assignedPatient);
+        return;
+      }
+      const cat = catalogById.get(item.catalogId);
+      if (cat && (cat.isTreatmentStation || cat.speedBonus > 0)) {
+        soundFx.tap();
+        addFloatingFeedback(
+          item.gridX,
+          item.gridY,
+          `${cat.nameEn} · ⚡ +${cat.speedBonus}%`,
+          '#38bdf8'
+        );
+      }
+    },
+    [catalogById, handleTapPatient, addFloatingFeedback]
+  );
+
+  const handleUpdatePlacementHover = useCallback(
+    (gx: number, gy: number, rotation?: 0 | 1 | 2 | 3) => {
+      setPlacementDraft((prev) =>
+        prev ? { ...prev, hoverX: gx, hoverY: gy, rotation: rotation ?? prev.rotation } : null
+      );
+    },
+    []
+  );
+
+  const handleCancelPlacement = useCallback(() => {
+    soundFx.tap();
+    setPlacementDraft(null);
+  }, []);
+
+  const handleRotatePlacement = useCallback(() => {
+    soundFx.tap();
+    setPlacementDraft((prev) => {
+      if (!prev) return null;
+      const curClinic = latestActionRef.current.clinic;
+      if (prev.catalogItem.isWallDecor || isWallDecorId(prev.catalogItem.id)) {
+        const validRots = getValidWallRotationsForTile(
+          Math.floor(prev.hoverX + 0.05),
+          Math.floor(prev.hoverY + 0.05),
+          curClinic.rooms
+        );
+        if (validRots.length > 1) {
+          const idx = validRots.indexOf(prev.rotation);
+          const nextRot = validRots[(idx + 1) % validRots.length];
+          return { ...prev, rotation: nextRot };
+        }
+        const targetRot: 0 | 1 = prev.rotation === 0 ? 1 : 0;
+        const occupiedWallKeys = new Set<string>();
+        for (const existing of curClinic.placedItems) {
+          if (existing.instanceId === prev.movingInstanceId) continue;
+          const ec = catalogById.get(existing.catalogId);
+          if (!ec?.isWallDecor && !isWallDecorId(existing.catalogId)) continue;
+          occupiedWallKeys.add(`${existing.gridX},${existing.gridY},${existing.rotation}`);
+        }
+        let best: { gx: number; gy: number; rotation: 0 | 1; distSq: number } | null = null;
+        for (let gx = 2; gx <= 21; gx++) {
+          for (let gy = 2; gy <= 21; gy++) {
+            const rots = getValidWallRotationsForTile(gx, gy, curClinic.rooms);
+            if (!rots.includes(targetRot)) continue;
+            if (occupiedWallKeys.has(`${gx},${gy},${targetRot}`)) continue;
+            const distSq =
+              (gx - prev.hoverX) * (gx - prev.hoverX) +
+              (gy - prev.hoverY) * (gy - prev.hoverY);
+            if (!best || distSq < best.distSq) {
+              best = { gx, gy, rotation: targetRot, distSq };
+            }
+          }
+        }
+        if (best) {
+          return {
+            ...prev,
+            hoverX: best.gx,
+            hoverY: best.gy,
+            rotation: best.rotation,
+          };
+        }
+        return prev;
+      }
+      return { ...prev, rotation: ((prev.rotation + 1) % 4) as 0 | 1 | 2 | 3 };
+    });
+  }, [catalogById]);
+
   // PC Keyboard Shortcuts & Escape Dismissal for Isometric Clinic View
   useEffect(() => {
     if (!bootDismissed || isFppSessionActive) return;
@@ -3872,15 +4081,8 @@ export default function App() {
         onFppHeldDeviceChange={setFppHeldDevice}
         onFppHandshakeReadyChange={setFppHandshakeReady}
         onFppHoverBodyZoneChange={setFppHoverBodyZone}
-        onFppActiveBedDeviceChange={(next) => {
-          setFppActiveDevice((prev) => {
-            if (next && (prev?.instanceId ?? prev?.catalogId) !== (next.instanceId ?? next.catalogId)) {
-              soundFx.tap();
-            }
-            return next;
-          });
-        }}
-        onFppRequirePosture={(nextPosture) => handleSetPatientFppPosture(nextPosture)}
+        onFppActiveBedDeviceChange={handleFppActiveBedDeviceChange}
+        onFppRequirePosture={handleSetPatientFppPosture}
         onSyncPatientDevices={handleSyncPatientDevices}
         speakingPatientId={visitingFriend ? null : speakingPatientId}
         selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
@@ -3891,173 +4093,20 @@ export default function App() {
         removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
         selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
         hideInternalLoader={!bootDismissed}
-        onSceneReady={() => setSceneReady(true)}
+        onSceneReady={handleSceneReady}
         onReceptionCheckinDone={handleReceptionCheckinDone}
         onTapPatient={handleTapPatient}
-        onTapLockedRoom={(room) => {
-          if (!visitingFriend) {
-            soundFx.tap();
-            setUnlockTargetRoom(room);
-          }
-        }}
-        onTapWorldTree={(tree) => {
-          if (!visitingFriend) {
-            soundFx.tap();
-            setSelectedWorldTree(tree);
-          }
-        }}
-        onTapPlacedItem={(item) => {
-          if (visitingFriend || !editMode) return;
-          const cat = catalogById.get(item.catalogId);
-          if (!cat) return;
-          soundFx.tap();
-          setPlacementDraft({
-            catalogItem: cat,
-            movingInstanceId: item.instanceId,
-            rotation: item.rotation,
-            hoverX: item.gridX,
-            hoverY: item.gridY,
-          });
-        }}
-        onStartDragPlacedItem={(item) => {
-          if (visitingFriend || !editMode) return;
-          const cat = catalogById.get(item.catalogId);
-          if (!cat) return;
-          setPlacementDraft({
-            catalogItem: cat,
-            movingInstanceId: item.instanceId,
-            rotation: item.rotation,
-            hoverX: item.gridX,
-            hoverY: item.gridY,
-          });
-        }}
-        onSwitchEditingItem={(nextItem, commitCurrent = true) => {
-          if (visitingFriend || !editMode) return;
-          const nextCat = catalogById.get(nextItem.catalogId);
-          if (!nextCat) return;
-          soundFx.tap();
-          if (commitCurrent && placementDraft?.movingInstanceId) {
-            const prev = placementDraft;
-            const targetRoom = clinic.rooms.find(
-              (r) =>
-                prev.hoverX >= r.minX - 0.05 &&
-                prev.hoverX < r.maxX + 1 &&
-                prev.hoverY >= r.minY - 0.05 &&
-                prev.hoverY < r.maxY + 1
-            );
-            const nextRoomId = targetRoom ? targetRoom.id : 'outdoor';
-            const isMoved = clinic.placedItems.some(
-              (it) =>
-                it.instanceId === prev.movingInstanceId &&
-                (it.gridX !== prev.hoverX ||
-                  it.gridY !== prev.hoverY ||
-                  it.rotation !== prev.rotation)
-            );
-            if (isMoved) {
-              setClinic((cur) => ({
-                ...cur,
-                placedItems: cur.placedItems.map((it) =>
-                  it.instanceId === prev.movingInstanceId
-                    ? {
-                        ...it,
-                        gridX: prev.hoverX,
-                        gridY: prev.hoverY,
-                        rotation: prev.rotation,
-                        roomId: nextRoomId,
-                      }
-                    : it
-                ),
-              }));
-            }
-          }
-          setPlacementDraft({
-            catalogItem: nextCat,
-            movingInstanceId: nextItem.instanceId,
-            rotation: nextItem.rotation,
-            hoverX: nextItem.gridX,
-            hoverY: nextItem.gridY,
-          });
-        }}
+        onTapLockedRoom={handleTapLockedRoom}
+        onTapWorldTree={handleTapWorldTree}
+        onTapPlacedItem={handleTapPlacedItem}
+        onStartDragPlacedItem={handleStartDragPlacedItem}
+        onSwitchEditingItem={handleSwitchEditingItem}
         onTapReceptionDesk={handleTapReceptionDesk}
-        onInspectItem={(item) => {
-          const assignedPatient = patients.find(
-            (pt) => pt.assignedStationId === item.instanceId && pt.state !== 'treated_leaving'
-          );
-          if (assignedPatient) {
-            handleTapPatient(assignedPatient);
-            return;
-          }
-          const cat = catalogById.get(item.catalogId);
-          if (cat && (cat.isTreatmentStation || cat.speedBonus > 0)) {
-            soundFx.tap();
-            addFloatingFeedback(
-              item.gridX,
-              item.gridY,
-              `${cat.nameEn} · ⚡ +${cat.speedBonus}%`,
-              '#38bdf8'
-            );
-          }
-        }}
-        onUpdatePlacementHover={(gx, gy, rotation) =>
-          setPlacementDraft((prev) =>
-            prev ? { ...prev, hoverX: gx, hoverY: gy, rotation: rotation ?? prev.rotation } : null
-          )
-        }
+        onInspectItem={handleInspectItem}
+        onUpdatePlacementHover={handleUpdatePlacementHover}
         onConfirmPlacement={handleConfirmPlacement}
-        onCancelPlacement={() => {
-          soundFx.tap();
-          setPlacementDraft(null);
-        }}
-        onRotatePlacement={() => {
-          soundFx.tap();
-          setPlacementDraft((prev) => {
-            if (!prev) return null;
-            if (prev.catalogItem.isWallDecor || isWallDecorId(prev.catalogItem.id)) {
-              const validRots = getValidWallRotationsForTile(
-                Math.floor(prev.hoverX + 0.05),
-                Math.floor(prev.hoverY + 0.05),
-                clinic.rooms
-              );
-              if (validRots.length > 1) {
-                const idx = validRots.indexOf(prev.rotation);
-                const nextRot = validRots[(idx + 1) % validRots.length];
-                return { ...prev, rotation: nextRot };
-              }
-              const targetRot: 0 | 1 = prev.rotation === 0 ? 1 : 0;
-              const occupiedWallKeys = new Set<string>();
-              for (const existing of clinic.placedItems) {
-                if (existing.instanceId === prev.movingInstanceId) continue;
-                const ec = catalogById.get(existing.catalogId);
-                if (!ec?.isWallDecor && !isWallDecorId(existing.catalogId)) continue;
-                occupiedWallKeys.add(`${existing.gridX},${existing.gridY},${existing.rotation}`);
-              }
-              let best: { gx: number; gy: number; rotation: 0 | 1; distSq: number } | null = null;
-              for (let gx = 2; gx <= 21; gx++) {
-                for (let gy = 2; gy <= 21; gy++) {
-                  const rots = getValidWallRotationsForTile(gx, gy, clinic.rooms);
-                  if (!rots.includes(targetRot)) continue;
-                  if (occupiedWallKeys.has(`${gx},${gy},${targetRot}`)) continue;
-                  const distSq =
-                    (gx - prev.hoverX) * (gx - prev.hoverX) +
-                    (gy - prev.hoverY) * (gy - prev.hoverY);
-                  if (!best || distSq < best.distSq) {
-                    best = { gx, gy, rotation: targetRot, distSq };
-                  }
-                }
-              }
-              if (best) {
-                return {
-                  ...prev,
-                  hoverX: best.gx,
-                  hoverY: best.gy,
-                  rotation: best.rotation,
-                };
-              }
-              return prev;
-            }
-            return { ...prev, rotation: ((prev.rotation + 1) % 4) as 0 | 1 | 2 | 3 };
-          });
-        }}
+        onCancelPlacement={handleCancelPlacement}
+        onRotatePlacement={handleRotatePlacement}
         onSellMovingDraft={handleSellMovingDraft}
       />
 

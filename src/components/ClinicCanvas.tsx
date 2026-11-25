@@ -974,7 +974,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const getTargetDpr = (w: number, h: number) => {
       if (isSoftwareGl) return 1;
       const rawDpr = window.devicePixelRatio || 1;
-      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.15) : Math.min(rawDpr, 2.0);
+      const area = Math.max(1, w * h);
+      const desktopCap = area > 1_250_000 ? 1.25 : 1.45;
+      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.1) : Math.min(rawDpr, desktopCap);
       return Math.min(baseDpr, maxSurfaceSize / Math.max(1, w, h));
     };
     const dpr = getTargetDpr(initW, initH);
@@ -984,7 +986,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.98;
     renderer.shadowMap.enabled = !isSoftwareGl;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.needsUpdate = true;
     renderer.domElement.style.display = 'block';
@@ -1023,10 +1025,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     scene.add(sunLight.target);
     if (!isSoftwareGl) {
       const shadowRes =
-        !isMobileGpu && maxTexSize >= 2048 ? 2048 : Math.min(1024, maxTexSize);
+        !isMobileGpu && maxTexSize >= 2048 ? 1280 : Math.min(1024, maxTexSize);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
-      sunLight.shadow.radius = 2.3;
+      sunLight.shadow.radius = 1.6;
       sunLight.shadow.camera.near = 6;
       sunLight.shadow.camera.far = 90;
       sunLight.shadow.camera.left = -18;
@@ -1217,6 +1219,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       lastVoiceLevel: 0,
       lastSustainedVoiceAt: 0,
     };
+    const _fppCamLookWorld = { x: 0, y: 0, z: 0 };
+    const _fppProbeAttentionWorld = { x: 0, y: 0, z: 0 };
+    let fppProbeAttentionActive = false;
     const stationMagMap = new Map<
       string,
       { isRunning: boolean; deviceParams: DeviceConsoleParams }
@@ -2501,8 +2506,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     fppHands.group.visible = false;
 
     // Pre-allocated PointLight Pool (wall-wash & lamp halos illuminate secondary fixtures at 0 shader cost)
-    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 2 : isMobileGpu ? 3 : 8;
-    const shadowIntervalMs = !isMobileGpu ? 24 : 115;
+    const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 2 : isMobileGpu ? 2 : 4;
+    const shadowIntervalMs = !isMobileGpu ? 72 : 140;
     const smartLightPool: THREE.PointLight[] = [];
     for (let i = 0; i < SMART_LIGHT_POOL_SIZE; i++) {
       const pl = new THREE.PointLight(0xffdfb0, 0, 14, 1.0);
@@ -3366,8 +3371,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       if (disposed) return;
       if (
         key === 'char_sudanese_man_1' ||
-        key === 'char_patient_realistic_1' ||
-        key === 'char_gulf_niqab_female'
+        key === 'char_patient_realistic_1'
       ) {
         upgradeTier2PatientRigs(key);
       }
@@ -4681,6 +4685,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     let cachedDeskSig = '';
     let cachedDeskPose: ReturnType<typeof getReceptionDeskPose> | null = null;
 
+    const placedItemByIdScratch = new Map<string, PlacedItem>();
+    let cachedDeskItem: PlacedItem | undefined;
+    let cachedCoffeeTableItem: PlacedItem | undefined;
+    let lastFppBackdropPoseKey = '';
+
     const syncAndAnimateActors = (timeSec: number, dt: number, pureFppId: string | null = null) => {
       if (!glbRegistry.coreReady) return;
       actorsOrEquipMoving = false;
@@ -4694,6 +4703,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         speakingPatientId: curSpeakId,
         selectedBedPatientId: curSelBedId,
       } = latestRef.current;
+      placedItemByIdScratch.clear();
+      cachedDeskItem = undefined;
+      cachedCoffeeTableItem = undefined;
+      for (let i = 0; i < curItems.length; i++) {
+        const it = curItems[i];
+        placedItemByIdScratch.set(it.instanceId, it);
+        if (!cachedDeskItem && it.catalogId === 'reception_desk') cachedDeskItem = it;
+        else if (!cachedCoffeeTableItem && it.catalogId === 'coffee_table') cachedCoffeeTableItem = it;
+      }
       const fppBlendNow = fppCamRef.current.blend;
       const fppSmoothNow =
         fppBlendNow * fppBlendNow * fppBlendNow * (fppBlendNow * (fppBlendNow * 6 - 15) + 10);
@@ -5024,8 +5042,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           });
           const needsTier2Upgrade = Boolean(
             (p.modelKey === 'char_patient_realistic_1' ||
-              p.modelKey === 'char_sudanese_man_1' ||
-              p.modelKey === 'char_gulf_niqab_female') &&
+              p.modelKey === 'char_sudanese_man_1') &&
               !glbRegistry.getModel(p.modelKey)
           );
           actorsLayer.add(rig.root);
@@ -5071,7 +5088,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           (p.state === 'ready_for_exam' || p.state === 'in_exam' || p.state === 'in_treatment') &&
           p.path.length === 0;
         const station = p.assignedStationId
-          ? curItems.find((it) => it.instanceId === p.assignedStationId)
+          ? placedItemByIdScratch.get(p.assignedStationId) ?? null
           : null;
         const stationCat = station ? cMap.get(station.catalogId) : null;
         const spr = stationCat?.sprite;
@@ -5127,9 +5144,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const scanOffsetScale =
           p.modelKey === 'char_patient_realistic_1' || p.modelKey === 'char_sudanese_man_1'
             ? 1.54 / 1.34
-            : p.modelKey === 'char_gulf_niqab_female'
-              ? 1.49 / 1.34
-              : 1;
+            : 1;
         const tiltDegRad =
           spr === 'tilt_table'
             ? tiltRig
@@ -5731,7 +5746,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           if (p.state === 'checkin_at_desk') {
             const recStaff = curStaff.find((st) => st.role === 'receptionist' && st.hired);
             const recRig = recStaff ? staffRigs.get(recStaff.id) : undefined;
-            const desk = curItems.find((it) => it.catalogId === 'reception_desk');
+            const desk = cachedDeskItem;
             let targetLookX = desk ? desk.gridX + 1.0 : entry.visX;
             let targetLookZ = desk ? desk.gridY + 0.5 : entry.visZ - 1;
             if (desk) {
@@ -5747,7 +5762,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             entry.facingRad = lerpAngle(entry.facingRad, lookAngle, Math.min(1, dt * 8));
           } else if (p.state === 'drinking_water') {
             const cooler = p.waterCoolerId
-              ? curItems.find((it) => it.instanceId === p.waterCoolerId)
+              ? placedItemByIdScratch.get(p.waterCoolerId) ?? null
               : null;
             const coolerAngle = cooler
               ? Math.atan2(cooler.gridX + 0.5 - entry.visX, cooler.gridY + 0.5 - entry.visZ)
@@ -5781,7 +5796,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               }
             }
           } else if (headingToChair && (isSeatedWait || nearChairTurnZone || inPreSitTurnZone)) {
-            const table = curItems.find((it) => it.catalogId === 'coffee_table');
+            const table = cachedCoffeeTableItem;
             const fallbackAngle = table
               ? Math.atan2(table.gridX + 0.5 - entry.visX, table.gridY + 0.5 - entry.visZ)
               : 0;
@@ -5819,6 +5834,28 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           actorsOrEquipMoving = true;
         }
 
+        let resolvedPainRegion: 'neck' | 'shoulder' | 'back' | 'knee' | 'ankle' | 'wrist' | 'general' = 'general';
+        if (isFppTarget) {
+          _fppCamLookWorld.x = camera.position.x;
+          _fppCamLookWorld.y = camera.position.y;
+          _fppCamLookWorld.z = camera.position.z;
+          const ortho = p.orthosisType ?? p.clinicalCase.orthosisType;
+          const compLower = p.clinicalCase.chiefComplaintEn.toLowerCase();
+          if (ortho === 'cervical_collar' || fppStimState.region === 'neck' || compLower.includes('neck') || compLower.includes('cervical')) {
+            resolvedPainRegion = 'neck';
+          } else if (ortho === 'shoulder_kinesio' || compLower.includes('shoulder') || compLower.includes('rotator')) {
+            resolvedPainRegion = 'shoulder';
+          } else if (ortho === 'knee_brace' || fppStimState.region === 'shin_l' || fppStimState.region === 'shin_r' || compLower.includes('knee') || compLower.includes('acl')) {
+            resolvedPainRegion = 'knee';
+          } else if (ortho === 'ankle_brace' || compLower.includes('ankle') || compLower.includes('foot')) {
+            resolvedPainRegion = 'ankle';
+          } else if (ortho === 'wrist_splint' || compLower.includes('wrist') || compLower.includes('carpal')) {
+            resolvedPainRegion = 'wrist';
+          } else if (fppStimState.region === 'torso' || compLower.includes('back') || compLower.includes('lumbar') || compLower.includes('spine')) {
+            resolvedPainRegion = 'back';
+          }
+        }
+
         animateHumanoid3D(entry.rig, {
           pose,
           walkPhase: entry.walkPhase,
@@ -5846,9 +5883,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           drinkElapsedMs: p.state === 'drinking_water' ? p.waitTimer : undefined,
           actorSeed: entry.actorSeed,
           stairClimb: entry.stairClimb,
-          lookTargetWorld: isFppTarget
-            ? { x: camera.position.x, y: camera.position.y, z: camera.position.z }
-            : null,
+          lookTargetWorld: isFppTarget ? _fppCamLookWorld : null,
+          attentionTargetWorld: isFppTarget && fppProbeAttentionActive ? _fppProbeAttentionWorld : null,
+          attentionActive: isFppTarget && fppProbeAttentionActive,
+          clinicalPainRegion: resolvedPainRegion,
           isSpeaking: isFppTarget && curSpeakId === p.id,
           isFppSession: isFppTarget,
           vasPain: p.clinicalCase.vasPain,
@@ -8112,6 +8150,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fppStimState.spike = 0;
         fppStimState.prevLevel = 0;
         fppStimState.lastVoiceLevel = 0;
+        fppProbeAttentionActive = false;
         soundFx.stopAllDevices();
         for (const eq of fppEquipBayMap.values()) {
           fppEquipLayer.remove(eq.handle.group);
@@ -8516,8 +8555,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const computeTargetZoneInBay = (region: FppTargetRegion, side: FppBedSide) =>
           computeFppTargetZoneInBay(region, side, curPosture, headSign, bedHeight);
 
-        fppBackdrop.group.updateMatrixWorld(true);
-        _bayNrmMat.getNormalMatrix(fppBackdrop.group.matrixWorld);
+        const fppBackdropPoseKey = `${fppBackdrop.group.position.x.toFixed(3)}_${fppBackdrop.group.position.y.toFixed(3)}_${fppBackdrop.group.position.z.toFixed(3)}_${fppBackdrop.group.rotation.y.toFixed(4)}`;
+        if (fppBackdropPoseKey !== lastFppBackdropPoseKey) {
+          lastFppBackdropPoseKey = fppBackdropPoseKey;
+          fppBackdrop.group.updateMatrixWorld(true);
+          _bayNrmMat.getNormalMatrix(fppBackdrop.group.matrixWorld);
+        }
         let heldEntry: FppBayEquipEntry | null = null;
         let holdingHandheldEntry: FppBayEquipEntry | null = null;
         let postureEjectedAny = false;
@@ -9603,6 +9646,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           if (!resolvedGripWorld) {
             _probeHandWorld.set(0.14, bedHeight + 0.34, 0.02).applyMatrix4(fppBackdrop.group.matrixWorld);
           }
+          fppProbeAttentionActive = true;
+          _fppProbeAttentionWorld.x = _probeHandWorld.x;
+          _fppProbeAttentionWorld.y = _probeHandWorld.y;
+          _fppProbeAttentionWorld.z = _probeHandWorld.z;
           _probeHandCam.copy(_probeHandWorld).applyMatrix4(camera.matrixWorldInverse);
           _fppInteractionScratch.probeTargetCamX = _probeHandCam.x;
           _fppInteractionScratch.probeTargetCamY = _probeHandCam.y;
@@ -9617,6 +9664,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             _fppInteractionScratch.probeAxisCamY = undefined;
             _fppInteractionScratch.probeAxisCamZ = undefined;
           }
+        } else {
+          fppProbeAttentionActive = false;
         }
 
         const pChestZ = curPosture === 'standing' ? 0.18 : -0.02;
@@ -9649,8 +9698,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           const fppPtRig = patientRigs.get(curFppId);
           const rHandBone = fppPtRig?.rig.bones?.['HandR']?.bone;
           if (fppPtRig && rHandBone) {
-            fppPtRig.rig.root.updateMatrixWorld(true);
-            rHandBone.getWorldPosition(_hsHandWorld);
+            _hsHandWorld.setFromMatrixPosition(rHandBone.matrixWorld);
             _hsHandCam.copy(_hsHandWorld).applyMatrix4(camera.matrixWorldInverse);
             _fppInteractionScratch.handshakeTargetCamX = _hsHandCam.x;
             _fppInteractionScratch.handshakeTargetCamY = _hsHandCam.y - 0.015;
@@ -9830,7 +9878,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
           const pRig = patientRigs.get(p.id);
           const station = p.assignedStationId
-            ? clinicItems.find((it) => it.instanceId === p.assignedStationId)
+            ? placedItemByIdScratch.get(p.assignedStationId)
             : undefined;
           const stCat = station ? clinicCatMap.get(station.catalogId) : undefined;
           const stSpr = stCat?.sprite;
@@ -9892,7 +9940,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
           for (let di = 0; di < p.attachedDevices.length; di++) {
             const dev = p.attachedDevices[di];
-            if (!clinicItems.some((it) => it.instanceId === dev.instanceId)) continue;
+            if (!placedItemByIdScratch.has(dev.instanceId)) continue;
             const depKey = `${p.id}_${dev.instanceId}`;
             activeDeployedKeysScratch.add(depKey);
 
@@ -10981,7 +11029,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         <div
           dir="ltr"
           onPointerDown={(e) => e.stopPropagation()}
-          className="hidden md:flex absolute left-4 bottom-[5.35rem] z-20 items-center gap-1 rounded-2xl bg-slate-950/88 backdrop-blur-md border border-white/15 p-1 shadow-xl text-white"
+          className="hidden md:flex absolute left-4 bottom-[5.35rem] z-20 items-center gap-1 rounded-2xl bg-slate-950/94 border border-white/15 p-1 shadow-xl text-white"
         >
           {onOrbitStepDelta && (
             <>
