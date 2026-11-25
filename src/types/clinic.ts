@@ -155,7 +155,7 @@ export interface StaffMember {
   state: 'idle' | 'walking' | 'assisting';
 }
 
-export interface ObjectiveTest {
+interface ObjectiveTest {
   id: string;
   nameAr: string;
   nameEn: string;
@@ -223,7 +223,7 @@ export interface ClinicalCase {
   orthosisType?: OrthosisType;
 }
 
-export type PatientState =
+type PatientState =
   | 'arriving'
   | 'checkin_at_desk'
   | 'walking_to_water'

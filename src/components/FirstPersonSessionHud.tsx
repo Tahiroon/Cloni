@@ -677,7 +677,7 @@ function getProbePromptCopy(
   }
 }
 
-export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
+export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = React.memo(({
   patient,
   stationSprite,
   stationNameEn,
@@ -982,75 +982,88 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
     }
   };
 
-  const stepDefs: Array<{
-    id: SessionStep;
-    num: number;
-    tabAr: string;
-    tabEn: string;
-    labelAr: string;
-    labelEn: string;
-    done: boolean;
-    badge?: string;
-    disabled?: boolean;
-  }> = [
-    {
-      id: 'subjective',
-      num: 1,
-      tabAr: 'التاريخ',
-      tabEn: 'History',
-      labelAr: 'التاريخ المرضي (History)',
-      labelEn: 'History (Hx)',
-      done: askedIds.length >= 4,
-      badge: `${askedIds.length}/${categorizedHistory.length}`,
-    },
-    {
-      id: 'redflags',
-      num: 2,
-      tabAr: 'Red Flags',
-      tabEn: 'Red Flags',
-      labelAr: 'Red Flags · التحذيرات',
-      labelEn: 'Red Flags Screening',
-      done: redFlagChoice !== null,
-    },
-    {
-      id: 'objective',
-      num: 3,
-      tabAr: 'Exam',
-      tabEn: 'Exam',
-      labelAr: 'الفحص السريري (Exam)',
-      labelEn: 'Clinical Exam',
-      done: revealedTests.length > 0 && revealedTests.length === c.objectiveTests.length,
-      badge: `${revealedTests.length}/${c.objectiveTests.length}`,
-    },
-    {
-      id: 'diagnosis',
-      num: 4,
-      tabAr: 'Diagnosis',
-      tabEn: 'Diagnosis',
-      labelAr: 'التشخيص (Diagnosis)',
-      labelEn: 'Clinical Diagnosis',
-      done: Boolean(selectedDiag),
-    },
-    {
-      id: 'plan',
-      num: 5,
-      tabAr: 'الخطة',
-      tabEn: 'Plan',
-      labelAr: 'الخطة العلاجية (Plan)',
-      labelEn: 'Treatment Plan',
-      done: Boolean(evaluationResult),
-    },
-    {
-      id: 'summary',
-      num: 6,
-      tabAr: 'الخلاصة',
-      tabEn: 'Summary',
-      labelAr: 'الخلاصة والتقييم',
-      labelEn: 'Session Summary',
-      done: Boolean(evaluationResult),
-      disabled: !evaluationResult,
-    },
-  ];
+  const stepDefs = useMemo<
+    Array<{
+      id: SessionStep;
+      num: number;
+      tabAr: string;
+      tabEn: string;
+      labelAr: string;
+      labelEn: string;
+      done: boolean;
+      badge?: string;
+      disabled?: boolean;
+    }>
+  >(
+    () => [
+      {
+        id: 'subjective',
+        num: 1,
+        tabAr: 'التاريخ',
+        tabEn: 'History',
+        labelAr: 'التاريخ المرضي (History)',
+        labelEn: 'History (Hx)',
+        done: askedIds.length >= 4,
+        badge: `${askedIds.length}/${categorizedHistory.length}`,
+      },
+      {
+        id: 'redflags',
+        num: 2,
+        tabAr: 'Red Flags',
+        tabEn: 'Red Flags',
+        labelAr: 'Red Flags · التحذيرات',
+        labelEn: 'Red Flags Screening',
+        done: redFlagChoice !== null,
+      },
+      {
+        id: 'objective',
+        num: 3,
+        tabAr: 'Exam',
+        tabEn: 'Exam',
+        labelAr: 'الفحص السريري (Exam)',
+        labelEn: 'Clinical Exam',
+        done: revealedTests.length > 0 && revealedTests.length === c.objectiveTests.length,
+        badge: `${revealedTests.length}/${c.objectiveTests.length}`,
+      },
+      {
+        id: 'diagnosis',
+        num: 4,
+        tabAr: 'Diagnosis',
+        tabEn: 'Diagnosis',
+        labelAr: 'التشخيص (Diagnosis)',
+        labelEn: 'Clinical Diagnosis',
+        done: Boolean(selectedDiag),
+      },
+      {
+        id: 'plan',
+        num: 5,
+        tabAr: 'الخطة',
+        tabEn: 'Plan',
+        labelAr: 'الخطة العلاجية (Plan)',
+        labelEn: 'Treatment Plan',
+        done: Boolean(evaluationResult),
+      },
+      {
+        id: 'summary',
+        num: 6,
+        tabAr: 'الخلاصة',
+        tabEn: 'Summary',
+        labelAr: 'الخلاصة والتقييم',
+        labelEn: 'Session Summary',
+        done: Boolean(evaluationResult),
+        disabled: !evaluationResult,
+      },
+    ],
+    [
+      askedIds.length,
+      categorizedHistory.length,
+      redFlagChoice,
+      revealedTests.length,
+      c.objectiveTests.length,
+      selectedDiag,
+      evaluationResult,
+    ]
+  );
 
   const surfaceCls = isNight
     ? 'bg-slate-950/95 border-slate-700/85 text-slate-100'
@@ -1458,7 +1471,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       {!heldDevice && !activeDevice && ((nearbyDevice && (nearbyDevice.canDeploy || nearbyDevice.isStationConsole)) || (handshakeReady && onHandshake)) && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className={`pointer-events-auto fixed z-40 flex flex-wrap items-center gap-2 transition-all ${
+          className={`therason-tip-enter pointer-events-auto fixed z-40 flex flex-wrap items-center gap-2 ${
             panelHidden
               ? 'left-1/2 -translate-x-1/2 bottom-6 sm:bottom-8'
               : 'right-2.5 top-[3.75rem] sm:right-auto sm:top-auto sm:left-5 sm:bottom-48'
@@ -1515,7 +1528,7 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       {heldDevice && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className={`pointer-events-auto fixed left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-1.5 transition-all ${
+          className={`therason-tip-enter pointer-events-auto fixed left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-1.5 ${
             panelHidden ? 'bottom-6 sm:bottom-8' : 'top-[3.75rem] sm:top-auto sm:bottom-8'
           }`}
         >
@@ -2056,32 +2069,33 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
             </div>
           ) : (
             <div
+              dir={isAr ? 'rtl' : 'ltr'}
               onPointerDown={(e) => e.stopPropagation()}
               className="pointer-events-auto fixed left-4 bottom-4 z-30 hidden md:flex flex-col gap-1.5 max-w-[min(42vw,28rem)] rounded-2xl bg-slate-950/94 border border-white/15 px-3.5 py-2.5 text-white shadow-2xl"
             >
               <div className="flex items-center justify-between gap-3 text-[11px] font-black text-sky-300">
                 <span className="flex items-center gap-1.5">
                   <Crosshair className="w-3.5 h-3.5" />
-                  {isAr ? 'تحكم الحاسوب (FPP)' : 'PC First-Person Controls'}
+                  {isAr ? 'تحكم الحاسوب' : 'PC First-Person Controls'}
                 </span>
                 <span className="text-[10px] font-mono text-slate-400">
-                  {isAr ? 'F أو كليك يمين: قفل الماوس' : 'F / Right-Click: Mouse Look'}
+                  {isAr ? 'F أو كليك يمين: الماوس' : 'F / Right-Click: Mouse Look'}
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] font-bold text-slate-200">
-                <span><kbd className="font-mono text-cyan-300">WASD</kbd> {isAr ? 'مشي' : 'Walk'}</span>
-                <span className="text-slate-600">·</span>
-                <span><kbd className="font-mono text-cyan-300">Shift</kbd> {isAr ? 'سرعة' : 'Sprint'}</span>
-                <span className="text-slate-600">·</span>
-                <span><kbd className="font-mono text-cyan-300">E</kbd> {isAr ? 'تفاعل' : 'Interact'}</span>
-                <span className="text-slate-600">·</span>
-                <span><kbd className="font-mono text-cyan-300">1-6</kbd> {isAr ? 'الخطوات' : 'Steps'}</span>
-                <span className="text-slate-600">·</span>
-                <span><kbd className="font-mono text-cyan-300">H</kbd> {isAr ? 'الملف' : 'Chart'}</span>
-                <span className="text-slate-600">·</span>
-                <span><kbd className="font-mono text-cyan-300">P</kbd> {isAr ? 'الوضعية' : 'Posture'}</span>
-                <span className="text-slate-600">·</span>
-                <span><kbd className="font-mono text-cyan-300">C</kbd> {isAr ? 'توسيط' : 'Center'}</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">WASD</kbd> {isAr ? 'مشي' : 'Walk'}</span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">Shift</kbd> {isAr ? 'سرعة' : 'Sprint'}</span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">E</kbd> {isAr ? 'تفاعل' : 'Interact'}</span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">1-6</kbd> {isAr ? 'الخطوات' : 'Steps'}</span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">H</kbd> {isAr ? 'الملف' : 'Chart'}</span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">P</kbd> {isAr ? 'الوضعية' : 'Posture'}</span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1"><kbd dir="ltr" className="font-mono text-cyan-300">C</kbd> {isAr ? 'توسيط' : 'Center'}</span>
               </div>
             </div>
           )}
@@ -3152,4 +3166,4 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = ({
       )}
     </div>
   );
-};
+});

@@ -17,8 +17,6 @@ import {
   StaffMember,
 } from '../types/clinic';
 
-export const GRID_SIZE = 30;
-
 export const SPECIALTY_META: Record<
   RoomSpecialty,
   {
@@ -1298,7 +1296,7 @@ export const CATALOG_ITEMS: CatalogItem[] = [
   },
 ];
 
-export const INITIAL_ROOMS: ClinicRoom[] = [
+const INITIAL_ROOMS: ClinicRoom[] = [
   {
     id: 'room_reception',
     nameAr: 'صالة الاستقبال والانتظار',
@@ -1353,7 +1351,7 @@ export const INITIAL_ROOMS: ClinicRoom[] = [
   },
 ];
 
-export const INITIAL_PLACED_ITEMS: PlacedItem[] = [
+const INITIAL_PLACED_ITEMS: PlacedItem[] = [
   // Spacious Reception & Waiting Lounge (x: 12..21, y: 10..21) — zero overlap with walls or doors (door at x=12,y=14..15 & x=16..17,y=10)
   { instanceId: 'init_desk', catalogId: 'reception_desk', gridX: 14, gridY: 12, rotation: 0, roomId: 'room_reception' },
   { instanceId: 'init_chairs', catalogId: 'waiting_chairs', gridX: 16, gridY: 18, rotation: 0, roomId: 'room_reception' },
@@ -1535,7 +1533,7 @@ export function normalizePlayerProfile(raw: unknown): PlayerCharacterConfig {
   };
 }
 
-export const INITIAL_STAFF: StaffMember[] = [
+const INITIAL_STAFF: StaffMember[] = [
   {
     id: 'staff_receptionist',
     role: 'receptionist',
@@ -1557,7 +1555,7 @@ export const INITIAL_STAFF: StaffMember[] = [
   },
 ];
 
-export const INITIAL_MISSIONS: Mission[] = [
+const INITIAL_MISSIONS: Mission[] = [
   {
     id: 'mission_receive_5',
     titleAr: 'استقبل 5 مرضى',
@@ -3261,14 +3259,14 @@ export function createInitialSaveState(): ClinicSaveState {
   };
 }
 
-export interface PostureOptionRule {
+interface PostureOptionRule {
   id: FppPatientPosture;
   labelEn: string;
   available: boolean;
   reason?: string;
 }
 
-export const FPP_POSTURE_DEFS: Array<{ id: FppPatientPosture; labelEn: string }> = [
+const FPP_POSTURE_DEFS: Array<{ id: FppPatientPosture; labelEn: string }> = [
   { id: 'standing', labelEn: 'Standing' },
   { id: 'sitting', labelEn: 'Sitting' },
   { id: 'supine', labelEn: 'Supine' },
@@ -3356,7 +3354,7 @@ export const FPP_EXCLUDED_BED_SPRITES = new Set<SpriteKind>([
   'exercise_mat',
 ]);
 
-export interface FppDeviceCapability {
+interface FppDeviceCapability {
   canDeploy: boolean;
   isAdjustable: boolean;
   supportsDistance: boolean;

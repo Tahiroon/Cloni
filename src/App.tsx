@@ -445,6 +445,12 @@ export default function App() {
   const [hydrated, setHydrated] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   const [bootDismissed, setBootDismissed] = useState(false);
+  const [canvasMounted, setCanvasMounted] = useState(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setCanvasMounted(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   useEffect(() => {
     if (!bootDismissed) return;
@@ -2158,7 +2164,6 @@ export default function App() {
               }
             }
 
-            updated.walkPhase += speedStep * (5.95 / Math.max(0.82, updated.heightScale || 1));
             changed = true;
           } else {
             // Reached current waypoint
@@ -4053,62 +4058,129 @@ export default function App() {
     handleOrbitStepDelta,
   ]);
 
+  const handleFppHudChangePosture = useCallback(
+    (nextPosture: FppPatientPosture) => {
+      soundFx.tap();
+      handleSetPatientFppPosture(nextPosture, firstPersonPatientId);
+    },
+    [handleSetPatientFppPosture, firstPersonPatientId]
+  );
+
+  const handleFppHudGrabDevice = useCallback((catalogId: string) => {
+    soundFx.tap();
+    fppDeviceCmdRef.current?.grabDevice(catalogId);
+  }, []);
+
+  const handleFppHudPlaceHeldDevice = useCallback(() => {
+    soundFx.tap();
+    fppDeviceCmdRef.current?.placeHeldDevice();
+  }, []);
+
+  const handleFppHudReturnDevice = useCallback((catalogId: string) => {
+    soundFx.tap();
+    fppDeviceCmdRef.current?.returnDevice(catalogId);
+  }, []);
+
+  const handleFppHudUpdateActiveDevice = useCallback((next: FppActiveDeviceState) => {
+    fppDeviceCmdRef.current?.updateActiveBedDevice(next);
+  }, []);
+
+  const handleFppHudOpenStationConsole = useCallback((deviceId: string) => {
+    soundFx.tap();
+    fppDeviceCmdRef.current?.openStationConsole?.(deviceId);
+  }, []);
+
+  const handleFppHudCloseActiveDevice = useCallback(() => {
+    soundFx.tap();
+    setFppActiveDevice(null);
+  }, []);
+
+  const handleFppHudHandshake = useCallback(() => {
+    soundFx.tap();
+    fppDeviceCmdRef.current?.triggerHandshake?.();
+  }, []);
+
+  const handleFppHudRecenterCamera = useCallback(() => {
+    soundFx.tap();
+    setFppRecenterNonce((n) => n + 1);
+  }, []);
+
+  const handleFppHudExit = useCallback(() => {
+    soundFx.tap();
+    triggerFppBlinkTransition(() => {
+      soundFx.stopAllDevices();
+      setFirstPersonPatientId(null);
+      setFppNearbyDevice(null);
+      setFppHeldDevice(null);
+      setFppActiveDevice(null);
+      setFppHandshakeReady(false);
+      setFppHoverBodyZone(null);
+      setSpeakingPatientId(null);
+      if (speakingTimerRef.current) {
+        clearTimeout(speakingTimerRef.current);
+        speakingTimerRef.current = null;
+      }
+    });
+  }, [triggerFppBlinkTransition]);
+
   return (
     <main
       className={`relative w-screen h-[100dvh] overflow-hidden transition-colors duration-500 ${
         lightingMode === 'night' ? 'bg-[#050a18]' : 'bg-[#5aa332]'
       }`}
     >
-      {/* 2.5D Isometric Clinic Canvas */}
-      <ClinicCanvas
-        rooms={displayedRooms}
-        placedItems={displayedItems}
-        patients={displayedPatients}
-        staff={displayedStaff}
-        playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
-        showPlayerCharacter={!visitingFriend}
-        floatingFeedbacks={floatingFeedbacks}
-        firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
-        orbitStep={orbitStep}
-        onOrbitStepDelta={handleOrbitStepDelta}
-        shortcutsBlocked={isoShortcutsBlocked || Boolean(selectedWaitingPatientId || selectedBedPatientId)}
-        fppPosture={fppPosture}
-        fppActiveDevice={visitingFriend ? null : fppActiveDevice}
-        fppCommandRef={fppDeviceCmdRef}
-        fppRecenterNonce={fppRecenterNonce}
-        fppMoveInputRef={fppMoveInputRef}
-        onFppNearbyDeviceChange={setFppNearbyDevice}
-        onFppHeldDeviceChange={setFppHeldDevice}
-        onFppHandshakeReadyChange={setFppHandshakeReady}
-        onFppHoverBodyZoneChange={setFppHoverBodyZone}
-        onFppActiveBedDeviceChange={handleFppActiveBedDeviceChange}
-        onFppRequirePosture={handleSetPatientFppPosture}
-        onSyncPatientDevices={handleSyncPatientDevices}
-        speakingPatientId={visitingFriend ? null : speakingPatientId}
-        selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
-        placementDraft={placementDraft}
-        editMode={editMode && !visitingFriend}
-        language={clinic.language}
-        lightingMode={lightingMode}
-        removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
-        selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
-        hideInternalLoader={!bootDismissed}
-        onSceneReady={handleSceneReady}
-        onReceptionCheckinDone={handleReceptionCheckinDone}
-        onTapPatient={handleTapPatient}
-        onTapLockedRoom={handleTapLockedRoom}
-        onTapWorldTree={handleTapWorldTree}
-        onTapPlacedItem={handleTapPlacedItem}
-        onStartDragPlacedItem={handleStartDragPlacedItem}
-        onSwitchEditingItem={handleSwitchEditingItem}
-        onTapReceptionDesk={handleTapReceptionDesk}
-        onInspectItem={handleInspectItem}
-        onUpdatePlacementHover={handleUpdatePlacementHover}
-        onConfirmPlacement={handleConfirmPlacement}
-        onCancelPlacement={handleCancelPlacement}
-        onRotatePlacement={handleRotatePlacement}
-        onSellMovingDraft={handleSellMovingDraft}
-      />
+      {/* 2.5D Isometric Clinic Canvas (mounts right after splash frame 0 paints) */}
+      {canvasMounted && (
+        <ClinicCanvas
+          rooms={displayedRooms}
+          placedItems={displayedItems}
+          patients={displayedPatients}
+          staff={displayedStaff}
+          playerProfile={clinic.playerProfile || DEFAULT_PLAYER_PROFILE}
+          showPlayerCharacter={!visitingFriend}
+          floatingFeedbacks={floatingFeedbacks}
+          firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
+          orbitStep={orbitStep}
+          onOrbitStepDelta={handleOrbitStepDelta}
+          shortcutsBlocked={isoShortcutsBlocked || Boolean(selectedWaitingPatientId || selectedBedPatientId)}
+          fppPosture={fppPosture}
+          fppActiveDevice={visitingFriend ? null : fppActiveDevice}
+          fppCommandRef={fppDeviceCmdRef}
+          fppRecenterNonce={fppRecenterNonce}
+          fppMoveInputRef={fppMoveInputRef}
+          onFppNearbyDeviceChange={setFppNearbyDevice}
+          onFppHeldDeviceChange={setFppHeldDevice}
+          onFppHandshakeReadyChange={setFppHandshakeReady}
+          onFppHoverBodyZoneChange={setFppHoverBodyZone}
+          onFppActiveBedDeviceChange={handleFppActiveBedDeviceChange}
+          onFppRequirePosture={handleSetPatientFppPosture}
+          onSyncPatientDevices={handleSyncPatientDevices}
+          speakingPatientId={visitingFriend ? null : speakingPatientId}
+          selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
+          placementDraft={placementDraft}
+          editMode={editMode && !visitingFriend}
+          language={clinic.language}
+          lightingMode={lightingMode}
+          removedTreeIds={visitingFriend ? EMPTY_REMOVED_TREES : clinic.removedTreeIds ?? EMPTY_REMOVED_TREES}
+          selectedTreeId={visitingFriend ? null : selectedWorldTree?.id || null}
+          hideInternalLoader={!bootDismissed}
+          onSceneReady={handleSceneReady}
+          onReceptionCheckinDone={handleReceptionCheckinDone}
+          onTapPatient={handleTapPatient}
+          onTapLockedRoom={handleTapLockedRoom}
+          onTapWorldTree={handleTapWorldTree}
+          onTapPlacedItem={handleTapPlacedItem}
+          onStartDragPlacedItem={handleStartDragPlacedItem}
+          onSwitchEditingItem={handleSwitchEditingItem}
+          onTapReceptionDesk={handleTapReceptionDesk}
+          onInspectItem={handleInspectItem}
+          onUpdatePlacementHover={handleUpdatePlacementHover}
+          onConfirmPlacement={handleConfirmPlacement}
+          onCancelPlacement={handleCancelPlacement}
+          onRotatePlacement={handleRotatePlacement}
+          onSellMovingDraft={handleSellMovingDraft}
+        />
+      )}
 
       {/* Top HUD Cluster & Bottom Navigation (hidden in First-Person Clinical Session) */}
       {!firstPersonPatient && (
@@ -4162,67 +4234,25 @@ export default function App() {
           stationSprite={firstPersonStationCat?.sprite}
           stationNameEn={firstPersonStationCat?.nameEn}
           posture={fppPosture}
-          onChangePosture={(nextPosture) => {
-            soundFx.tap();
-            handleSetPatientFppPosture(nextPosture, firstPersonPatient.id);
-          }}
+          onChangePosture={handleFppHudChangePosture}
           nearbyDevice={fppNearbyDevice}
           heldDevice={fppHeldDevice}
           activeDevice={fppActiveDevice}
-          onGrabDevice={(catalogId) => {
-            soundFx.tap();
-            fppDeviceCmdRef.current?.grabDevice(catalogId);
-          }}
-          onPlaceHeldDevice={() => {
-            soundFx.tap();
-            fppDeviceCmdRef.current?.placeHeldDevice();
-          }}
-          onReturnDevice={(catalogId) => {
-            soundFx.tap();
-            fppDeviceCmdRef.current?.returnDevice(catalogId);
-          }}
-          onUpdateActiveDevice={(next) => {
-            fppDeviceCmdRef.current?.updateActiveBedDevice(next);
-          }}
-          onOpenStationConsole={(deviceId) => {
-            soundFx.tap();
-            fppDeviceCmdRef.current?.openStationConsole?.(deviceId);
-          }}
-          onCloseActiveDevice={() => {
-            soundFx.tap();
-            setFppActiveDevice(null);
-          }}
+          onGrabDevice={handleFppHudGrabDevice}
+          onPlaceHeldDevice={handleFppHudPlaceHeldDevice}
+          onReturnDevice={handleFppHudReturnDevice}
+          onUpdateActiveDevice={handleFppHudUpdateActiveDevice}
+          onOpenStationConsole={handleFppHudOpenStationConsole}
+          onCloseActiveDevice={handleFppHudCloseActiveDevice}
           handshakeReady={fppHandshakeReady}
-          onHandshake={() => {
-            soundFx.tap();
-            fppDeviceCmdRef.current?.triggerHandshake?.();
-          }}
+          onHandshake={handleFppHudHandshake}
           hoverBodyZone={fppHoverBodyZone}
           language={clinic.language}
           lightingMode={lightingMode}
           moveInputRef={fppMoveInputRef}
           onPatientSpeak={handlePatientSpeak}
-          onRecenterCamera={() => {
-            soundFx.tap();
-            setFppRecenterNonce((n) => n + 1);
-          }}
-          onExit={() => {
-            soundFx.tap();
-            triggerFppBlinkTransition(() => {
-              soundFx.stopAllDevices();
-              setFirstPersonPatientId(null);
-              setFppNearbyDevice(null);
-              setFppHeldDevice(null);
-              setFppActiveDevice(null);
-              setFppHandshakeReady(false);
-              setFppHoverBodyZone(null);
-              setSpeakingPatientId(null);
-              if (speakingTimerRef.current) {
-                clearTimeout(speakingTimerRef.current);
-                speakingTimerRef.current = null;
-              }
-            });
-          }}
+          onRecenterCamera={handleFppHudRecenterCamera}
+          onExit={handleFppHudExit}
           onCompleteCase={handleCompleteCase}
         />
       )}

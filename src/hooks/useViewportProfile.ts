@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export interface ViewportProfile {
+interface ViewportProfile {
   width: number;
   height: number;
   isPhone: boolean;

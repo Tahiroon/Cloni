@@ -13,7 +13,7 @@ export interface ActiveDeviceAudioInput {
 
 export type PatientReactionKind = 'electrical' | 'percussion' | 'thermal' | 'cold' | 'stretch';
 
-export interface PatientReactionLiveInput {
+interface PatientReactionLiveInput {
   active: boolean;
   intensity01: number;
   pulse01: number;

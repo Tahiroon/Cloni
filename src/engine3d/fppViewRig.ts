@@ -5,7 +5,7 @@ import { PlayerCharacterConfig, SpriteKind } from '../types/clinic';
 import { glbRegistry } from './glbRegistry';
 import { TextureBundle } from './textures3d';
 
-export interface FppBackdropHandle {
+interface FppBackdropHandle {
   group: THREE.Group;
   wallLight: THREE.PointLight;
   roomFillLight: THREE.PointLight;
@@ -50,7 +50,7 @@ export interface FppHandInteractionContext {
   probeActionMode?: 'pad' | 'wand' | 'wrap' | 'aim' | 'setup' | 'hold_wand';
 }
 
-export interface FppClinicianHandsHandle {
+interface FppClinicianHandsHandle {
   group: THREE.Group;
   leftArm: THREE.Group;
   rightArm: THREE.Group;
@@ -73,7 +73,7 @@ function createWallEngravingTextures(maxAniso: number): {
 } {
   const W = 3840;
   const H = 1184;
-  const TEX_SCALE = 0.5;
+  const TEX_SCALE = 0.3;
 
   const colorCanvas = document.createElement('canvas');
   colorCanvas.width = Math.round(W * TEX_SCALE);
@@ -85,7 +85,7 @@ function createWallEngravingTextures(maxAniso: number): {
   bumpCanvas.height = Math.round(H * TEX_SCALE);
   const bCtx = bumpCanvas.getContext('2d');
 
-  const aniso = Math.min(8, Math.max(4, maxAniso || 4));
+  const aniso = Math.min(4, Math.max(1, maxAniso || 2));
   const colorTex = new THREE.CanvasTexture(colorCanvas);
   colorTex.colorSpace = THREE.SRGBColorSpace;
   colorTex.anisotropy = aniso;
@@ -319,7 +319,7 @@ function createExtrudedProfileAlongX(
     bevelEnabled: bevelSize > 0,
     bevelThickness: bevelSize,
     bevelSize,
-    bevelSegments: 2,
+    bevelSegments: 1,
     steps: 1,
   });
   geom.rotateY(-Math.PI / 2);
@@ -347,7 +347,7 @@ export function createFppRoomBackdrop3D(
   const cloneTex = (src: THREE.CanvasTexture, rx: number, ry: number): THREE.CanvasTexture => {
     const t = src.clone();
     t.repeat.set(rx, ry);
-    t.anisotropy = Math.min(16, Math.max(4, maxAniso || 4));
+    t.anisotropy = Math.min(4, Math.max(1, maxAniso || 2));
     t.needsUpdate = true;
     disposables.push(t);
     return t;
@@ -525,7 +525,7 @@ export function createFppRoomBackdrop3D(
         bevelEnabled: true,
         bevelSize: 0.0025,
         bevelThickness: 0.0025,
-        bevelSegments: 2,
+        bevelSegments: 1,
       });
       g.rotateX(-Math.PI / 2);
       g.translate(0, 0, 0.015);
@@ -680,7 +680,7 @@ export function createFppRoomBackdrop3D(
       bevelEnabled: true,
       bevelSize: 0.0045,
       bevelThickness: 0.0045,
-      bevelSegments: 2,
+      bevelSegments: 1,
     })
   );
   beveledSlatGeom.center();
@@ -702,7 +702,7 @@ export function createFppRoomBackdrop3D(
     for (let si = -2; si <= 2; si++) {
       const slat = new THREE.Mesh(beveledSlatGeom, woodSlatMat);
       slat.position.set(flankX + si * 0.105, 1.74, backZ + 0.066);
-      slat.castShadow = enableShadows;
+      slat.castShadow = false;
       slat.receiveShadow = enableShadows;
       group.add(slat);
     }
@@ -808,7 +808,7 @@ function finalizeDataTexture(
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
-  tex.anisotropy = 8;
+  tex.anisotropy = 4;
   tex.needsUpdate = true;
   return tex;
 }
@@ -1209,7 +1209,7 @@ function getOrBakeHandTextureSet(
   const existing = handTexSetCache.get(side);
   if (existing) return existing;
 
-  const SIZE = 512;
+  const SIZE = 256;
   const total = SIZE * SIZE;
   const albedo = new Uint8Array(total * 4);
   const heightBuf = new Float32Array(total);
@@ -1708,7 +1708,7 @@ function getOrBakeHandTextureSet(
     }
   }
 
-  dilateBakedBuffers(covered, albedo, heightBuf, roughBuf, SIZE, 3);
+  dilateBakedBuffers(covered, albedo, heightBuf, roughBuf, SIZE, 2);
 
   const albedoTex = finalizeDataTexture(albedo, SIZE, SIZE, true);
   const normalTex = buildNormalMapFromHeight(heightBuf, SIZE, SIZE, 2.2);
@@ -1720,13 +1720,13 @@ function getOrBakeHandTextureSet(
 }
 
 /**
- * Generates a matching 256x256 seamless forearm & wrist skin texture set (Albedos, Normal, Roughness)
+ * Generates a matching 192x192 seamless forearm & wrist skin texture set (Albedos, Normal, Roughness)
  * with fine pores, gentle forearm veins, and ventral-wrist flexor creases matching the baked hand wrist seam.
  */
 function getCachedForearmTextureSet(): AnatomicalSkinTexSet {
   if (forearmTexSetCache) return forearmTexSetCache;
 
-  const SIZE = 256;
+  const SIZE = 192;
   const total = SIZE * SIZE;
   const albedo = new Uint8Array(total * 4);
   const heightBuf = new Float32Array(total);

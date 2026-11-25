@@ -18,7 +18,7 @@ export interface GlbProgressInfo {
   ready: boolean;
 }
 
-export interface GlbRegistry {
+interface GlbRegistry {
   coreReady: boolean;
   ready: boolean;
   progress: number;
@@ -40,8 +40,13 @@ export interface GlbRegistry {
   onAssetLoaded: (cb: (key: string) => void) => () => void;
 }
 
-const ASSET_CACHE_NAME = 'therason-clinic-assets-v3';
-const LEGACY_ASSET_CACHE_NAMES = ['therason-clinic-assets-v1', 'therason-clinic-assets-v2'];
+const ASSET_CACHE_NAME = 'therason-clinic-assets-v5';
+const LEGACY_ASSET_CACHE_NAMES = [
+  'therason-clinic-assets-v1',
+  'therason-clinic-assets-v2',
+  'therason-clinic-assets-v3',
+  'therason-clinic-assets-v4',
+];
 
 // Tier 1 (Priority Core): Small clinic furniture, world nature, textures & primary avatars
 const CORE_MODEL_PATHS: Record<string, string> = {

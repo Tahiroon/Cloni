@@ -9,9 +9,9 @@ import {
 } from '../types/clinic';
 import { glbRegistry } from './glbRegistry';
 
-export type OutfitStyle = 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe';
+type OutfitStyle = 'casual' | 'jalabiya' | 'abaya' | 'abaya_open' | 'dress' | 'sudanese_thobe';
 
-export interface HumanoidAppearance {
+interface HumanoidAppearance {
   modelKey?: string;
   skinTone: string;
   hairColor: string;
@@ -59,7 +59,7 @@ interface MorphMeshRef {
   dict: Record<string, number>;
 }
 
-export type FppFocusMode =
+type FppFocusMode =
   | 'therapist'
   | 'room_scan'
   | 'probe_watch'
@@ -113,7 +113,7 @@ interface RealisticFppBehaviorState {
   curKnee: number;
 }
 
-export interface HumanoidStimState {
+interface HumanoidStimState {
   lastTimeSec: number;
   level: number;
   spike: number;

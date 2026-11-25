@@ -22,7 +22,7 @@ export interface FppProbeWorldTarget {
   gripAxisZ?: number;
 }
 
-export interface FppEquipMotionInput {
+interface FppEquipMotionInput {
   activeBlend: number;
   onBedBlend?: number;
   timeSec: number;
@@ -40,7 +40,7 @@ export interface FppEquipMotionInput {
   probeWorldTargets?: FppProbeWorldTarget[];
 }
 
-export interface FppEquipCarrySpec {
+interface FppEquipCarrySpec {
   carryMode: 'roll' | 'lift';
   gripStyle: 'pole' | 'bar' | 'crate';
   holdDist: number;

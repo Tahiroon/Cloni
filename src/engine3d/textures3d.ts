@@ -133,7 +133,7 @@ export function createTextureBundle(
   maxAnisotropy = 4,
   opts?: { catalogOnly?: boolean; mobileOptimized?: boolean }
 ): TextureBundle {
-  const aniso = Math.min(16, Math.max(1, maxAnisotropy));
+  const aniso = Math.min(8, Math.max(1, maxAnisotropy));
   const catalogOnly = Boolean(opts?.catalogOnly);
   const mobileOpt = Boolean(opts?.mobileOptimized);
   let disposed = false;
@@ -1621,11 +1621,13 @@ export function createTextureBundle(
     : (() => {
     const W = 1536;
     const H = 432;
-    const [c, ctx] = makeCanvas(mobileOpt ? 1024 : W, mobileOpt ? 288 : H);
+    const targetW = mobileOpt ? 768 : 1024;
+    const targetH = mobileOpt ? 216 : 288;
+    const [c, ctx] = makeCanvas(targetW, targetH);
 
     const drawFacadeSign = () => {
       ctx.save();
-      if (mobileOpt) ctx.scale(1024 / W, 288 / H);
+      ctx.scale(targetW / W, targetH / H);
       ctx.clearRect(0, 0, W, H);
       const grad = ctx.createLinearGradient(0, 0, W, H);
       grad.addColorStop(0, '#0c2348');
@@ -1694,10 +1696,10 @@ export function createTextureBundle(
     return tex;
   })();
 
-  // 13. Framed Anatomy Poster (576x768 sharp clinical anatomical illustration)
+  // 13. Framed Anatomy Poster (384x512 crisp clinical anatomical illustration)
   const anatomyPoster = (() => {
-    const [c, ctx] = makeCanvas(576, 768);
-    ctx.scale(3, 3);
+    const [c, ctx] = makeCanvas(384, 512);
+    ctx.scale(2, 2);
     ctx.fillStyle = '#edf1f5';
     ctx.fillRect(0, 0, 192, 256);
     ctx.strokeStyle = '#0f294a';
@@ -1764,10 +1766,10 @@ export function createTextureBundle(
     return track(finalizeTexture(c, aniso, 1, 1, true, true));
   })();
 
-  // 14. Medical Telemetry Screen (768x480 crisp grid & ECG readout)
+  // 14. Medical Telemetry Screen (512x320 crisp grid & ECG readout)
   const ecgScreen = (() => {
-    const [c, ctx] = makeCanvas(768, 480);
-    ctx.scale(3, 3);
+    const [c, ctx] = makeCanvas(512, 320);
+    ctx.scale(2, 2);
     ctx.fillStyle = '#062036';
     ctx.fillRect(0, 0, 256, 160);
     ctx.strokeStyle = 'rgba(56,189,248,0.18)';

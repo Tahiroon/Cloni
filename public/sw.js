@@ -1,7 +1,7 @@
 // THERASON CLINIC — Smart Browser-First Cache Service Worker
-const ASSET_CACHE = 'therason-clinic-assets-v3';
+const ASSET_CACHE = 'therason-clinic-assets-v5';
 const FONT_CACHE = 'therason-clinic-fonts-v1';
-const SHELL_CACHE = 'therason-clinic-shell-v2';
+const SHELL_CACHE = 'therason-clinic-shell-v4';
 
 const PRECACHE_ASSETS = [
   '/assets/aistudio/splash_cover.webp',

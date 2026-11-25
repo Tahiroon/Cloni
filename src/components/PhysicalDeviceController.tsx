@@ -166,7 +166,15 @@ const HardwareFader: React.FC<{
   );
 };
 
-export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> = ({
+const ANIMATED_TICK_SPRITES = new Set<string>([
+  'tens_unit',
+  'emg_biofeedback',
+  'cpm_device',
+  'balance_trainer',
+  'tilt_table',
+]);
+
+export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> = React.memo(({
   device,
   language,
   onUpdate,
@@ -177,6 +185,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
 }) => {
   const isAr = language === 'ar';
   const [tickPhase, setTickPhase] = useState(0);
+  const needsLiveTick = device.isRunning && ANIMATED_TICK_SPRITES.has(device.sprite);
 
   const params: DeviceConsoleParams = {
     ...getDefaultDeviceParams(device.sprite),
@@ -189,7 +198,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
       : getDefaultProbeAnchors(device.sprite);
 
   useEffect(() => {
-    if (!device.isRunning) return;
+    if (!needsLiveTick) return;
     let raf = 0;
     let last = performance.now();
     let lastEmit = last;
@@ -204,7 +213,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [device.isRunning]);
+  }, [needsLiveTick]);
 
   const patchParams = (patch: Partial<DeviceConsoleParams>) => {
     onUpdate({
@@ -1617,4 +1626,4 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
       </div>
     </div>
   );
-};
+});

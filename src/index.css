@@ -62,3 +62,18 @@
 .game-btn-gold:active {
   transform: translateY(1px) scale(0.98);
 }
+
+@keyframes therasonTipEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 5px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.therason-tip-enter {
+  animation: therasonTipEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}

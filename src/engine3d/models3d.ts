@@ -86,7 +86,7 @@ export interface ReceptionDeskRigMeta {
 export interface FountainRigMeta {
   arcs: THREE.Mesh[];
   ripples: THREE.Mesh[];
-  waterMat: THREE.MeshPhysicalMaterial;
+  waterMat: THREE.MeshStandardMaterial;
 }
 
 export interface MagnetoRigMeta {
@@ -385,29 +385,19 @@ export function buildClinicWorld3D(
           );
         }
 
-        float skyFbm(vec2 p) {
-          float v = 0.0;
-          float a = 0.52;
-          for (int i = 0; i < 3; i++) {
-            v += a * skyNoise2(p);
-            p = p * 2.08 + vec2(13.4, 7.1);
-            a *= 0.48;
-          }
-          return v;
-        }
-
         void main() {
           float h = clamp((vWorldPos.y + 4.0) / 55.0, 0.0, 1.0);
-          vec3 col = mix(uHorizonColor, uTopColor, pow(h, 0.65));
+          float hCurve = h * (1.38 - 0.38 * h);
+          vec3 col = mix(uHorizonColor, uTopColor, hCurve);
 
-          // Soft atmospheric horizon warm haze + daytime high-altitude cloud wisps
+          // Lightweight daytime high-altitude cloud wisps (single-octave fast blend)
           float dayMask = 1.0 - smoothstep(0.0, 0.55, uNightFactor);
-          if (dayMask > 0.01 && vLocalDir.y > 0.02) {
+          if (dayMask > 0.01 && vLocalDir.y > 0.03) {
             vec2 cloudUv = vLocalDir.xz / (vLocalDir.y + 0.18) * 1.15 + vec2(uTime * 0.0045, uTime * 0.0018);
-            float cNoise = skyFbm(cloudUv);
-            float cloudBand = smoothstep(0.52, 0.80, cNoise) * smoothstep(0.04, 0.28, vLocalDir.y) * (1.0 - smoothstep(0.55, 0.92, vLocalDir.y));
-            vec3 cloudCol = mix(vec3(0.95, 0.96, 0.98), vec3(1.0, 0.98, 0.94), 0.35);
-            col = mix(col, cloudCol, cloudBand * 0.38 * dayMask);
+            float cNoise = skyNoise2(cloudUv) * 0.68 + skyNoise2(cloudUv * 2.1 + vec2(7.3, 4.1)) * 0.32;
+            float cloudBand = smoothstep(0.50, 0.78, cNoise) * smoothstep(0.04, 0.28, vLocalDir.y) * (1.0 - smoothstep(0.55, 0.92, vLocalDir.y));
+            vec3 cloudCol = vec3(0.97, 0.97, 0.96);
+            col = mix(col, cloudCol, cloudBand * 0.36 * dayMask);
           }
 
           if (uNightFactor > 0.02 && vLocalDir.y > 0.04) {
@@ -426,11 +416,11 @@ export function buildClinicWorld3D(
       `,
     })
   );
-  const skyDome = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(140, 18, 12)), skyMat);
+  const skyDome = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(140, 16, 10)), skyMat);
   skyDome.position.set(14, 0, 12);
   root.add(skyDome);
 
-  // Calibrated Natural Daylight PBR Materials
+  // Calibrated Natural Daylight PBR Materials (analytical biome variation — zero per-pixel hash loops)
   const grassMat = trackMat(makeMat({ map: textures.grass, roughness: 0.96, metalness: 0.0 }));
   grassMat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
@@ -446,30 +436,24 @@ export function buildClinicWorld3D(
       .replace(
         '#include <common>',
         `#include <common>
-        varying vec2 vGrassWorldXZ;
-        float gHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float gNoise(vec2 p) {
-          vec2 i = floor(p); vec2 f = fract(p);
-          f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(gHash(i), gHash(i + vec2(1.0, 0.0)), f.x),
-                     mix(gHash(i + vec2(0.0, 1.0)), gHash(i + vec2(1.0, 1.0)), f.x), f.y);
-        }`
+        varying vec2 vGrassWorldXZ;`
       )
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        float nMacro = gNoise(vGrassWorldXZ * 0.14);
-        float nPatch = gNoise(vGrassWorldXZ * 0.52 + vec2(11.3, 4.7));
-        float mixFactor = nMacro * 0.62 + nPatch * 0.38;
-        float bareEarth = smoothstep(0.72, 0.88, nPatch * 0.72 + nMacro * 0.28);
+        vec2 gp = vGrassWorldXZ;
+        float w1 = sin(gp.x * 0.16 + sin(gp.y * 0.11) * 1.3) * cos(gp.y * 0.15 - gp.x * 0.07);
+        float w2 = sin(gp.x * 0.43 - gp.y * 0.37 + 1.4) * cos(gp.x * 0.29 + gp.y * 0.41);
+        float mixFactor = clamp(0.5 + w1 * 0.31 + w2 * 0.19, 0.0, 1.0);
+        float bareEarth = smoothstep(0.76, 0.94, 0.5 + w2 * 0.34 + w1 * 0.18);
         vec3 lushTone = vec3(0.76, 0.96, 0.68);
-        vec3 dryStraw = vec3(1.08, 1.02, 0.76);
-        vec3 deepShade = vec3(0.66, 0.80, 0.60);
+        vec3 dryStraw = vec3(1.06, 1.01, 0.78);
+        vec3 deepShade = vec3(0.68, 0.82, 0.62);
         vec3 soilColor = vec3(0.45, 0.38, 0.26);
-        vec3 tint = mix(deepShade, lushTone, smoothstep(0.2, 0.58, mixFactor));
-        tint = mix(tint, dryStraw, smoothstep(0.58, 0.92, mixFactor) * 0.64);
+        vec3 tint = mix(deepShade, lushTone, smoothstep(0.22, 0.58, mixFactor));
+        tint = mix(tint, dryStraw, smoothstep(0.58, 0.90, mixFactor) * 0.58);
         diffuseColor.rgb *= tint;
-        diffuseColor.rgb = mix(diffuseColor.rgb, soilColor * (0.86 + 0.28 * nPatch), bareEarth * 0.78);`
+        diffuseColor.rgb = mix(diffuseColor.rgb, soilColor, bareEarth * 0.68);`
       );
   };
   const asphaltMat = trackMat(
@@ -997,7 +981,7 @@ export function buildClinicWorld3D(
       paverMat
     );
     tread.position.set(cx + 0.008, st.topY - 0.018, 15.0);
-    tread.castShadow = true;
+    tread.castShadow = false;
     tread.receiveShadow = true;
 
     // Anti-slip brushed bronze safety nosing strip
@@ -1123,7 +1107,7 @@ export function buildClinicWorld3D(
   for (let rz = 3.55; rz <= 5.5; rz += 0.38) {
     const beam = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(2.2, 0.07, 0.09)), woodSlatMat);
     beam.position.set(24.05, 2.28, rz);
-    beam.castShadow = true;
+    beam.castShadow = false;
     root.add(beam);
   }
 
@@ -1143,7 +1127,7 @@ export function buildClinicWorld3D(
       woodSlatMat
     );
     rail.position.set(x, 0.49, z);
-    rail.castShadow = true;
+    rail.castShadow = false;
     root.add(rail);
   };
 
@@ -1891,7 +1875,7 @@ export function buildClinicWorld3D(
       woodSlatMat
     );
     body.position.set(axis === 'z' ? 0 : len / 2, 0.89, axis === 'z' ? len / 2 : 0);
-    body.castShadow = true;
+    body.castShadow = false;
 
     // Brushed stainless steel kickplate along bottom edge
     const kickPlate = new THREE.Mesh(
@@ -3863,20 +3847,19 @@ export function createCatalogMesh3D(
       const cupMat = makeMat({ color: 0xf8fafc, roughness: 0.48 });
       const cupRimMat = makeMat({ color: 0x0284c7, roughness: 0.35 });
       const capBlueMat = makeMat({ color: 0x0369a1, roughness: 0.36 });
-      const clearTubeMat = new THREE.MeshPhysicalMaterial({
+      const clearTubeMat = makeMat({
         color: 0xe0f2fe,
         roughness: 0.14,
         metalness: 0.04,
         transparent: true,
         opacity: 0.36,
       });
-      const jugGlassMat = new THREE.MeshPhysicalMaterial({
+      const jugGlassMat = makeMat({
         color: 0xbfe7fb,
-        roughness: 0.08,
-        metalness: 0.04,
+        roughness: 0.09,
+        metalness: 0.08,
         transparent: true,
         opacity: 0.48,
-        clearcoat: 0.9,
       });
       const innerWaterMat = makeMat({
         color: 0x38bdf8,
@@ -4891,7 +4874,7 @@ export function createCatalogMesh3D(
         0.225
       );
       cScr.userData.noCastShadow = true;
-      const iceTankMat = new THREE.MeshPhysicalMaterial({
+      const iceTankMat = makeMat({
         color: 0x7dd3fc,
         roughness: 0.22,
         transparent: true,
@@ -6233,15 +6216,14 @@ export function createCatalogMesh3D(
       basinRim.userData.sharedGlbMat = true;
       inner.add(basinRim);
 
-      const waterPoolMat = new THREE.MeshPhysicalMaterial({
+      const waterPoolMat = makeMat({
         color: 0x38bdf8,
         emissive: 0x0284c7,
         emissiveIntensity: 0.12,
-        roughness: 0.06,
-        metalness: 0.06,
+        roughness: 0.08,
+        metalness: 0.1,
         transparent: true,
         opacity: 0.84,
-        clearcoat: 1.0,
         normalMap: textures.waterNormal,
         normalScale: new THREE.Vector2(0.55, 0.55),
       });

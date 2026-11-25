@@ -1,7 +1,6 @@
 import { CATALOG_ITEMS } from '../data/catalog';
 import {
   cacheStaticAssetUrl,
-  getCachedAssetBlobUrl,
   glbRegistry,
   openAssetCache,
 } from '../engine3d/glbRegistry';
@@ -24,74 +23,60 @@ interface SmartLoadingTip {
 
 export const GAME_LOADING_TIPS: SmartLoadingTip[] = [
   {
-    id: 'tip_proper_devices',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr: 'استخدم الأجهزة بشكل صحيح لتحقيق أفضل نتائج العلاج.',
-    textEn: 'Use clinical devices accurately to achieve the best recovery results.',
+    id: 'tip_red_flags',
+    categoryAr: 'نصيحة سريرية',
+    categoryEn: 'Clinical Tip',
+    textAr: 'افحص علامات الخطر أولاً قبل اختيار أي جهاز لحماية المريض ورفع التقييم.',
+    textEn: 'Screen for Red Flags before applying any modality to keep patients safe.',
   },
   {
     id: 'tip_fpp_proximity',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'اقترب من أي جهاز في الغرفة لالتقاطه، ثم احمله بجانب سرير المريض لتبدأ الضبط والعلاج.',
-    textEn:
-      'Walk close to any modality cart to pick it up, then place it beside the bed to calibrate treatment.',
+    categoryAr: 'طريقة اللعب',
+    categoryEn: 'Controls',
+    textAr: 'اقترب من أي جهاز لالتقاطه ثم ضعه بجانب السرير لضبط الجرعة وتشغيله.',
+    textEn: 'Walk near a modality cart to grab it, then place it bedside to configure.',
   },
   {
     id: 'tip_ir_distance',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'المسافة المثالية لمصباح الأشعة تحت الحمراء (IR) هي 45 إلى 60 سم بشكل عمودي لتدفئة آمنة وفعّالة.',
-    textEn:
-      'Keep the Infrared Lamp (IR) at 45–60 cm perpendicular to the target area for safe, effective warmth.',
-  },
-  {
-    id: 'tip_red_flags',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'افحص علامات الخطر (Red Flags) أولاً قبل اختيار التمارين أو الأجهزة لحماية المريض ورفع تقييم عيادتك.',
-    textEn:
-      'Always screen for Red Flags before applying modalities to keep patients safe and boost your clinic rating.',
+    categoryAr: 'الأشعة الحرارية',
+    categoryEn: 'Infrared Lamp',
+    textAr: 'ثبّت مصباح الأشعة على مسافة 45 إلى 60 سم عمودياً لتدفئة آمنة وفعّالة.',
+    textEn: 'Keep the Infrared Lamp 45–60 cm perpendicular for safe, effective warmth.',
   },
   {
     id: 'tip_tens_vs_ifc',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'تيار التداخل (IFC) يصل للأنسجة العميقة براحة أكبر مقارنة بـ TENS التقليدي في آلام الظهر والركبة.',
-    textEn:
-      'Interferential Current (IFC) reaches deeper tissues more comfortably than conventional TENS.',
+    categoryAr: 'العلاج الكهربائي',
+    categoryEn: 'Electrotherapy',
+    textAr: 'تيار التداخل يصل للأنسجة العميقة براحة أكبر في آلام الظهر والركبة.',
+    textEn: 'Interferential Current reaches deeper tissues comfortably for back and knee pain.',
   },
   {
     id: 'tip_ultrasound_coupling',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'استخدم تردد 1 MHz للأنسجة العميقة و3 MHz للسطحية مع تحريك المجس باستمرار فوق الجل الموصل.',
-    textEn:
-      'Use 1 MHz for deep targets and 3 MHz for superficial tissue while gliding the head continuously.',
+    categoryAr: 'الموجات فوق الصوتية',
+    categoryEn: 'Ultrasound',
+    textAr: 'حرّك المجس باستمرار فوق الجل واختر 1 MHz للعمق أو 3 MHz للسطحي.',
+    textEn: 'Glide continuously over gel: pick 1 MHz for deep or 3 MHz for superficial.',
   },
   {
     id: 'tip_posture_sync',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'اختر وضعية المريض المناسبة لكل جهاز: الاستلقاء لجهاز حركة الركبة (CPM) والوقوف لاختبارات التوازن.',
-    textEn:
-      'Match posture to the device: Supine for knee CPM mobilization and Standing beside the bed for balance.',
+    categoryAr: 'وضعية المريض',
+    categoryEn: 'Patient Posture',
+    textAr: 'بدّل وضعية المريض بين الاستلقاء والجلوس والوقوف بما يناسب كل جهاز.',
+    textEn: 'Match patient posture between supine, sitting, and standing per modality.',
   },
   {
     id: 'tip_clinic_workflow',
-    categoryAr: 'نصيحة',
-    categoryEn: 'Tip',
-    textAr:
-      'وسّع الأجنحة التخصصية وأضف لمسات الديكور والنباتات والألواح الشمسية لتجذب المزيد من المرضى يومياً.',
-    textEn:
-      'Expand specialty wings and add plants, decor, and solar panels to welcome more patients every day.',
+    categoryAr: 'تطوير العيادة',
+    categoryEn: 'Clinic Growth',
+    textAr: 'افتح أجنحة جديدة وأضف الديكور والألواح الشمسية لزيادة مرضاك يومياً.',
+    textEn: 'Unlock new wings and add decor or solar panels to welcome more patients.',
+  },
+  {
+    id: 'tip_proper_devices',
+    categoryAr: 'الدقة العلاجية',
+    categoryEn: 'Precision',
+    textAr: 'اضبط الشدة والوقت بدقة وفق ملف المريض لتحقيق أعلى نقاط الجلسة.',
+    textEn: 'Tailor intensity and timer to the patient chart for top session scores.',
   },
 ];
 
@@ -133,34 +118,12 @@ export async function waitForWebFonts(timeoutMs = 500): Promise<void> {
 }
 
 /**
- * Resolves a browser-cached Blob URL for the splash artwork when available in CacheStorage,
- * or fetches & persists it silently in CacheStorage for instant future visits.
+ * Silently ensures splash artwork is cached in CacheStorage after initial paint
+ * without allocating unused Blob URLs or blocking frame-0 rasterization.
  */
-export async function resolveAndCacheSplashArt(src: string): Promise<string | null> {
-  const cachedBlobUrl = await getCachedAssetBlobUrl(src);
-  if (cachedBlobUrl) return cachedBlobUrl;
+export function ensureSplashArtCached(src: string): void {
   const mime = src.endsWith('.webp') ? 'image/webp' : 'image/png';
   void cacheStaticAssetUrl(src, mime);
-  return null;
-}
-
-export async function decodeImageAsset(src: string, timeoutMs = 500): Promise<void> {
-  if (typeof Image === 'undefined') return;
-  await Promise.race([
-    new Promise<void>((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        if (typeof img.decode === 'function') {
-          img.decode().catch(() => undefined).finally(resolve);
-        } else {
-          resolve();
-        }
-      };
-      img.onerror = () => resolve();
-      img.src = src;
-    }),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
 }
 
 function isSoftwareRenderer(): boolean {

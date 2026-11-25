@@ -957,6 +957,12 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const isMobileGpu =
       /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+    const hwCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 8 : 8;
+    const devMem =
+      typeof navigator !== 'undefined'
+        ? ((navigator as Navigator & { deviceMemory?: number }).deviceMemory || 8)
+        : 8;
+    const isLowEndDevice = isMobileGpu || hwCores <= 4 || devMem <= 4;
     const renderer = new THREE.WebGLRenderer({
       antialias: !isSoftwareGl,
       powerPreference: 'high-performance',
@@ -971,13 +977,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const maxRbSize = Number(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)) || maxTexSize;
     const maxSurfaceSize = Math.max(512, Math.min(maxTexSize, maxRbSize));
 
+    let adaptiveDprScale = 1.0;
     const getTargetDpr = (w: number, h: number) => {
       if (isSoftwareGl) return 1;
       const rawDpr = window.devicePixelRatio || 1;
       const area = Math.max(1, w * h);
-      const desktopCap = area > 1_250_000 ? 1.25 : 1.45;
-      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.1) : Math.min(rawDpr, desktopCap);
-      return Math.min(baseDpr, maxSurfaceSize / Math.max(1, w, h));
+      const desktopCap = isLowEndDevice ? 1.15 : area > 1_250_000 ? 1.2 : 1.35;
+      const baseDpr = isMobileGpu ? Math.min(rawDpr, 1.05) : Math.min(rawDpr, desktopCap);
+      const scaled = Math.max(0.82, baseDpr * adaptiveDprScale);
+      return Math.min(scaled, maxSurfaceSize / Math.max(1, w, h));
     };
     const dpr = getTargetDpr(initW, initH);
     renderer.setPixelRatio(dpr);
@@ -995,7 +1003,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xd2e0ec, 55, 95);
     scene.environmentIntensity = 0.62;
 
     let isContextLost = gl.isContextLost();
@@ -1024,8 +1031,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     sunLight.target.position.set(13, 0, 12);
     scene.add(sunLight.target);
     if (!isSoftwareGl) {
-      const shadowRes =
-        !isMobileGpu && maxTexSize >= 2048 ? 1280 : Math.min(1024, maxTexSize);
+      const shadowRes = isMobileGpu
+        ? Math.min(768, maxTexSize)
+        : isLowEndDevice
+          ? Math.min(1024, maxTexSize)
+          : maxTexSize >= 2048
+            ? 1280
+            : Math.min(1024, maxTexSize);
       sunLight.castShadow = true;
       sunLight.shadow.mapSize.set(shadowRes, shadowRes);
       sunLight.shadow.radius = 1.6;
@@ -1052,9 +1064,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     let actorsOrEquipMoving = false;
 
     const maxAniso = renderer.capabilities.getMaxAnisotropy();
-    const effectiveAniso = isMobileGpu ? Math.min(2, maxAniso) : maxAniso;
+    const effectiveAniso = isMobileGpu ? Math.min(2, maxAniso) : Math.min(4, maxAniso);
     const textures: TextureBundle = createTextureBundle(effectiveAniso, {
-      mobileOptimized: isMobileGpu,
+      mobileOptimized: isMobileGpu || isLowEndDevice,
     });
     const pbrCharMaps = {
       contactShadowTex: textures.contactShadow,
@@ -1073,7 +1085,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     scene.add(camera);
     scene.add(worldLayer, itemsLayer, draftLayer, actorsLayer, deployedClinicEquipLayer, lightsLayer);
 
-    const fppBackdrop = createFppRoomBackdrop3D(textures, maxAniso, {
+    const fppBackdrop = createFppRoomBackdrop3D(textures, effectiveAniso, {
       enableShadows: !isSoftwareGl,
     });
     const fppEquipLayer = new THREE.Group();
@@ -2507,7 +2519,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
     // Pre-allocated PointLight Pool (wall-wash & lamp halos illuminate secondary fixtures at 0 shader cost)
     const SMART_LIGHT_POOL_SIZE = isSoftwareGl ? 2 : isMobileGpu ? 2 : 4;
-    const shadowIntervalMs = !isMobileGpu ? 72 : 140;
+    const baseShadowIntervalMs = !isMobileGpu && !isLowEndDevice ? 85 : 150;
+    let shadowIntervalMs = baseShadowIntervalMs;
     const smartLightPool: THREE.PointLight[] = [];
     for (let i = 0; i < SMART_LIGHT_POOL_SIZE; i++) {
       const pl = new THREE.PointLight(0xffdfb0, 0, 14, 1.0);
@@ -2671,9 +2684,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     const _dayHor = new THREE.Color(0xd2e0ec);
     const _nightHor = new THREE.Color(0x1a325c);
     const _duskHor = new THREE.Color(0xe8a882);
-    const _dayFog = new THREE.Color(0xd2e0ec);
-    const _nightFog = new THREE.Color(0x132648);
-    const _duskFog = new THREE.Color(0xdcc2b4);
     const _daySun = new THREE.Color(0xfff1dc);
     const _moonSun = new THREE.Color(0xa8c8ff);
     const _duskSun = new THREE.Color(0xffb478);
@@ -2796,11 +2806,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         scene.environmentIntensity = THREE.MathUtils.lerp(0.62, 0.30, nightBlend);
         renderer.toneMappingExposure = THREE.MathUtils.lerp(0.98, 1.08, nightBlend);
-
-        const fog = scene.fog as THREE.Fog;
-        fog.color.copy(_dayFog).lerp(_nightFog, nightBlend).lerp(_duskFog, duskFactor * 0.35);
-        fog.near = THREE.MathUtils.lerp(55, 58, nightBlend);
-        fog.far = THREE.MathUtils.lerp(!isMobileGpu ? 108 : 95, 114, nightBlend);
 
         if (worldHandle) {
           worldHandle.skyUniforms.uTopColor.value.copy(_dayTop).lerp(_nightTop, nightBlend);
@@ -7735,6 +7740,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     window.addEventListener('pageshow', handlePageResume);
     window.addEventListener('focus', handlePageResume);
 
+    let perfAvgDt = 0.016;
+    let perfWindowStartMs = 0;
+
     const tick = () => {
       if (disposed) return;
       if (document.hidden) {
@@ -7760,8 +7768,28 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         wasDocHidden = false;
         refreshSceneGpuResources(false, true);
       }
-      const dt = Math.min(0.08, Math.max(0.001, (nowMs - lastMs) / 1000));
+      const rawDt = (nowMs - lastMs) / 1000;
+      const dt = Math.min(0.08, Math.max(0.001, rawDt));
       lastMs = nowMs;
+
+      // Adaptive performance governor: gracefully eases DPR & shadow refresh rate under sustained GPU pressure
+      if (!isSoftwareGl && rawDt > 0.004 && rawDt < 0.15) {
+        perfAvgDt = perfAvgDt * 0.92 + rawDt * 0.08;
+        if (nowMs - perfWindowStartMs >= 1600) {
+          perfWindowStartMs = nowMs;
+          if (perfAvgDt > 0.028 && adaptiveDprScale > 0.85) {
+            adaptiveDprScale = 0.85;
+            shadowIntervalMs = Math.round(baseShadowIntervalMs * 1.65);
+            renderer.setPixelRatio(getTargetDpr(containerW, containerH));
+            renderer.setSize(containerW, containerH, false);
+          } else if (perfAvgDt < 0.017 && adaptiveDprScale < 1.0) {
+            adaptiveDprScale = 1.0;
+            shadowIntervalMs = baseShadowIntervalMs;
+            renderer.setPixelRatio(getTargetDpr(containerW, containerH));
+            renderer.setSize(containerW, containerH, false);
+          }
+        }
+      }
 
       const cs = camStateRef.current;
       const fpp = fppCamRef.current;
@@ -9098,9 +9126,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           for (const entry of staffRigs.values()) {
             entry.rig.root.visible = false;
           }
-          const fog = scene.fog as THREE.Fog;
-          fog.near = 25;
-          fog.far = 65;
           sunLight.visible = false;
           hemi.intensity = 0.44;
           scene.environmentIntensity = 0.64;
@@ -11104,7 +11129,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
       {/* Subtle Edit-Mode Guide when no item is grabbed */}
       {editMode && !placementDraft && (
-        <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-20 bg-slate-900/94 text-slate-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg whitespace-nowrap max-w-[92vw] truncate">
+        <div
+          dir={language === 'ar' ? 'rtl' : 'ltr'}
+          className="therason-tip-enter pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom,0px)+5.5rem)] md:bottom-[5.75rem] left-1/2 -translate-x-1/2 z-20 bg-slate-950/92 text-slate-100 text-xs font-bold px-4 py-2 rounded-2xl border border-sky-300/20 shadow-xl whitespace-nowrap max-w-[92vw] truncate"
+        >
           {language === 'ar'
             ? 'اسحب أي عنصر لنقله مباشرة أو اضغط عليه للتعديل'
             : 'Drag any item to move or tap to edit'}

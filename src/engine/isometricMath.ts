@@ -1,10 +1,10 @@
 import { ClinicRoom, PlacedItem } from '../types/clinic';
 
 export const CLINIC_FLOOR_ELEV = 0.26;
-export const COURTYARD_WALKWAY_TOP = 0.065;
-export const CLINIC_FLOOR_TOP = 0.085 + CLINIC_FLOOR_ELEV; // 0.345
+const COURTYARD_WALKWAY_TOP = 0.065;
+const CLINIC_FLOOR_TOP = 0.085 + CLINIC_FLOOR_ELEV; // 0.345
 
-export interface SurfaceElevation {
+interface SurfaceElevation {
   floorY: number;
   actorY: number;
   onStairs: boolean;
@@ -630,7 +630,7 @@ export const RECEPTION_CHAIR_LOCAL_X = -0.23;
 export const RECEPTION_CHAIR_LOCAL_Z = -0.34;
 const RECEPTION_CHAIR_SEAT_HEIGHT = 0.37;
 
-export interface ReceptionDeskPose {
+interface ReceptionDeskPose {
   seatWorldX: number;
   seatWorldZ: number;
   seatTileX: number;
@@ -923,7 +923,7 @@ const LYING_STATION_SPRITES = new Set([
   'tilt_table',
 ]);
 
-export interface TreatmentBedPose {
+interface TreatmentBedPose {
   edgeSign: 1 | -1;
   edgeX: number;
   edgeZ: number;

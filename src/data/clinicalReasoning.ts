@@ -12,7 +12,7 @@ export interface HistoryQuestionItem {
   aEn: string;
 }
 
-export interface HistoryCategoryMeta {
+interface HistoryCategoryMeta {
   id: HistoryCategory;
   labelAr: string;
   labelEn: string;
@@ -36,7 +36,7 @@ export type ModalityId =
   | 'hydro'
   | 'exercise';
 
-export interface PrescriptionModalityOption {
+interface PrescriptionModalityOption {
   id: ModalityId;
   nameEn: string;
   subAr: string;
@@ -56,7 +56,7 @@ export const PRESCRIPTION_MODALITIES: PrescriptionModalityOption[] = [
 
 export type HomePrecautionId = 'hep' | 'ergonomics' | 'activity_mod' | 'urgent_ref';
 
-export interface HomePrecautionOption {
+interface HomePrecautionOption {
   id: HomePrecautionId;
   nameEn: string;
   labelAr: string;
