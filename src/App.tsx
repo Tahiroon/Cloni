@@ -190,11 +190,18 @@ const YOUTH_HAIR_TONES = ['#17100c', '#241712', '#100c0a', '#2e1d15'];
 const SENIOR_HAIR_TONES = ['#6b7280', '#9ca3af', '#4b5563', '#858a91'];
 
 const EMPTY_REMOVED_TREES: string[] = [];
-const BED_STATION_SPRITES = new Set([
+const ASSIGNABLE_STATION_SPRITES = new Set([
   'treatment_bed',
   'traction_table',
   'magnetotherapy',
   'tilt_table',
+  'exercise_mat',
+  'exercise_bike',
+  'treadmill',
+  'parallel_bars',
+  'balance_trainer',
+  'wall_bars',
+  'multi_gym_pulley',
 ]);
 
 const TREE_SPECIES_LABELS: Record<WorldTreeSpecies, { ar: string; en: string }> = {
@@ -487,6 +494,10 @@ export default function App() {
   const [speakingPatientId, setSpeakingPatientId] = useState<string | null>(null);
   const [waitingQueueOpen, setWaitingQueueOpen] = useState(false);
   const [selectedWaitingPatientId, setSelectedWaitingPatientId] = useState<string | null>(null);
+  const [selectedTreatmentWaitPatientId, setSelectedTreatmentWaitPatientId] = useState<string | null>(
+    null
+  );
+  const [pendingStationIdForPick, setPendingStationIdForPick] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [placementDraft, setPlacementDraft] = useState<PlacementDraft | null>(null);
   const [orbitStep, setOrbitStep] = useState(0);
@@ -706,61 +717,6 @@ export default function App() {
     }));
   }, []);
 
-  // Find available treatment bed in unlocked rooms, strictly respecting bed capacity
-  const findFreeStation = useCallback(
-    (currentPatients: PatientEntity[], patientSpecialty?: RoomSpecialty): PlacedItem | null => {
-      const occupiedIds = new Set(
-        currentPatients
-          .filter((p) => p.state !== 'treated_leaving' && p.assignedStationId)
-          .map((p) => p.assignedStationId!)
-      );
-
-      const bedStations = clinic.placedItems.filter((item) => {
-        const cat = catalogById.get(item.catalogId);
-        if (!cat?.isTreatmentStation || !BED_STATION_SPRITES.has(cat.sprite)) return false;
-        const room = clinic.rooms.find((r) => r.id === item.roomId);
-        return (!room || room.unlocked) && !occupiedIds.has(item.instanceId);
-      });
-
-      if (bedStations.length === 0) return null;
-
-      if (patientSpecialty) {
-        // 1. Prioritize specialized treatment couches/devices matching the patient's specialty
-        const specializedMatches = bedStations.filter((item) => {
-          const cat = catalogById.get(item.catalogId);
-          return (
-            cat?.sprite !== 'treatment_bed' &&
-            cat?.stationSpecialty === patientSpecialty
-          );
-        });
-        if (specializedMatches.length > 0) {
-          return specializedMatches[Math.floor(Math.random() * specializedMatches.length)];
-        }
-
-        // 2. Next prefer beds inside a matching specialty room or directly matching this specialty
-        const directMatches = bedStations.filter((item) => {
-          const cat = catalogById.get(item.catalogId);
-          const room = clinic.rooms.find((r) => r.id === item.roomId);
-          return (
-            cat?.stationSpecialty === patientSpecialty ||
-            room?.specialty === patientSpecialty
-          );
-        });
-        if (directMatches.length > 0) {
-          return directMatches[Math.floor(Math.random() * directMatches.length)];
-        }
-      }
-
-      // 3. Otherwise prefer regular treatment beds when available, falling back to any free bed-type station
-      const regularBeds = bedStations.filter(
-        (item) => catalogById.get(item.catalogId)?.sprite === 'treatment_bed'
-      );
-      const pool = regularBeds.length > 0 ? regularBeds : bedStations;
-      return pool[Math.floor(Math.random() * pool.length)];
-    },
-    [clinic.placedItems, clinic.rooms, catalogById]
-  );
-
   // Pick a walkable reception desk check-in spot in front of the desk (supports any rotation & sub-tile position)
   const getReceptionCheckinSpot = useCallback(
     (currentPatients: PatientEntity[]) => {
@@ -889,7 +845,7 @@ export default function App() {
     if (!recRoom) return [];
 
     return buildWaitSeatSlots(clinic.placedItems, clinic.rooms, obstacleBoxes).filter((s) => {
-      if (s.isOutdoor || s.catalogId === 'park_bench') return false;
+      if (s.isOutdoor || s.catalogId === 'park_bench' || s.catalogId === 'doctor_stool') return false;
       const inReception =
         s.seatTileX >= recRoom.minX - 0.15 &&
         s.seatTileX <= recRoom.maxX + 0.45 &&
@@ -903,6 +859,67 @@ export default function App() {
       return isTileWalkable(s.approachTileX, s.approachTileY, 0.16, obstacleBoxes, s.itemId);
     });
   }, [clinic.placedItems, clinic.rooms, obstacleBoxes]);
+
+  // Build indoor chair/stool slots inside unlocked treatment wings (patients sit here if a chair is placed!)
+  const getTreatmentWaitSeatSlots = useCallback((): Array<WaitSeatSlot & { isPrimaryBay: boolean }> => {
+    const unlockedTreatRooms = clinic.rooms.filter(
+      (r) => r.unlocked && r.specialty !== 'reception'
+    );
+    if (unlockedTreatRooms.length === 0) return [];
+
+    const out: Array<WaitSeatSlot & { isPrimaryBay: boolean }> = [];
+    for (const s of buildWaitSeatSlots(clinic.placedItems, clinic.rooms, obstacleBoxes)) {
+      if (s.isOutdoor || s.catalogId === 'park_bench') continue;
+      const room = unlockedTreatRooms.find(
+        (r) =>
+          s.seatTileX >= r.minX - 0.15 &&
+          s.seatTileX <= r.maxX + 0.45 &&
+          s.seatTileY >= r.minY - 0.15 &&
+          s.seatTileY <= r.maxY + 0.45 &&
+          s.approachTileX >= r.minX - 0.35 &&
+          s.approachTileX <= r.maxX + 0.35 &&
+          s.approachTileY >= r.minY - 0.35 &&
+          s.approachTileY <= r.maxY + 0.35
+      );
+      if (!room) continue;
+      if (!isTileWalkable(s.approachTileX, s.approachTileY, 0.16, obstacleBoxes, s.itemId)) continue;
+      out.push({
+        ...s,
+        isPrimaryBay: room.id === 'room_bay_1',
+      });
+    }
+    return out;
+  }, [clinic.placedItems, clinic.rooms, obstacleBoxes]);
+
+  const getFreeTreatmentWaitSeats = useCallback(
+    (
+      fromX: number,
+      fromY: number,
+      currentPatients: PatientEntity[],
+      excludePatientId?: string
+    ): WaitSeatSlot[] => {
+      const seats = getTreatmentWaitSeatSlots();
+      if (seats.length === 0) return [];
+
+      const claimedKeys = new Set<string>();
+      for (const p of currentPatients) {
+        if (p.id === excludePatientId) continue;
+        if (p.state !== 'walking_to_treatment_wait' && p.state !== 'waiting_in_treatment') continue;
+        if (p.isSeatedWait === false) continue;
+        if (p.waitingSeatKey) claimedKeys.add(p.waitingSeatKey);
+      }
+
+      const freeSeats = seats.filter((s) => !claimedKeys.has(s.seatKey));
+      freeSeats.sort((a, b) => {
+        if (a.isPrimaryBay !== b.isPrimaryBay) return a.isPrimaryBay ? -1 : 1;
+        const da = Math.hypot(a.approachTileX - fromX, a.approachTileY - fromY);
+        const db = Math.hypot(b.approachTileX - fromX, b.approachTileY - fromY);
+        return da - db;
+      });
+      return freeSeats;
+    },
+    [getTreatmentWaitSeatSlots]
+  );
 
   // Pick free reception waiting seats sorted by distance (excluding outdoor benches & treatment wings)
   const getFreeReceptionWaitSeats = useCallback(
@@ -1065,6 +1082,79 @@ export default function App() {
       };
     },
     [clinic.rooms, obstacleBoxes, getReceptionHubCoords, getReceptionWaitSeatSlots]
+  );
+
+  // Pick a clean open standing spot inside the primary treatment wing when no chair is placed there
+  const findTreatmentStandingSpot = useCallback(
+    (currentPatients: PatientEntity[], excludePatientId?: string) => {
+      const bayRoom =
+        clinic.rooms.find((r) => r.unlocked && r.id === 'room_bay_1') ||
+        clinic.rooms.find((r) => r.unlocked && r.specialty !== 'reception');
+      const minX = (bayRoom?.minX ?? 2) + 1.05;
+      const maxX = (bayRoom?.maxX ?? 11) - 0.95;
+      const minY = (bayRoom?.minY ?? 10) + 1.15;
+      const maxY = (bayRoom?.maxY ?? 21) - 0.95;
+      const seatSlots = getTreatmentWaitSeatSlots();
+
+      const stationCenters: Array<{ x: number; y: number }> = [];
+      for (const it of clinic.placedItems) {
+        const cat = catalogById.get(it.catalogId);
+        if (!cat?.isTreatmentStation || !ASSIGNABLE_STATION_SPRITES.has(cat.sprite)) continue;
+        const w = it.rotation % 2 === 0 ? cat.width : cat.depth;
+        const d = it.rotation % 2 === 0 ? cat.depth : cat.width;
+        stationCenters.push({ x: it.gridX + (w - 1) * 0.5, y: it.gridY + (d - 1) * 0.5 });
+      }
+
+      const rawCandidates: Array<{ x: number; y: number; score: number }> = [];
+      for (let x = minX; x <= maxX; x += 0.65) {
+        for (let y = minY; y <= maxY; y += 0.65) {
+          // Keep doorway thresholds completely clear (door_reception_bay x~11.5,y~14..15 & door_bay_west x~6..7,y~9.5)
+          if (Math.hypot(x - 11.5, y - 14.2) < 1.25) continue;
+          if (Math.hypot(x - 6.2, y - 9.5) < 1.25) continue;
+          if (seatSlots.some((s) => Math.hypot(x - s.approachTileX, y - s.approachTileY) < 0.68)) {
+            continue;
+          }
+          if (!isTileWalkable(x, y, 0.24, obstacleBoxes)) continue;
+
+          // Prefer an open staging spot near the inner east/center of the treatment hall away from active beds
+          let minStationDist = Infinity;
+          for (const sc of stationCenters) {
+            const sd = Math.hypot(x - sc.x, y - sc.y);
+            if (sd < minStationDist) minStationDist = sd;
+          }
+          const nearDoorBonus = Math.hypot(x - 8.6, y - 15.2) * 0.35;
+          const stationCrowdPenalty = minStationDist < 1.35 ? (1.35 - minStationDist) * 3.0 : 0;
+          rawCandidates.push({
+            x,
+            y,
+            score: nearDoorBonus + stationCrowdPenalty,
+          });
+        }
+      }
+
+      const pickWithSeparation = (minSep: number) => {
+        const free = rawCandidates.filter(
+          (cand) =>
+            !currentPatients.some((pt) => {
+              if (pt.id === excludePatientId || pt.state === 'treated_leaving') return false;
+              const distNow = Math.hypot(pt.gridX - cand.x, pt.gridY - cand.y);
+              const distTarget = Math.hypot(pt.targetX - cand.x, pt.targetY - cand.y);
+              return distNow < minSep || distTarget < minSep;
+            })
+        );
+        if (free.length === 0) return null;
+        const sorted = [...free].sort((a, b) => a.score - b.score);
+        const top = sorted.slice(0, Math.min(4, sorted.length));
+        return top[Math.floor(Math.random() * top.length)];
+      };
+
+      const chosen = pickWithSeparation(0.75) || pickWithSeparation(0.55);
+      if (chosen) {
+        return { x: chosen.x, y: chosen.y };
+      }
+      return findNearestWalkableTile(8.6, 15.2, 0.23, obstacleBoxes);
+    },
+    [clinic.rooms, clinic.placedItems, catalogById, obstacleBoxes, getTreatmentWaitSeatSlots]
   );
 
   useEffect(() => {
@@ -1462,6 +1552,27 @@ export default function App() {
     [getFreeReceptionWaitSeats, buildPathToWaitSeat]
   );
 
+  // Pick the nearest free chair inside an unlocked treatment wing with a verified indoor path
+  const pickReachableFreeTreatmentSeat = useCallback(
+    (
+      patient: PatientEntity,
+      fromX: number,
+      fromY: number,
+      currentPatients: PatientEntity[],
+      excludePatientId?: string
+    ): { seat: WaitSeatSlot; path: Array<{ x: number; y: number }> } | null => {
+      const candidates = getFreeTreatmentWaitSeats(fromX, fromY, currentPatients, excludePatientId);
+      for (const seat of candidates) {
+        const path = buildPathToWaitSeat(patient, seat);
+        if (path.length > 0) {
+          return { seat, path };
+        }
+      }
+      return null;
+    },
+    [getFreeTreatmentWaitSeats, buildPathToWaitSeat]
+  );
+
   const walkableLayoutSig = useMemo(() => {
     const rmSig = clinic.rooms.map((r) => (r.unlocked ? r.id : '')).join(',');
     const itemSig = clinic.placedItems
@@ -1482,6 +1593,8 @@ export default function App() {
       if (prev.length === 0) return prev;
       const receptionSeats = getReceptionWaitSeatSlots();
       const seatByKey = new Map(receptionSeats.map((s) => [s.seatKey, s]));
+      const treatmentSeats = getTreatmentWaitSeatSlots();
+      const treatmentSeatByKey = new Map(treatmentSeats.map((s) => [s.seatKey, s]));
       let anyChanged = false;
       const updatedList: PatientEntity[] = [];
 
@@ -1716,6 +1829,160 @@ export default function App() {
           } else {
             updatedList.push(p);
           }
+        } else if (
+          (p.state === 'walking_to_treatment_wait' || p.state === 'waiting_in_treatment') &&
+          p.isSeatedWait !== false
+        ) {
+          const matchedSeat = p.waitingSeatKey ? treatmentSeatByKey.get(p.waitingSeatKey) : undefined;
+          const stillSameSpot =
+            matchedSeat &&
+            Math.hypot(matchedSeat.seatTileX - p.targetX, matchedSeat.seatTileY - p.targetY) < 0.08;
+
+          if (stillSameSpot && matchedSeat) {
+            if (p.state === 'walking_to_treatment_wait') {
+              const up = { ...p };
+              const nextSeatPath = buildPathToWaitSeat(up, matchedSeat);
+              if (nextSeatPath.length > 0) {
+                up.path = nextSeatPath;
+                up.blockedTicks = 0;
+                anyChanged = true;
+              } else {
+                const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
+                const alt = pickReachableFreeTreatmentSeat(
+                  up,
+                  up.gridX,
+                  up.gridY,
+                  claimedSoFar,
+                  up.id
+                );
+                if (alt) {
+                  up.isSeatedWait = true;
+                  up.waitingSeatKey = alt.seat.seatKey;
+                  up.seatHeight = alt.seat.seatHeight;
+                  up.targetX = alt.seat.seatTileX;
+                  up.targetY = alt.seat.seatTileY;
+                  up.seatApproachX = alt.seat.approachTileX;
+                  up.seatApproachY = alt.seat.approachTileY;
+                  up.seatOffsetX = 0;
+                  up.seatOffsetZ = 0;
+                  up.seatFacingRad = alt.seat.facingRad;
+                  up.path = alt.path;
+                } else {
+                  const stand = findTreatmentStandingSpot(claimedSoFar, up.id);
+                  up.isSeatedWait = false;
+                  up.waitingSeatKey = undefined;
+                  up.seatHeight = undefined;
+                  up.seatApproachX = undefined;
+                  up.seatApproachY = undefined;
+                  up.seatOffsetX = undefined;
+                  up.seatOffsetZ = undefined;
+                  up.seatFacingRad = undefined;
+                  up.targetX = stand.x;
+                  up.targetY = stand.y;
+                  up.headingRad = -Math.PI / 2;
+                  up.path = buildPatientPath(up, stand.x, stand.y);
+                }
+                up.blockedTicks = 0;
+                anyChanged = true;
+              }
+              updatedList.push(up);
+            } else {
+              updatedList.push(p);
+            }
+          } else {
+            const up = { ...p };
+            const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
+            const clearPos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
+            up.gridX = clearPos.x;
+            up.gridY = clearPos.y;
+            const reachable = pickReachableFreeTreatmentSeat(
+              up,
+              up.gridX,
+              up.gridY,
+              claimedSoFar,
+              up.id
+            );
+            up.state = 'walking_to_treatment_wait';
+            up.blockedTicks = 0;
+            if (reachable) {
+              up.isSeatedWait = true;
+              up.waitingSeatKey = reachable.seat.seatKey;
+              up.seatHeight = reachable.seat.seatHeight;
+              up.targetX = reachable.seat.seatTileX;
+              up.targetY = reachable.seat.seatTileY;
+              up.seatApproachX = reachable.seat.approachTileX;
+              up.seatApproachY = reachable.seat.approachTileY;
+              up.seatOffsetX = 0;
+              up.seatOffsetZ = 0;
+              up.seatFacingRad = reachable.seat.facingRad;
+              up.path = reachable.path;
+            } else {
+              const stand = findTreatmentStandingSpot(claimedSoFar, up.id);
+              up.isSeatedWait = false;
+              up.waitingSeatKey = undefined;
+              up.seatHeight = undefined;
+              up.seatApproachX = undefined;
+              up.seatApproachY = undefined;
+              up.seatOffsetX = undefined;
+              up.seatOffsetZ = undefined;
+              up.seatFacingRad = undefined;
+              up.targetX = stand.x;
+              up.targetY = stand.y;
+              up.headingRad = -Math.PI / 2;
+              up.path = buildPatientPath(up, stand.x, stand.y);
+            }
+            anyChanged = true;
+            updatedList.push(up);
+          }
+        } else if (
+          (p.state === 'walking_to_treatment_wait' || p.state === 'waiting_in_treatment') &&
+          p.isSeatedWait === false
+        ) {
+          const up = { ...p };
+          const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
+          const safePos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
+          up.gridX = safePos.x;
+          up.gridY = safePos.y;
+          const reachable = pickReachableFreeTreatmentSeat(
+            up,
+            up.gridX,
+            up.gridY,
+            claimedSoFar,
+            up.id
+          );
+          if (reachable) {
+            up.state = 'walking_to_treatment_wait';
+            up.isSeatedWait = true;
+            up.waitingSeatKey = reachable.seat.seatKey;
+            up.seatHeight = reachable.seat.seatHeight;
+            up.targetX = reachable.seat.seatTileX;
+            up.targetY = reachable.seat.seatTileY;
+            up.seatApproachX = reachable.seat.approachTileX;
+            up.seatApproachY = reachable.seat.approachTileY;
+            up.seatOffsetX = 0;
+            up.seatOffsetZ = 0;
+            up.seatFacingRad = reachable.seat.facingRad;
+            up.path = reachable.path;
+            up.blockedTicks = 0;
+            anyChanged = true;
+            updatedList.push(up);
+          } else if (
+            !isTileWalkable(up.targetX, up.targetY, 0.22, obstacleBoxes) ||
+            up.targetX >= 11.5 ||
+            up.gridX >= 11.5
+          ) {
+            const stand = findTreatmentStandingSpot(claimedSoFar, up.id);
+            up.state = 'walking_to_treatment_wait';
+            up.targetX = stand.x;
+            up.targetY = stand.y;
+            up.headingRad = -Math.PI / 2;
+            up.path = buildPatientPath(up, stand.x, stand.y);
+            up.blockedTicks = 0;
+            anyChanged = true;
+            updatedList.push(up);
+          } else {
+            updatedList.push(p);
+          }
         } else if (p.state === 'walking_to_station' || p.state === 'ready_for_exam') {
           const station = p.assignedStationId
             ? clinic.placedItems.find((it) => it.instanceId === p.assignedStationId)
@@ -1743,48 +2010,45 @@ export default function App() {
           } else {
             const up = { ...p };
             const claimedSoFar = [...updatedList, ...prev.slice(i + 1)];
-            // Assigned station was sold: re-assign to another free station or walk back to Reception waiting lounge
-            const altStation = findFreeStation(claimedSoFar, up.clinicalCase.specialty);
+            // Assigned station was sold: return patient to the treatment hall waiting seat/spot so the player can pick another station
             const clearPos = findNearestWalkableTile(up.gridX, up.gridY, 0.21, obstacleBoxes);
             up.gridX = clearPos.x;
             up.gridY = clearPos.y;
-            if (altStation) {
-              const altTarget = getStationTargetPos(altStation, up.gridX, up.gridY);
-              up.assignedStationId = altStation.instanceId;
-              up.state = 'walking_to_station';
-              up.targetX = altTarget.x;
-              up.targetY = altTarget.y;
-              up.path = buildPatientPath(up, altTarget.x, altTarget.y, altStation.instanceId);
+            up.assignedStationId = null;
+            const reachable = pickReachableFreeTreatmentSeat(
+              up,
+              up.gridX,
+              up.gridY,
+              claimedSoFar,
+              up.id
+            );
+            up.state = 'walking_to_treatment_wait';
+            if (reachable) {
+              up.isSeatedWait = true;
+              up.waitingSeatKey = reachable.seat.seatKey;
+              up.seatHeight = reachable.seat.seatHeight;
+              up.targetX = reachable.seat.seatTileX;
+              up.targetY = reachable.seat.seatTileY;
+              up.seatApproachX = reachable.seat.approachTileX;
+              up.seatApproachY = reachable.seat.approachTileY;
+              up.seatOffsetX = 0;
+              up.seatOffsetZ = 0;
+              up.seatFacingRad = reachable.seat.facingRad;
+              up.path = reachable.path;
             } else {
-              up.assignedStationId = null;
-              const reachable = pickReachableFreeWaitingSeat(
-                up,
-                up.gridX,
-                up.gridY,
-                claimedSoFar,
-                up.id
-              );
-              up.state = 'walking_to_wait';
-              if (reachable) {
-                up.isSeatedWait = true;
-                up.waitingSeatKey = reachable.seat.seatKey;
-                up.seatHeight = reachable.seat.seatHeight;
-                up.targetX = reachable.seat.seatTileX;
-                up.targetY = reachable.seat.seatTileY;
-                up.seatApproachX = reachable.seat.approachTileX;
-                up.seatApproachY = reachable.seat.approachTileY;
-                up.seatOffsetX = 0;
-                up.seatOffsetZ = 0;
-                up.seatFacingRad = reachable.seat.facingRad;
-                up.path = reachable.path;
-              } else {
-                const stand = findStandingWaitSpot(claimedSoFar, up.id);
-                up.isSeatedWait = false;
-                up.waitingSeatKey = undefined;
-                up.targetX = stand.x;
-                up.targetY = stand.y;
-                up.path = buildPatientPath(up, stand.x, stand.y);
-              }
+              const stand = findTreatmentStandingSpot(claimedSoFar, up.id);
+              up.isSeatedWait = false;
+              up.waitingSeatKey = undefined;
+              up.seatHeight = undefined;
+              up.seatApproachX = undefined;
+              up.seatApproachY = undefined;
+              up.seatOffsetX = undefined;
+              up.seatOffsetZ = undefined;
+              up.seatFacingRad = undefined;
+              up.targetX = stand.x;
+              up.targetY = stand.y;
+              up.headingRad = -Math.PI / 2;
+              up.path = buildPatientPath(up, stand.x, stand.y);
             }
             up.blockedTicks = 0;
             anyChanged = true;
@@ -1814,11 +2078,13 @@ export default function App() {
     buildPatientPath,
     buildPathToWaitSeat,
     getReceptionWaitSeatSlots,
+    getTreatmentWaitSeatSlots,
     pickReachableFreeWaitingSeat,
+    pickReachableFreeTreatmentSeat,
     getReceptionCheckinSpot,
     pickFreeWaterCoolerSpot,
     findStandingWaitSpot,
-    findFreeStation,
+    findTreatmentStandingSpot,
     getStationTargetPos,
   ]);
 
@@ -1915,7 +2181,7 @@ export default function App() {
           }
           if (
             p.path.length === 0 &&
-            p.state === 'waiting_checkin' &&
+            (p.state === 'waiting_checkin' || p.state === 'waiting_in_treatment') &&
             p.isSeatedWait !== false &&
             p.gridX < 20.8 &&
             p.targetX < 20.8
@@ -1936,7 +2202,10 @@ export default function App() {
             ? updated.waitingSeatKey.slice(0, updated.waitingSeatKey.lastIndexOf('_'))
             : undefined;
           const targetItemId =
-            updated.state === 'walking_to_wait' || updated.state === 'waiting_checkin'
+            updated.state === 'walking_to_wait' ||
+            updated.state === 'waiting_checkin' ||
+            updated.state === 'walking_to_treatment_wait' ||
+            updated.state === 'waiting_in_treatment'
               ? seatItemId
               : updated.state === 'walking_to_station' ||
                   updated.state === 'ready_for_exam' ||
@@ -1967,19 +2236,19 @@ export default function App() {
             }
 
             // Smooth corner rounding ONLY on clear unobstructed open sightlines (never skip doorway centers or chair approach tiles)
-            const preserveSeatApproach =
-              updated.state === 'walking_to_wait' &&
-              updated.isSeatedWait !== false &&
-              activePath.length <= 2;
+            const isSeatWalk =
+              (updated.state === 'walking_to_wait' ||
+                updated.state === 'walking_to_treatment_wait') &&
+              updated.isSeatedWait !== false;
+            const preserveSeatApproach = isSeatWalk && activePath.length <= 2;
             if (
               !preserveSeatApproach &&
               activePath.length >= 2 &&
               !isDoorwayThreshold(activePath[0].x, activePath[0].y)
             ) {
-              const maxProbe =
-                updated.state === 'walking_to_wait' && updated.isSeatedWait !== false
-                  ? Math.max(0, activePath.length - 3)
-                  : activePath.length - 1;
+              const maxProbe = isSeatWalk
+                ? Math.max(0, activePath.length - 3)
+                : activePath.length - 1;
               let jumpIdx = 0;
               for (let probe = maxProbe; probe >= 1; probe--) {
                 if (isDoorwayThreshold(activePath[probe - 1].x, activePath[probe - 1].y)) break;
@@ -2046,7 +2315,8 @@ export default function App() {
               let avoidX = 0;
               let avoidY = 0;
               const suppressFinalSteer =
-                (updated.state === 'walking_to_wait' &&
+                ((updated.state === 'walking_to_wait' ||
+                  updated.state === 'walking_to_treatment_wait') &&
                   updated.isSeatedWait !== false &&
                   (activePath.length <= 2 ||
                     Math.hypot(updated.targetX - updated.gridX, updated.targetY - updated.gridY) < 1.25)) ||
@@ -2112,7 +2382,9 @@ export default function App() {
                   const rerouteIgnoreId =
                     updated.state === 'walking_to_station'
                       ? updated.assignedStationId || undefined
-                      : updated.state === 'walking_to_wait' && updated.isSeatedWait !== false
+                      : (updated.state === 'walking_to_wait' ||
+                            updated.state === 'walking_to_treatment_wait') &&
+                          updated.isSeatedWait !== false
                         ? seatItemId
                         : updated.state === 'treated_leaving'
                           ? updated.leavingItemId
@@ -2126,7 +2398,8 @@ export default function App() {
                   if (rerouted.length > 0) {
                     updated.path = rerouted;
                   } else if (
-                    updated.state === 'walking_to_wait' &&
+                    (updated.state === 'walking_to_wait' ||
+                      updated.state === 'walking_to_treatment_wait') &&
                     updated.isSeatedWait !== false &&
                     distToGoal > 0.35 &&
                     distToGoal <= 0.88
@@ -2141,9 +2414,43 @@ export default function App() {
                       updated.state === 'walking_to_water'
                     ) {
                       assignWaitingDestination(updated, claimedSoFar);
+                    } else if (updated.state === 'walking_to_treatment_wait') {
+                      const seatAlt = pickReachableFreeTreatmentSeat(
+                        updated,
+                        updated.gridX,
+                        updated.gridY,
+                        claimedSoFar,
+                        updated.id
+                      );
+                      if (seatAlt) {
+                        updated.isSeatedWait = true;
+                        updated.waitingSeatKey = seatAlt.seat.seatKey;
+                        updated.seatHeight = seatAlt.seat.seatHeight;
+                        updated.targetX = seatAlt.seat.seatTileX;
+                        updated.targetY = seatAlt.seat.seatTileY;
+                        updated.seatApproachX = seatAlt.seat.approachTileX;
+                        updated.seatApproachY = seatAlt.seat.approachTileY;
+                        updated.seatFacingRad = seatAlt.seat.facingRad;
+                        updated.path = seatAlt.path;
+                      } else {
+                        const stand = findTreatmentStandingSpot(claimedSoFar, updated.id);
+                        updated.isSeatedWait = false;
+                        updated.waitingSeatKey = undefined;
+                        updated.targetX = stand.x;
+                        updated.targetY = stand.y;
+                        updated.headingRad = -Math.PI / 2;
+                        updated.path = buildPatientPath(updated, stand.x, stand.y);
+                      }
                     } else if (updated.state === 'walking_to_station') {
                       updated.assignedStationId = null;
-                      assignWaitingDestination(updated, claimedSoFar);
+                      updated.state = 'walking_to_treatment_wait';
+                      const stand = findTreatmentStandingSpot(claimedSoFar, updated.id);
+                      updated.isSeatedWait = false;
+                      updated.waitingSeatKey = undefined;
+                      updated.targetX = stand.x;
+                      updated.targetY = stand.y;
+                      updated.headingRad = -Math.PI / 2;
+                      updated.path = buildPatientPath(updated, stand.x, stand.y);
                     } else if (updated.state === 'arriving') {
                       const spot = getReceptionCheckinSpot(claimedSoFar);
                       updated.targetX = spot.x;
@@ -2197,9 +2504,9 @@ export default function App() {
               const checkedByRec = receptionCheckedInIdsRef.current.has(updated.id);
               const maxCheckinMs =
                 receptionistHired && hasReceptionDesk && hasFileCabinet
-                  ? 3600
+                  ? 12000
                   : receptionistHired && hasReceptionDesk
-                    ? 2200
+                    ? 3500
                     : 1600;
               if ((checkedByRec && updated.waitTimer >= 650) || updated.waitTimer >= maxCheckinMs) {
                 receptionCheckedInIdsRef.current.delete(updated.id);
@@ -2354,6 +2661,110 @@ export default function App() {
                 }
               }
               // Waiting patients strictly stay in Reception chairs / Reception standing area until explicitly called by the user.
+            } else if (updated.state === 'walking_to_treatment_wait') {
+              const distToTreatTarget = Math.hypot(
+                updated.targetX - updated.gridX,
+                updated.targetY - updated.gridY
+              );
+              if (updated.isSeatedWait !== false) {
+                if (distToTreatTarget > 0.9) {
+                  const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                  const reachable = pickReachableFreeTreatmentSeat(
+                    updated,
+                    updated.gridX,
+                    updated.gridY,
+                    claimedSoFar,
+                    updated.id
+                  );
+                  if (reachable) {
+                    updated.waitingSeatKey = reachable.seat.seatKey;
+                    updated.seatHeight = reachable.seat.seatHeight;
+                    updated.targetX = reachable.seat.seatTileX;
+                    updated.targetY = reachable.seat.seatTileY;
+                    updated.seatApproachX = reachable.seat.approachTileX;
+                    updated.seatApproachY = reachable.seat.approachTileY;
+                    updated.seatFacingRad = reachable.seat.facingRad;
+                    updated.path = reachable.path;
+                  } else {
+                    const stand = findTreatmentStandingSpot(claimedSoFar, updated.id);
+                    updated.isSeatedWait = false;
+                    updated.waitingSeatKey = undefined;
+                    updated.targetX = stand.x;
+                    updated.targetY = stand.y;
+                    updated.headingRad = -Math.PI / 2;
+                    updated.path = buildPatientPath(updated, stand.x, stand.y);
+                  }
+                } else if (distToTreatTarget > 0.35) {
+                  updated.path = [{ x: updated.targetX, y: updated.targetY }];
+                } else {
+                  updated.gridX = updated.targetX;
+                  updated.gridY = updated.targetY;
+                  updated.state = 'waiting_in_treatment';
+                  updated.waitTimer = 0;
+                }
+              } else {
+                if (updated.gridX >= 11.4 || distToTreatTarget > 0.78) {
+                  const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                  const stand = findTreatmentStandingSpot(claimedSoFar, updated.id);
+                  updated.targetX = stand.x;
+                  updated.targetY = stand.y;
+                  updated.headingRad = -Math.PI / 2;
+                  updated.path = buildPatientPath(updated, stand.x, stand.y);
+                } else {
+                  updated.state = 'waiting_in_treatment';
+                  updated.waitTimer = 0;
+                  updated.idleMoveTimer = 2800 + Math.random() * 2200;
+                }
+              }
+              changed = true;
+            } else if (updated.state === 'waiting_in_treatment') {
+              const prevTreatTimer = updated.waitTimer;
+              updated.waitTimer += dtMs;
+              if (updated.isSeatedWait === false) {
+                if (
+                  updated.waitTimer <= dtMs + 5 ||
+                  Math.floor(prevTreatTimer / 1800) !== Math.floor(updated.waitTimer / 1800)
+                ) {
+                  const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                  const reachable = pickReachableFreeTreatmentSeat(
+                    updated,
+                    updated.gridX,
+                    updated.gridY,
+                    claimedSoFar,
+                    updated.id
+                  );
+                  if (reachable) {
+                    updated.state = 'walking_to_treatment_wait';
+                    updated.isSeatedWait = true;
+                    updated.waitingSeatKey = reachable.seat.seatKey;
+                    updated.seatHeight = reachable.seat.seatHeight;
+                    updated.targetX = reachable.seat.seatTileX;
+                    updated.targetY = reachable.seat.seatTileY;
+                    updated.seatApproachX = reachable.seat.approachTileX;
+                    updated.seatApproachY = reachable.seat.approachTileY;
+                    updated.seatOffsetX = 0;
+                    updated.seatOffsetZ = 0;
+                    updated.seatFacingRad = reachable.seat.facingRad;
+                    updated.idleMoveTimer = undefined;
+                    updated.blockedTicks = 0;
+                    updated.path = reachable.path;
+                    changed = true;
+                    nextList.push(updated);
+                    continue;
+                  }
+                }
+                const curIdle = standingIdleMap.get(updated.id) ?? updated.idleMoveTimer ?? 3600;
+                const nextIdle = curIdle - dtMs;
+                if (nextIdle <= 0) {
+                  const resetIdle = 4200 + Math.random() * 4200;
+                  standingIdleMap.set(updated.id, resetIdle);
+                  updated.idleMoveTimer = resetIdle;
+                  updated.headingRad = -Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+                  changed = true;
+                } else {
+                  standingIdleMap.set(updated.id, nextIdle);
+                }
+              }
             } else if (updated.state === 'walking_to_station') {
               const station = updated.assignedStationId
                 ? placedItemById.get(updated.assignedStationId)
@@ -2377,13 +2788,29 @@ export default function App() {
                   updated.path = retryPath;
                 } else {
                   updated.assignedStationId = null;
-                  assignWaitingDestination(updated, [...nextList, ...prev.slice(idx + 1)]);
+                  const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                  const stand = findTreatmentStandingSpot(claimedSoFar, updated.id);
+                  updated.state = 'walking_to_treatment_wait';
+                  updated.isSeatedWait = false;
+                  updated.waitingSeatKey = undefined;
+                  updated.targetX = stand.x;
+                  updated.targetY = stand.y;
+                  updated.headingRad = -Math.PI / 2;
+                  updated.path = buildPatientPath(updated, stand.x, stand.y);
                 }
               } else if (station) {
                 updated.state = 'ready_for_exam';
               } else {
                 updated.assignedStationId = null;
-                assignWaitingDestination(updated, [...nextList, ...prev.slice(idx + 1)]);
+                const claimedSoFar = [...nextList, ...prev.slice(idx + 1)];
+                const stand = findTreatmentStandingSpot(claimedSoFar, updated.id);
+                updated.state = 'walking_to_treatment_wait';
+                updated.isSeatedWait = false;
+                updated.waitingSeatKey = undefined;
+                updated.targetX = stand.x;
+                updated.targetY = stand.y;
+                updated.headingRad = -Math.PI / 2;
+                updated.path = buildPatientPath(updated, stand.x, stand.y);
               }
               changed = true;
             } else if (updated.state === 'in_treatment') {
@@ -2467,11 +2894,12 @@ export default function App() {
     clinic.rooms,
     clinic.placedItems,
     clinic.staff,
-    findFreeStation,
     getReceptionCheckinSpot,
     pickReachableFreeWaitingSeat,
+    pickReachableFreeTreatmentSeat,
     pickFreeWaterCoolerSpot,
     findStandingWaitSpot,
+    findTreatmentStandingSpot,
     buildPatientPath,
     buildPathToWaitSeat,
     catalogById,
@@ -2480,7 +2908,7 @@ export default function App() {
     isNearStation,
   ]);
 
-  // Explicitly call a waiting patient from reception/waiting lounge into an available treatment room
+  // Explicitly call a waiting patient from reception/waiting lounge into the treatment hall (sits on a chair if present, or stands waiting for station assignment)
   const callPatientToStation = useCallback(
     (patientId: string): boolean => {
       if (visitingFriend) return false;
@@ -2496,36 +2924,185 @@ export default function App() {
         return false;
       }
 
-      const station = findFreeStation(patients, patient.clinicalCase.specialty);
-      if (!station) {
+      const occupiedIds = new Set(
+        patients
+          .filter((p) => p.state !== 'treated_leaving' && p.assignedStationId)
+          .map((p) => p.assignedStationId!)
+      );
+      const freeStations = clinic.placedItems.filter((item) => {
+        const cat = catalogById.get(item.catalogId);
+        if (!cat?.isTreatmentStation || !ASSIGNABLE_STATION_SPRITES.has(cat.sprite)) return false;
+        const room = clinic.rooms.find((r) => r.id === item.roomId);
+        return (!room || room.unlocked) && !occupiedIds.has(item.instanceId);
+      }).length;
+      const hallWaitCount = patients.filter(
+        (p) => p.state === 'walking_to_treatment_wait' || p.state === 'waiting_in_treatment'
+      ).length;
+
+      if (freeStations - hallWaitCount <= 0) {
         soundFx.tap();
         addFloatingFeedback(
           patient.gridX,
           patient.gridY,
           clinic.language === 'ar'
-            ? 'جميع الأسرّة ممتلئة! أكمل الجلسة الحالية أولاً'
-            : 'All beds are full! Finish current session first',
+            ? 'جميع الأسرّة والأجهزة ممتلئة! أكمل الجلسة الحالية أولاً'
+            : 'All stations are full! Finish current session first',
+          '#f59e0b'
+        );
+        return false;
+      }
+
+      const seatPick = pickReachableFreeTreatmentSeat(
+        patient,
+        patient.gridX,
+        patient.gridY,
+        patients,
+        patient.id
+      );
+
+      let targetX = 0;
+      let targetY = 0;
+      let nextPath: Array<{ x: number; y: number }> = [];
+      let isSeatedWait = false;
+      let waitingSeatKey: string | undefined;
+      let seatHeight: number | undefined;
+      let seatApproachX: number | undefined;
+      let seatApproachY: number | undefined;
+      let seatFacingRad: number | undefined;
+      let headingRad: number | undefined;
+
+      if (seatPick) {
+        isSeatedWait = true;
+        waitingSeatKey = seatPick.seat.seatKey;
+        seatHeight = seatPick.seat.seatHeight;
+        targetX = seatPick.seat.seatTileX;
+        targetY = seatPick.seat.seatTileY;
+        seatApproachX = seatPick.seat.approachTileX;
+        seatApproachY = seatPick.seat.approachTileY;
+        seatFacingRad = seatPick.seat.facingRad;
+        nextPath = seatPick.path;
+      } else {
+        const stand = findTreatmentStandingSpot(patients, patient.id);
+        targetX = stand.x;
+        targetY = stand.y;
+        headingRad = -Math.PI / 2;
+        nextPath = buildPatientPath(patient, stand.x, stand.y);
+      }
+
+      if (nextPath.length === 0) {
+        soundFx.tap();
+        addFloatingFeedback(
+          patient.gridX,
+          patient.gridY,
+          clinic.language === 'ar' ? 'الممر إلى صالة العلاج مغلق!' : 'Path to treatment hall blocked!',
+          '#f59e0b'
+        );
+        return false;
+      }
+
+      const prevSeatItemId = patient.waitingSeatKey
+        ? patient.waitingSeatKey.slice(0, patient.waitingSeatKey.lastIndexOf('_'))
+        : undefined;
+
+      soundFx.tap();
+      setPatients((prev) =>
+        prev.map((p) =>
+          p.id === patient.id
+            ? {
+                ...p,
+                assignedStationId: null,
+                state: 'walking_to_treatment_wait',
+                targetX,
+                targetY,
+                leavingItemId: prevSeatItemId,
+                isSeatedWait,
+                waitingSeatKey,
+                seatHeight,
+                seatApproachX,
+                seatApproachY,
+                seatOffsetX: isSeatedWait ? 0 : undefined,
+                seatOffsetZ: isSeatedWait ? 0 : undefined,
+                seatFacingRad,
+                waterCoolerId: undefined,
+                idleMoveTimer: undefined,
+                headingRad,
+                blockedTicks: 0,
+                path: nextPath,
+              }
+            : p
+        )
+      );
+      setSelectedWaitingPatientId((cur) => (cur === patient.id ? null : cur));
+      addFloatingFeedback(
+        patient.gridX,
+        patient.gridY,
+        clinic.language === 'ar'
+          ? isSeatedWait
+            ? 'دخل صالة العلاج وسيتجه للكرسي'
+            : 'تم استدعاء المريض لصالة العلاج'
+          : isSeatedWait
+            ? 'Entering treatment lounge seat'
+            : 'Called to treatment hall',
+        '#38bdf8'
+      );
+      return true;
+    },
+    [
+      visitingFriend,
+      patients,
+      clinic.placedItems,
+      clinic.rooms,
+      catalogById,
+      pickReachableFreeTreatmentSeat,
+      findTreatmentStandingSpot,
+      buildPatientPath,
+      addFloatingFeedback,
+      clinic.language,
+    ]
+  );
+
+  // Direct a patient waiting inside the treatment hall to the exact station selected by the player
+  const assignTreatmentPatientToStation = useCallback(
+    (patientId: string, stationId: string): boolean => {
+      if (visitingFriend) return false;
+      const patient = patients.find((p) => p.id === patientId);
+      if (!patient) return false;
+      if (
+        patient.state !== 'waiting_in_treatment' &&
+        patient.state !== 'walking_to_treatment_wait'
+      ) {
+        return false;
+      }
+      const station = clinic.placedItems.find((it) => it.instanceId === stationId);
+      const stationCat = station ? catalogById.get(station.catalogId) : undefined;
+      if (!station || !stationCat?.isTreatmentStation || !ASSIGNABLE_STATION_SPRITES.has(stationCat.sprite)) {
+        return false;
+      }
+      const room = clinic.rooms.find((r) => r.id === station.roomId);
+      if (room && !room.unlocked) return false;
+
+      const occupiedBy = patients.find(
+        (p) => p.id !== patientId && p.state !== 'treated_leaving' && p.assignedStationId === stationId
+      );
+      if (occupiedBy) {
+        soundFx.tap();
+        addFloatingFeedback(
+          station.gridX,
+          station.gridY,
+          clinic.language === 'ar' ? 'هذا الجهاز مشغول حالياً!' : 'This station is currently occupied!',
           '#f59e0b'
         );
         return false;
       }
 
       const stTarget = getStationTargetPos(station, patient.gridX, patient.gridY);
-      const stationPath = buildPatientPath(
-        patient,
-        stTarget.x,
-        stTarget.y,
-        station.instanceId
-      );
-      if (
-        stationPath.length === 0 &&
-        !isNearStation(station, patient.gridX, patient.gridY)
-      ) {
+      const stationPath = buildPatientPath(patient, stTarget.x, stTarget.y, station.instanceId);
+      if (stationPath.length === 0 && !isNearStation(station, patient.gridX, patient.gridY)) {
         soundFx.tap();
         addFloatingFeedback(
-          patient.gridX,
-          patient.gridY,
-          clinic.language === 'ar' ? 'الممر إلى السرير مغلق!' : 'Path to station blocked!',
+          station.gridX,
+          station.gridY,
+          clinic.language === 'ar' ? 'الممر إلى هذا الجهاز مغلق!' : 'Path to this station is blocked!',
           '#f59e0b'
         );
         return false;
@@ -2554,7 +3131,6 @@ export default function App() {
                 seatOffsetX: undefined,
                 seatOffsetZ: undefined,
                 seatFacingRad: undefined,
-                waterCoolerId: undefined,
                 idleMoveTimer: undefined,
                 headingRad: undefined,
                 blockedTicks: 0,
@@ -2563,19 +3139,24 @@ export default function App() {
             : p
         )
       );
-      setSelectedWaitingPatientId((cur) => (cur === patient.id ? null : cur));
+      setSelectedTreatmentWaitPatientId(null);
+      setPendingStationIdForPick(null);
       addFloatingFeedback(
-        patient.gridX,
-        patient.gridY,
-        clinic.language === 'ar' ? 'تم استدعاء المريض لغرفة العلاج' : 'Called to Treatment Room',
-        '#38bdf8'
+        station.gridX,
+        station.gridY,
+        clinic.language === 'ar'
+          ? `متجه إلى ${stationCat.nameAr}`
+          : `Walking to ${stationCat.nameEn}`,
+        '#10b981'
       );
       return true;
     },
     [
       visitingFriend,
       patients,
-      findFreeStation,
+      clinic.placedItems,
+      clinic.rooms,
+      catalogById,
       getStationTargetPos,
       buildPatientPath,
       isNearStation,
@@ -2630,6 +3211,8 @@ export default function App() {
 
       setSelectedBedPatientId(null);
       setSelectedWaitingPatientId(null);
+      setSelectedTreatmentWaitPatientId(null);
+      setPendingStationIdForPick(null);
       setWaitingQueueOpen(false);
       setStoreOpen(false);
       setMissionsOpen(false);
@@ -2666,6 +3249,7 @@ export default function App() {
     placementDraft,
     visitingFriend,
     editMode,
+    selectedTreatmentWaitPatientId,
   });
   latestActionRef.current = {
     clinic,
@@ -2673,6 +3257,7 @@ export default function App() {
     placementDraft,
     visitingFriend,
     editMode,
+    selectedTreatmentWaitPatientId,
   };
 
   // Handle tapping a patient
@@ -2701,16 +3286,31 @@ export default function App() {
         patient.state === 'drinking_water'
       ) {
         setSelectedBedPatientId(null);
+        setSelectedTreatmentWaitPatientId(null);
+        setPendingStationIdForPick(null);
         setSelectedWaitingPatientId((cur) => (cur === patient.id ? null : patient.id));
+        return;
+      }
+
+      if (
+        patient.state === 'walking_to_treatment_wait' ||
+        patient.state === 'waiting_in_treatment'
+      ) {
+        setSelectedBedPatientId(null);
+        setSelectedWaitingPatientId(null);
+        setPendingStationIdForPick(null);
+        setSelectedTreatmentWaitPatientId((cur) => (cur === patient.id ? null : patient.id));
         return;
       }
 
       if (patient.state === 'walking_to_station') {
         setSelectedWaitingPatientId(null);
+        setSelectedTreatmentWaitPatientId(null);
+        setPendingStationIdForPick(null);
         addFloatingFeedback(
           patient.gridX,
           patient.gridY,
-          curClinic.language === 'ar' ? 'المريض في طريقه إلى السرير...' : 'Walking to treatment bed...',
+          curClinic.language === 'ar' ? 'المريض في طريقه إلى الجهاز...' : 'Walking to station...',
           '#38bdf8'
         );
         return;
@@ -2718,6 +3318,8 @@ export default function App() {
 
       if (patient.state === 'ready_for_exam' || patient.state === 'in_exam') {
         setSelectedWaitingPatientId(null);
+        setSelectedTreatmentWaitPatientId(null);
+        setPendingStationIdForPick(null);
         setSelectedBedPatientId((cur) => (cur === patient.id ? null : patient.id));
       }
     },
@@ -3069,6 +3671,7 @@ export default function App() {
     // Suggest an open default hover coordinate based on indoor vs outdoor
     let defaultX = item.indoorAllowed === false ? 23 : 6;
     let defaultY = item.indoorAllowed === false ? 5 : 14;
+    let defaultRot: 0 | 1 | 2 | 3 = 0;
     if (item.id === 'reception_display_stand') {
       const occupiedIndoor = new Set<string>();
       for (const existing of clinic.placedItems) {
@@ -3170,10 +3773,82 @@ export default function App() {
           }
         }
       }
+    } else {
+      // Find a clean open indoor spot inside unlocked rooms (supports slim 0.2m dividers in narrow gaps)
+      const isFloorMat = (id: string) => id === 'floor_rug' || id === 'stone_pathway';
+      const draftIsMat = isFloorMat(item.id);
+      const indoorBoxes: Array<{ minX: number; maxX: number; minY: number; maxY: number }> = [];
+      for (const existing of clinic.placedItems) {
+        const cat = catalogById.get(existing.catalogId);
+        if (!cat || cat.isWallDecor) continue;
+        if (draftIsMat !== isFloorMat(existing.catalogId)) continue;
+        const ew = existing.rotation % 2 === 0 ? cat.width : cat.depth;
+        const ed = existing.rotation % 2 === 0 ? cat.depth : cat.width;
+        indoorBoxes.push({
+          minX: existing.gridX,
+          maxX: existing.gridX + ew,
+          minY: existing.gridY,
+          maxY: existing.gridY + ed,
+        });
+      }
+      const unlockedRooms = [
+        ...clinic.rooms.filter((r) => r.unlocked && r.id !== 'room_reception'),
+        ...clinic.rooms.filter((r) => r.unlocked && r.id === 'room_reception'),
+      ];
+      const canDropAt = (gx: number, gy: number, rot: 0 | 1) => {
+        const ew = rot === 0 ? item.width : item.depth;
+        const ed = rot === 0 ? item.depth : item.width;
+        const eps = 0.015;
+        const fitsRoom = unlockedRooms.some(
+          (r) =>
+            gx >= r.minX - eps &&
+            gx + ew <= r.maxX + 1 + eps &&
+            gy >= r.minY - eps &&
+            gy + ed <= r.maxY + 1 + eps
+        );
+        if (!fitsRoom) return false;
+        const tol = 0.03;
+        for (const b of indoorBoxes) {
+          if (gx + tol < b.maxX && gx + ew - tol > b.minX && gy + tol < b.maxY && gy + ed - tol > b.minY) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      if (!canDropAt(defaultX, defaultY, 0)) {
+        const isSlim = item.width < 0.45 || item.depth < 0.45;
+        const step = isSlim ? 0.25 : 0.5;
+        const rots: Array<0 | 1> = isSlim ? [0, 1] : [0];
+        let picked = false;
+        searchIndoor: for (const r of unlockedRooms) {
+          for (const rot of rots) {
+            const ew = rot === 0 ? item.width : item.depth;
+            const ed = rot === 0 ? item.depth : item.width;
+            for (let y = r.minY + 0.5; y <= r.maxY + 1 - ed - 0.25; y += step) {
+              for (let x = r.minX + 0.5; x <= r.maxX + 1 - ew - 0.25; x += step) {
+                const sx = Math.round(x * 20) / 20;
+                const sy = Math.round(y * 20) / 20;
+                if (canDropAt(sx, sy, rot)) {
+                  defaultX = sx;
+                  defaultY = sy;
+                  defaultRot = rot;
+                  picked = true;
+                  break searchIndoor;
+                }
+              }
+            }
+          }
+        }
+        if (!picked && unlockedRooms[0]) {
+          defaultX = unlockedRooms[0].minX + 1;
+          defaultY = unlockedRooms[0].minY + 1;
+        }
+      }
     }
     setPlacementDraft({
       catalogItem: item,
-      rotation: 0,
+      rotation: defaultRot,
       hoverX: defaultX,
       hoverY: defaultY,
     });
@@ -3239,7 +3914,10 @@ export default function App() {
             }
             if (nextPt.waitingSeatKey && nextPt.waitingSeatKey.startsWith(movedId + '_')) {
               const matchingSeat = updatedSeats.find((s) => s.seatKey === nextPt.waitingSeatKey);
-              if (matchingSeat && nextPt.state === 'waiting_checkin') {
+              if (
+                matchingSeat &&
+                (nextPt.state === 'waiting_checkin' || nextPt.state === 'waiting_in_treatment')
+              ) {
                 return {
                   ...nextPt,
                   gridX: matchingSeat.seatTileX,
@@ -3256,7 +3934,10 @@ export default function App() {
             if (
               nextPt.state !== 'in_treatment' &&
               nextPt.state !== 'ready_for_exam' &&
-              !(nextPt.state === 'waiting_checkin' && nextPt.isSeatedWait) &&
+              !(
+                (nextPt.state === 'waiting_checkin' || nextPt.state === 'waiting_in_treatment') &&
+                nextPt.isSeatedWait
+              ) &&
               !isTileWalkable(nextPt.gridX, nextPt.gridY, 0.21, updatedBoxes)
             ) {
               const safe = findNearestWalkableTile(nextPt.gridX, nextPt.gridY, 0.22, updatedBoxes);
@@ -3295,7 +3976,10 @@ export default function App() {
             if (
               pt.state !== 'in_treatment' &&
               pt.state !== 'ready_for_exam' &&
-              !(pt.state === 'waiting_checkin' && pt.isSeatedWait) &&
+              !(
+                (pt.state === 'waiting_checkin' || pt.state === 'waiting_in_treatment') &&
+                pt.isSeatedWait
+              ) &&
               !isTileWalkable(pt.gridX, pt.gridY, 0.21, updatedBoxes)
             ) {
               const safe = findNearestWalkableTile(pt.gridX, pt.gridY, 0.22, updatedBoxes);
@@ -3586,7 +4270,52 @@ export default function App() {
     return found;
   }, [patients, selectedWaitingPatientId]);
 
-  const { waitingPatientsCount, freeStationsCount, totalStationsCount } = useMemo(() => {
+  const selectedTreatmentWaitPatient = useMemo(() => {
+    if (!selectedTreatmentWaitPatientId) return null;
+    const found = patients.find((p) => p.id === selectedTreatmentWaitPatientId);
+    if (
+      !found ||
+      (found.state !== 'waiting_in_treatment' && found.state !== 'walking_to_treatment_wait')
+    ) {
+      return null;
+    }
+    return found;
+  }, [patients, selectedTreatmentWaitPatientId]);
+
+  const treatmentHallWaitingPatients = useMemo(
+    () =>
+      patients.filter(
+        (p) => p.state === 'waiting_in_treatment' || p.state === 'walking_to_treatment_wait'
+      ),
+    [patients]
+  );
+
+  const freeStationsList = useMemo(() => {
+    const occupiedIds = new Set(
+      patients
+        .filter((p) => p.state !== 'treated_leaving' && p.assignedStationId)
+        .map((p) => p.assignedStationId!)
+    );
+    return clinic.placedItems
+      .filter((item) => {
+        const cat = catalogById.get(item.catalogId);
+        if (!cat?.isTreatmentStation || !ASSIGNABLE_STATION_SPRITES.has(cat.sprite)) return false;
+        const room = clinic.rooms.find((r) => r.id === item.roomId);
+        return (!room || room.unlocked) && !occupiedIds.has(item.instanceId);
+      })
+      .map((item) => ({
+        item,
+        cat: catalogById.get(item.catalogId)!,
+        room: clinic.rooms.find((r) => r.id === item.roomId),
+      }));
+  }, [patients, clinic.placedItems, clinic.rooms, catalogById]);
+
+  const pendingStationForPick = useMemo(() => {
+    if (!pendingStationIdForPick || treatmentHallWaitingPatients.length === 0) return null;
+    return freeStationsList.find((entry) => entry.item.instanceId === pendingStationIdForPick) || null;
+  }, [pendingStationIdForPick, freeStationsList, treatmentHallWaitingPatients.length]);
+
+  const { waitingPatientsCount, totalStationsCount, callableSlotsCount } = useMemo(() => {
     const waiting = patients.filter(
       (p) =>
         p.state === 'waiting_checkin' ||
@@ -3601,15 +4330,18 @@ export default function App() {
     );
     const unlockedBeds = clinic.placedItems.filter((item) => {
       const cat = catalogById.get(item.catalogId);
-      if (!cat?.isTreatmentStation || !BED_STATION_SPRITES.has(cat.sprite)) return false;
+      if (!cat?.isTreatmentStation || !ASSIGNABLE_STATION_SPRITES.has(cat.sprite)) return false;
       const room = clinic.rooms.find((r) => r.id === item.roomId);
       return !room || room.unlocked;
     });
     const free = unlockedBeds.filter((st) => !occupiedIds.has(st.instanceId)).length;
+    const hallWait = patients.filter(
+      (p) => p.state === 'waiting_in_treatment' || p.state === 'walking_to_treatment_wait'
+    ).length;
     return {
       waitingPatientsCount: waiting,
-      freeStationsCount: free,
       totalStationsCount: unlockedBeds.length,
+      callableSlotsCount: Math.max(0, free - hallWait),
     };
   }, [patients, clinic.placedItems, clinic.rooms, catalogById]);
 
@@ -3824,7 +4556,8 @@ export default function App() {
 
   const handleInspectItem = useCallback(
     (item: PlacedItem) => {
-      const assignedPatient = latestActionRef.current.patients.find(
+      const curPts = latestActionRef.current.patients;
+      const assignedPatient = curPts.find(
         (pt) => pt.assignedStationId === item.instanceId && pt.state !== 'treated_leaving'
       );
       if (assignedPatient) {
@@ -3832,17 +4565,46 @@ export default function App() {
         return;
       }
       const cat = catalogById.get(item.catalogId);
+      if (cat?.isTreatmentStation && ASSIGNABLE_STATION_SPRITES.has(cat.sprite)) {
+        const curRooms = latestActionRef.current.clinic.rooms;
+        const room = curRooms.find((r) => r.id === item.roomId);
+        if (!room || room.unlocked) {
+          const curSelectedId = latestActionRef.current.selectedTreatmentWaitPatientId;
+          const hallWaiting = curPts.filter(
+            (pt) =>
+              pt.state === 'waiting_in_treatment' || pt.state === 'walking_to_treatment_wait'
+          );
+          if (curSelectedId && hallWaiting.some((pt) => pt.id === curSelectedId)) {
+            assignTreatmentPatientToStation(curSelectedId, item.instanceId);
+            return;
+          }
+          if (hallWaiting.length === 1) {
+            assignTreatmentPatientToStation(hallWaiting[0].id, item.instanceId);
+            return;
+          }
+          if (hallWaiting.length > 1) {
+            soundFx.tap();
+            setSelectedWaitingPatientId(null);
+            setSelectedBedPatientId(null);
+            setSelectedTreatmentWaitPatientId(null);
+            setPendingStationIdForPick((cur) =>
+              cur === item.instanceId ? null : item.instanceId
+            );
+            return;
+          }
+        }
+      }
       if (cat && (cat.isTreatmentStation || cat.speedBonus > 0)) {
         soundFx.tap();
         addFloatingFeedback(
           item.gridX,
           item.gridY,
-          `${cat.nameEn} · ⚡ +${cat.speedBonus}%`,
+          `${latestActionRef.current.clinic.language === 'ar' ? cat.nameAr : cat.nameEn} · ⚡ +${cat.speedBonus}%`,
           '#38bdf8'
         );
       }
     },
-    [catalogById, handleTapPatient, addFloatingFeedback]
+    [catalogById, handleTapPatient, assignTreatmentPatientToStation, addFloatingFeedback]
   );
 
   const handleUpdatePlacementHover = useCallback(
@@ -3968,6 +4730,14 @@ export default function App() {
           setSelectedWaitingPatientId(null);
           return;
         }
+        if (selectedTreatmentWaitPatientId) {
+          setSelectedTreatmentWaitPatientId(null);
+          return;
+        }
+        if (pendingStationIdForPick) {
+          setPendingStationIdForPick(null);
+          return;
+        }
         if (selectedBedPatientId) {
           setSelectedBedPatientId(null);
           return;
@@ -4046,6 +4816,8 @@ export default function App() {
     missionsOpen,
     storeOpen,
     selectedWaitingPatientId,
+    selectedTreatmentWaitPatientId,
+    pendingStationIdForPick,
     selectedBedPatientId,
     placementDraft,
     editMode,
@@ -4142,7 +4914,15 @@ export default function App() {
           firstPersonPatientId={visitingFriend ? null : firstPersonPatientId}
           orbitStep={orbitStep}
           onOrbitStepDelta={handleOrbitStepDelta}
-          shortcutsBlocked={isoShortcutsBlocked || Boolean(selectedWaitingPatientId || selectedBedPatientId)}
+          shortcutsBlocked={
+            isoShortcutsBlocked ||
+            Boolean(
+              selectedWaitingPatientId ||
+                selectedTreatmentWaitPatientId ||
+                pendingStationIdForPick ||
+                selectedBedPatientId
+            )
+          }
           fppPosture={fppPosture}
           fppActiveDevice={visitingFriend ? null : fppActiveDevice}
           fppCommandRef={fppDeviceCmdRef}
@@ -4157,6 +4937,8 @@ export default function App() {
           onSyncPatientDevices={handleSyncPatientDevices}
           speakingPatientId={visitingFriend ? null : speakingPatientId}
           selectedBedPatientId={visitingFriend ? null : selectedBedPatientId}
+          selectedTreatmentWaitPatientId={visitingFriend ? null : selectedTreatmentWaitPatientId}
+          pendingStationIdForPick={visitingFriend ? null : pendingStationIdForPick}
           placementDraft={placementDraft}
           editMode={editMode && !visitingFriend}
           language={clinic.language}
@@ -4484,8 +5266,8 @@ export default function App() {
                   <span aria-hidden="true">·</span>
                   <span>
                     {isAr
-                      ? `أسرّة متاحة: ${freeStationsCount}`
-                      : `Free beds: ${freeStationsCount}`}
+                      ? `أماكن متاحة: ${callableSlotsCount}`
+                      : `Open bays: ${callableSlotsCount}`}
                   </span>
                 </div>
               </div>
@@ -4517,10 +5299,10 @@ export default function App() {
               </button>
               <button
                 type="button"
-                disabled={freeStationsCount === 0}
+                disabled={callableSlotsCount === 0}
                 onClick={() => callPatientToStation(selectedWaitingPatient.id)}
                 className={`flex-1 min-h-[42px] px-4 rounded-2xl text-xs font-black flex items-center justify-center gap-1.5 transition-all active:scale-95 ${
-                  freeStationsCount > 0
+                  callableSlotsCount > 0
                     ? 'bg-sky-600 hover:bg-sky-500 text-white shadow cursor-pointer'
                     : lightingMode === 'night'
                       ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
@@ -4529,15 +5311,322 @@ export default function App() {
               >
                 <BellRing className="w-4 h-4 shrink-0" />
                 <span>
-                  {freeStationsCount > 0
+                  {callableSlotsCount > 0
                     ? isAr
-                      ? 'استدعاء لغرفة العلاج'
-                      : 'Call to Treatment Room'
+                      ? 'استدعاء لصالة العلاج'
+                      : 'Call to Treatment Hall'
                     : isAr
-                      ? 'لا يوجد سرير متاح'
+                      ? 'لا يوجد جهاز متاح'
                       : 'No Free Station'}
                 </span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tapped Patient Waiting in Treatment Hall -> Simple One-Tap Station Selector Card */}
+      {selectedTreatmentWaitPatient && !firstPersonPatient && !visitingFriend && (
+        <div
+          dir={isAr ? 'rtl' : 'ltr'}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-md"
+        >
+          <div
+            className={`rounded-3xl border shadow-2xl p-4 ${
+              lightingMode === 'night'
+                ? 'bg-slate-900 border-sky-400/40 text-slate-100'
+                : 'bg-white border-sky-200 text-slate-900'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2.5">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Stethoscope className="w-4 h-4 text-sky-500 shrink-0" />
+                  <span className="text-sm font-black truncate">
+                    {isAr
+                      ? selectedTreatmentWaitPatient.clinicalCase.patientNameAr
+                      : selectedTreatmentWaitPatient.clinicalCase.patientNameEn}
+                  </span>
+                </div>
+                <div
+                  className={`text-xs mt-0.5 truncate ${
+                    lightingMode === 'night' ? 'text-slate-300' : 'text-slate-600'
+                  }`}
+                >
+                  {isAr
+                    ? selectedTreatmentWaitPatient.clinicalCase.chiefComplaintAr
+                    : selectedTreatmentWaitPatient.clinicalCase.chiefComplaintEn}
+                </div>
+                <div
+                  className={`text-[11px] mt-1 font-semibold ${
+                    lightingMode === 'night' ? 'text-sky-300' : 'text-sky-700'
+                  }`}
+                >
+                  {isAr
+                    ? 'اضغط مباشرة على السرير أو الجهاز في الصالة، أو اختره هنا:'
+                    : 'Tap any bed/device directly in the hall, or pick below:'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedTreatmentWaitPatientId(null)}
+                aria-label={isAr ? 'إغلاق' : 'Close'}
+                className={`p-1.5 rounded-xl shrink-0 transition-colors cursor-pointer ${
+                  lightingMode === 'night'
+                    ? 'text-slate-400 hover:bg-slate-800'
+                    : 'text-slate-400 hover:bg-slate-100'
+                }`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {freeStationsList.length === 0 ? (
+              <div
+                className={`mt-3 rounded-2xl px-3 py-2.5 text-xs font-semibold ${
+                  lightingMode === 'night'
+                    ? 'bg-amber-950/50 text-amber-200 border border-amber-500/30'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}
+              >
+                {isAr
+                  ? 'كل الأسرّة والأجهزة مشغولة حالياً — انتظر انتهاء جلسة.'
+                  : 'All stations are currently occupied — wait for a free bay.'}
+              </div>
+            ) : (
+              <div className="mt-3 grid grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-0.5">
+                {(() => {
+                  const ptSpec = selectedTreatmentWaitPatient.clinicalCase.specialty;
+                  const ptHint = selectedTreatmentWaitPatient.clinicalCase.chiefComplaintEn.toLowerCase();
+                  const ptX = selectedTreatmentWaitPatient.gridX;
+                  const ptY = selectedTreatmentWaitPatient.gridY;
+
+                  const isEntryBestMatch = (cat: CatalogItem, room?: ClinicRoom) => {
+                    let match =
+                      cat.stationSpecialty === ptSpec ||
+                      (room?.specialty && room.specialty === ptSpec);
+                    if (!match && ptHint) {
+                      if (
+                        /lumbar|disc|sciatica|cervical|neck|spine/.test(ptHint) &&
+                        (cat.sprite === 'traction_table' ||
+                          cat.sprite === 'wall_bars' ||
+                          cat.sprite === 'magnetotherapy')
+                      ) {
+                        match = true;
+                      } else if (
+                        /knee|acl|meniscus|ankle|cardio|arthritis/.test(ptHint) &&
+                        (cat.sprite === 'exercise_bike' ||
+                          cat.sprite === 'treadmill' ||
+                          cat.sprite === 'balance_trainer')
+                      ) {
+                        match = true;
+                      } else if (
+                        /stroke|hemi|parkinson|gait|balance|vestibular/.test(ptHint) &&
+                        (cat.sprite === 'parallel_bars' ||
+                          cat.sprite === 'balance_trainer' ||
+                          cat.sprite === 'tilt_table' ||
+                          cat.sprite === 'treadmill')
+                      ) {
+                        match = true;
+                      } else if (
+                        /shoulder|rotator|frozen|scapula|thoracic/.test(ptHint) &&
+                        (cat.sprite === 'wall_bars' ||
+                          cat.sprite === 'multi_gym_pulley' ||
+                          cat.sprite === 'exercise_mat')
+                      ) {
+                        match = true;
+                      }
+                    }
+                    return Boolean(match);
+                  };
+
+                  const grouped = new Map<
+                    string,
+                    {
+                      item: PlacedItem;
+                      cat: CatalogItem;
+                      room?: ClinicRoom;
+                      bestMatch: boolean;
+                      distSq: number;
+                      count: number;
+                      roomIds: Set<string>;
+                    }
+                  >();
+
+                  for (const { item, cat, room } of freeStationsList) {
+                    const match = isEntryBestMatch(cat, room);
+                    const dx = item.gridX - ptX;
+                    const dy = item.gridY - ptY;
+                    const distSq = dx * dx + dy * dy;
+                    const existing = grouped.get(cat.id);
+                    if (!existing) {
+                      grouped.set(cat.id, {
+                        item,
+                        cat,
+                        room,
+                        bestMatch: match,
+                        distSq,
+                        count: 1,
+                        roomIds: new Set(room ? [room.id] : []),
+                      });
+                    } else {
+                      existing.count += 1;
+                      if (room) existing.roomIds.add(room.id);
+                      const betterCandidate =
+                        (match && !existing.bestMatch) ||
+                        (match === existing.bestMatch && distSq < existing.distSq);
+                      if (betterCandidate) {
+                        existing.item = item;
+                        existing.room = room;
+                        existing.bestMatch = match;
+                        existing.distSq = distSq;
+                      }
+                    }
+                  }
+
+                  const deduped = Array.from(grouped.values());
+                  deduped.sort((a, b) => Number(b.bestMatch) - Number(a.bestMatch));
+
+                  return deduped.map(({ item, cat, room, bestMatch, count, roomIds }) => {
+                    const subtitle =
+                      count > 1
+                        ? roomIds.size <= 1 && room
+                          ? `${isAr ? room.nameAr : room.nameEn} (×${count})`
+                          : isAr
+                            ? `${count} متاح`
+                            : `${count} available`
+                        : room
+                          ? isAr
+                            ? room.nameAr
+                            : room.nameEn
+                          : '';
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() =>
+                          assignTreatmentPatientToStation(
+                            selectedTreatmentWaitPatient.id,
+                            item.instanceId
+                          )
+                        }
+                        className={`text-start px-3 py-2.5 rounded-2xl border transition-all active:scale-95 cursor-pointer flex flex-col justify-between gap-0.5 ${
+                          bestMatch
+                            ? lightingMode === 'night'
+                              ? 'bg-emerald-950/60 hover:bg-emerald-900/70 border-emerald-500/45 text-emerald-100'
+                              : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-950'
+                            : lightingMode === 'night'
+                              ? 'bg-slate-800/90 hover:bg-slate-700 border-slate-700 text-slate-100'
+                              : 'bg-slate-50 hover:bg-sky-50 border-slate-200 text-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="text-xs font-black truncate">
+                            {isAr ? cat.nameAr : cat.nameEn}
+                          </span>
+                          {bestMatch && (
+                            <span
+                              className={`text-[10px] font-black shrink-0 ${
+                                lightingMode === 'night' ? 'text-emerald-300' : 'text-emerald-700'
+                              }`}
+                            >
+                              {isAr ? 'مناسب' : 'Fit'}
+                            </span>
+                          )}
+                        </div>
+                        {subtitle && (
+                          <span
+                            className={`text-[10px] truncate ${
+                              lightingMode === 'night' ? 'text-slate-400' : 'text-slate-500'
+                            }`}
+                          >
+                            {subtitle}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tapped Empty Station When 2+ Patients Are Waiting in Treatment Hall */}
+      {pendingStationForPick && !selectedTreatmentWaitPatient && !firstPersonPatient && !visitingFriend && (
+        <div
+          dir={isAr ? 'rtl' : 'ltr'}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto fixed bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-sm"
+        >
+          <div
+            className={`rounded-3xl border shadow-2xl p-4 ${
+              lightingMode === 'night'
+                ? 'bg-slate-900 border-emerald-400/40 text-slate-100'
+                : 'bg-white border-emerald-200 text-slate-900'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-sm font-black truncate">
+                  {isAr
+                    ? `توجيه إلى: ${pendingStationForPick.cat.nameAr}`
+                    : `Send to: ${pendingStationForPick.cat.nameEn}`}
+                </div>
+                <div
+                  className={`text-xs mt-0.5 ${
+                    lightingMode === 'night' ? 'text-slate-300' : 'text-slate-600'
+                  }`}
+                >
+                  {isAr ? 'اختر المريض الذي سيتجه لهذا الجهاز:' : 'Pick which patient uses this station:'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingStationIdForPick(null)}
+                aria-label={isAr ? 'إغلاق' : 'Close'}
+                className={`p-1.5 rounded-xl shrink-0 cursor-pointer ${
+                  lightingMode === 'night'
+                    ? 'text-slate-400 hover:bg-slate-800'
+                    : 'text-slate-400 hover:bg-slate-100'
+                }`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
+              {treatmentHallWaitingPatients.map((pt) => (
+                <button
+                  key={pt.id}
+                  type="button"
+                  onClick={() =>
+                    assignTreatmentPatientToStation(pt.id, pendingStationForPick.item.instanceId)
+                  }
+                  className={`w-full text-start px-3.5 py-2.5 rounded-2xl border transition-all active:scale-95 cursor-pointer flex items-center justify-between gap-2 ${
+                    lightingMode === 'night'
+                      ? 'bg-slate-800 hover:bg-emerald-950/60 border-slate-700 hover:border-emerald-500/40 text-slate-100'
+                      : 'bg-slate-50 hover:bg-emerald-50 border-slate-200 hover:border-emerald-300 text-slate-900'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-black truncate">
+                      {isAr ? pt.clinicalCase.patientNameAr : pt.clinicalCase.patientNameEn}
+                    </div>
+                    <div
+                      className={`text-[10px] truncate ${
+                        lightingMode === 'night' ? 'text-slate-400' : 'text-slate-500'
+                      }`}
+                    >
+                      {isAr ? pt.clinicalCase.chiefComplaintAr : pt.clinicalCase.chiefComplaintEn}
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-black text-emerald-500 shrink-0">
+                    {isAr ? 'توجيه' : 'Send'}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -4592,13 +5681,34 @@ export default function App() {
                       : undefined;
                     const spr = st ? catalogById.get(st.catalogId)?.sprite : undefined;
                     if (spr === 'magnetotherapy') {
-                      return isAr ? 'جالس على جهاز المغناطيسية — ' : 'Seated on PEMF Magneto — ';
+                      return isAr ? 'على جهاز المغناطيسية — ' : 'On PEMF Magneto — ';
                     }
                     if (spr === 'traction_table') {
-                      return isAr ? 'جالس على طاولة الشد — ' : 'Seated on Traction Table — ';
+                      return isAr ? 'على طاولة الشد — ' : 'On Traction Table — ';
                     }
                     if (spr === 'tilt_table') {
-                      return isAr ? 'جالس على طاولة الإمالة — ' : 'Seated on Tilt Table — ';
+                      return isAr ? 'على طاولة الإمالة — ' : 'On Tilt Table — ';
+                    }
+                    if (spr === 'exercise_bike') {
+                      return isAr ? 'جالس على الدراجة العلاجية — ' : 'Seated on Rehab Bike — ';
+                    }
+                    if (spr === 'treadmill') {
+                      return isAr ? 'على جهاز المشي العلاجي — ' : 'On Gait Treadmill — ';
+                    }
+                    if (spr === 'parallel_bars') {
+                      return isAr ? 'داخل المتوازي العلاجي — ' : 'In Parallel Bars — ';
+                    }
+                    if (spr === 'balance_trainer') {
+                      return isAr ? 'على منصة التوازن — ' : 'On Balance Platform — ';
+                    }
+                    if (spr === 'wall_bars') {
+                      return isAr ? 'أمام السلم الجداري — ' : 'At Swedish Wall Bars — ';
+                    }
+                    if (spr === 'multi_gym_pulley') {
+                      return isAr ? 'على جهاز البكرات والمقاومة — ' : 'At Pulley Station — ';
+                    }
+                    if (spr === 'exercise_mat') {
+                      return isAr ? 'على فرشة التمارين — ' : 'On Exercise Mat — ';
                     }
                     return isAr ? 'جالس على السرير — ' : 'Seated on bed — ';
                   })()}
@@ -4670,13 +5780,20 @@ export default function App() {
       <WaitingQueueModal
         open={waitingQueueOpen && !visitingFriend}
         patients={patients}
-        freeStationsCount={freeStationsCount}
+        freeStationsCount={callableSlotsCount}
         totalStationsCount={totalStationsCount}
         language={clinic.language}
         lightingMode={lightingMode}
         onClose={() => setWaitingQueueOpen(false)}
         onCallPatient={(patientId) => {
           callPatientToStation(patientId);
+        }}
+        onAssignTreatmentPatient={(patientId) => {
+          setWaitingQueueOpen(false);
+          setSelectedWaitingPatientId(null);
+          setSelectedBedPatientId(null);
+          setPendingStationIdForPick(null);
+          setSelectedTreatmentWaitPatientId(patientId);
         }}
         onInspectActivePatient={(patientId) => {
           startFirstPersonSession(patientId);

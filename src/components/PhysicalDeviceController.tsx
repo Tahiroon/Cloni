@@ -172,6 +172,10 @@ const ANIMATED_TICK_SPRITES = new Set<string>([
   'cpm_device',
   'balance_trainer',
   'tilt_table',
+  'traction_table',
+  'exercise_bike',
+  'treadmill',
+  'multi_gym_pulley',
 ]);
 
 export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> = React.memo(({
@@ -322,7 +326,14 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
           </span>
         </button>
 
-        {device.sprite !== 'magnetotherapy' && device.sprite !== 'tilt_table' && (
+        {device.sprite !== 'magnetotherapy' &&
+          device.sprite !== 'tilt_table' &&
+          device.sprite !== 'traction_table' &&
+          device.sprite !== 'exercise_bike' &&
+          device.sprite !== 'treadmill' &&
+          device.sprite !== 'parallel_bars' &&
+          device.sprite !== 'wall_bars' &&
+          device.sprite !== 'multi_gym_pulley' && (
           <>
             <button
               type="button"
@@ -1219,7 +1230,7 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
           </div>
         </div>
 
-        {isHydro && hotPackProbe && (
+        {hotPackProbe && (
           <button
             type="button"
             onClick={() => onSelectProbeToPlace(hotPackProbe.id)}
@@ -1229,18 +1240,27 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
                 : 'bg-slate-800 hover:bg-slate-700 border-slate-500 text-white'
             }`}
           >
-            <span className="text-[8px] font-black text-amber-300">PACK</span>
+            <span className="text-[8px] font-black text-amber-300">{isHydro ? 'PACK' : 'MITT'}</span>
             <svg viewBox="0 0 60 66" className="w-10 h-12">
-              <rect x="12" y="10" width="36" height="44" rx="6" fill="#d97706" stroke="#fde68a" strokeWidth="2" />
-              <line x1="12" y1="26" x2="48" y2="26" stroke="#fbbf24" strokeWidth="1.5" />
-              <line x1="12" y1="40" x2="48" y2="40" stroke="#fbbf24" strokeWidth="1.5" />
+              {isHydro ? (
+                <>
+                  <rect x="12" y="10" width="36" height="44" rx="6" fill="#d97706" stroke="#fde68a" strokeWidth="2" />
+                  <line x1="12" y1="26" x2="48" y2="26" stroke="#fbbf24" strokeWidth="1.5" />
+                  <line x1="12" y1="40" x2="48" y2="40" stroke="#fbbf24" strokeWidth="1.5" />
+                </>
+              ) : (
+                <>
+                  <rect x="15" y="12" width="30" height="40" rx="11" fill="#0284c7" stroke="#fde68a" strokeWidth="2" />
+                  <rect x="15" y="42" width="30" height="10" rx="3" fill="#f8fafc" />
+                </>
+              )}
             </svg>
             <span
               className={`w-full py-0.5 rounded text-[8px] font-black ${
                 hotPackProbe.placed ? 'bg-emerald-400 text-slate-950' : 'bg-amber-400 text-slate-950'
               }`}
             >
-              {hotPackProbe.placed ? '✓ ON' : isAr ? 'ضع' : 'PACK'}
+              {hotPackProbe.placed ? '✓ ON' : isAr ? 'ضع' : isHydro ? 'PACK' : 'MITT'}
             </span>
           </button>
         )}
@@ -1582,6 +1602,447 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
     );
   };
 
+  // 13) LUMBAR TRACTION TABLE
+  const renderTractionTable = () => {
+    const kg = Number(params.tensionKg ?? 22);
+    const mode = params.mode ?? 'INTERM';
+    const pullWave = running ? (mode === 'INTERM' ? 0.5 + 0.5 * Math.sin(tickPhase * 0.85) : 1) : 0;
+    const liveKg = Math.round(kg * pullWave);
+
+    return (
+      <div className="w-[min(95vw,27rem)] select-none rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-slate-200 border-[3px] border-sky-600 shadow-[0_14px_34px_rgba(0,0,0,0.68)] text-slate-900 overflow-hidden">
+        {renderHardwareTopTrim('TRACTION UNIT', true)}
+        <div className="p-2 space-y-1.5">
+          <div className="rounded-lg bg-[#071624] border-2 border-sky-500/50 px-2.5 py-1.5 font-mono text-white flex items-center justify-between">
+            <div>
+              <div className="text-[9px] text-sky-300 font-black">{mode} · DECOMPRESSION</div>
+              <div className="text-base font-black tabular-nums">
+                {running ? liveKg : kg} <span className="text-[10px] text-cyan-300">kg</span>
+                <span className="text-[10px] text-slate-400 ml-1.5">/ {kg} kg</span>
+              </div>
+            </div>
+            <div className="w-24 h-2.5 rounded-full bg-slate-800 overflow-hidden border border-slate-600">
+              <div
+                style={{ width: `${Math.min(100, ((running ? liveKg : kg) / 45) * 100)}%` }}
+                className="h-full bg-sky-400 transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1">
+            {['INTERM', 'STATIC', 'PROGR'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => patchParams({ mode: m })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer ${
+                  mode === m ? 'bg-sky-600 border-sky-800 text-white' : 'bg-white border-slate-300 text-slate-700'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <HardwareFader
+            label={isAr ? 'قوة الشد (كجم)' : 'TRACTION FORCE (kg)'}
+            valueText={`${kg} kg`}
+            value={kg}
+            min={5}
+            max={45}
+            step={1}
+            lightBody
+            accentClass="bg-sky-500"
+            onChange={(v) => patchParams({ tensionKg: v })}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  // 14) EXERCISE BIKE ERGOMETER
+  const renderExerciseBike = () => {
+    const rpm = Number(params.rpm ?? 62);
+    const res = Number(params.resistance ?? 4);
+    const watts = Math.round(rpm * res * 0.35);
+
+    return (
+      <div className="w-[min(95vw,27rem)] select-none rounded-2xl bg-gradient-to-b from-slate-800 via-slate-900 to-[#090e17] border-[3px] border-sky-500/80 shadow-[0_14px_34px_rgba(0,0,0,0.72)] text-white overflow-hidden">
+        {renderHardwareTopTrim('ERGO BIKE · CONSOLE', false)}
+        <div className="p-2 space-y-1.5">
+          <div className="rounded-lg bg-[#061322] border-2 border-sky-500/50 px-2.5 py-1.5 font-mono flex items-center justify-between">
+            <div className="text-base font-black tabular-nums">
+              {rpm} <span className="text-[10px] text-sky-300">RPM</span>
+              <span className="text-slate-500 mx-1.5">·</span>
+              <span className="text-emerald-400">{watts} W</span>
+            </div>
+            <span className="text-[10px] font-black text-amber-300">RES L{res}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <HardwareFader
+              label={isAr ? 'السرعة (دورة/د)' : 'CADENCE (RPM)'}
+              valueText={`${rpm} RPM`}
+              value={rpm}
+              min={25}
+              max={95}
+              step={5}
+              accentClass="bg-sky-500"
+              onChange={(v) => patchParams({ rpm: v })}
+            />
+            <HardwareFader
+              label={isAr ? 'المقاومة' : 'RESISTANCE'}
+              valueText={`LVL ${res}`}
+              value={res}
+              min={1}
+              max={10}
+              step={1}
+              accentClass="bg-emerald-500"
+              onChange={(v) => patchParams({ resistance: v })}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 15) GAIT TREADMILL
+  const renderTreadmill = () => {
+    const spd = Number(params.speed ?? 2.8);
+    const inc = Number(params.inclinePct ?? 2);
+
+    return (
+      <div className="w-[min(95vw,27rem)] select-none rounded-2xl bg-gradient-to-b from-slate-800 via-slate-900 to-[#090e17] border-[3px] border-cyan-500/80 shadow-[0_14px_34px_rgba(0,0,0,0.72)] text-white overflow-hidden">
+        {renderHardwareTopTrim('GAIT TREADMILL', false)}
+        <div className="p-2 space-y-1.5">
+          <div className="rounded-lg bg-[#061322] border-2 border-cyan-500/50 px-2.5 py-1.5 font-mono flex items-center justify-between">
+            <div className="text-base font-black tabular-nums">
+              {spd.toFixed(1)} <span className="text-[10px] text-cyan-300">km/h</span>
+              <span className="text-slate-500 mx-1.5">·</span>
+              <span className="text-amber-300">{inc}% INC</span>
+            </div>
+            <span className={`text-[9px] font-black ${running ? 'text-emerald-400' : 'text-slate-400'}`}>
+              {running ? 'BELT ACTIVE' : 'BELT STOPPED'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <HardwareFader
+              label={isAr ? 'السرعة (كم/س)' : 'SPEED (km/h)'}
+              valueText={`${spd.toFixed(1)}`}
+              value={spd}
+              min={0.5}
+              max={8.0}
+              step={0.5}
+              accentClass="bg-cyan-500"
+              onChange={(v) => patchParams({ speed: v })}
+            />
+            <HardwareFader
+              label={isAr ? 'الميل (%)' : 'INCLINE (%)'}
+              valueText={`${inc}%`}
+              value={inc}
+              min={0}
+              max={12}
+              step={1}
+              accentClass="bg-amber-500"
+              onChange={(v) => patchParams({ inclinePct: v })}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 16) PARALLEL BARS (GAIT REHAB)
+  const renderParallelBars = () => {
+    const barH = Number(params.barHeightCm ?? 85);
+    const mode = params.mode ?? 'ALTERNATING';
+
+    return (
+      <div className="w-[min(95vw,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 border-[3px] border-emerald-600 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
+        {renderHardwareTopTrim('PARALLEL BARS · GAIT', true)}
+        <div className="p-2 space-y-1.5">
+          <div className="grid grid-cols-3 gap-1">
+            {['ALTERNATING', 'TANDEM', 'STEP-OVER'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => patchParams({ mode: m })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer ${
+                  mode === m ? 'bg-emerald-600 border-emerald-800 text-white' : 'bg-white border-slate-400 text-slate-700'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <HardwareFader
+            label={isAr ? 'ارتفاع المتوازي (سم)' : 'RAIL HEIGHT (cm)'}
+            valueText={`${barH} cm`}
+            value={barH}
+            min={70}
+            max={105}
+            step={5}
+            lightBody
+            accentClass="bg-emerald-500"
+            onChange={(v) => patchParams({ barHeightCm: v })}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  // 17) SWEDISH WALL BARS
+  const renderWallBars = () => {
+    const mode = params.mode ?? 'SPINAL HANG';
+    const band = Number(params.resistance ?? 2);
+
+    return (
+      <div className="w-[min(95vw,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-amber-50 via-stone-100 to-amber-100 border-[3px] border-amber-600 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
+        {renderHardwareTopTrim('SWEDISH WALL BARS', true)}
+        <div className="p-2 space-y-1.5">
+          <div className="grid grid-cols-2 gap-1">
+            {['SPINAL HANG', 'SCAPULAR', 'HAMSTRING', 'BAND PULL'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => patchParams({ mode: m })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer ${
+                  mode === m ? 'bg-amber-600 border-amber-800 text-white' : 'bg-white border-slate-400 text-slate-700'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <HardwareFader
+            label={isAr ? 'مستوى الحبل المطاطي' : 'BAND RESISTANCE'}
+            valueText={`BAND L${band}`}
+            value={band}
+            min={1}
+            max={4}
+            step={1}
+            lightBody
+            accentClass="bg-amber-500"
+            onChange={(v) => patchParams({ resistance: v })}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  // 18) MULTI-GYM PULLEY TOWER
+  const renderPulley = () => {
+    const kg = Number(params.weightKg ?? 7.5);
+    const mode = params.mode ?? 'ROW PULL';
+
+    return (
+      <div className="w-[min(95vw,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-[3px] border-sky-500/80 shadow-[0_14px_34px_rgba(0,0,0,0.70)] text-white overflow-hidden">
+        {renderHardwareTopTrim('CABLE PULLEY TOWER', false)}
+        <div className="p-2 space-y-1.5">
+          <div className="grid grid-cols-3 gap-1">
+            {['ROW PULL', 'LAT PULL', 'PRESS'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => patchParams({ mode: m })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer ${
+                  mode === m ? 'bg-sky-500 border-sky-300 text-slate-950' : 'bg-slate-800 border-slate-600 text-slate-200'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <HardwareFader
+            label={isAr ? 'وزن الكيبل (كجم)' : 'WEIGHT STACK (kg)'}
+            valueText={`${kg.toFixed(1)} kg`}
+            value={kg}
+            min={2.5}
+            max={20}
+            step={2.5}
+            accentClass="bg-sky-500"
+            onChange={(v) => patchParams({ weightKg: v })}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  // 19) HAND REHAB TABLE
+  const renderHandRehabTable = () => {
+    const tool = String(params.tool ?? 'PEGBOARD');
+    const grip = Number(params.gripKg ?? 28);
+
+    return (
+      <div className="w-[min(95vw,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-teal-50 via-slate-100 to-teal-100 border-[3px] border-teal-600 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
+        {renderHardwareTopTrim('HAND REHAB TABLE', true)}
+        <div className="p-2 space-y-1.5">
+          <div className="grid grid-cols-3 gap-1">
+            {['PEGBOARD', 'PUTTY', 'DYNAMOMETER'].map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => patchParams({ tool: t })}
+                className={`py-1 rounded text-[9px] font-black border cursor-pointer ${
+                  tool === t ? 'bg-teal-600 border-teal-800 text-white' : 'bg-white border-slate-400 text-slate-700'
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          <HardwareFader
+            label={isAr ? 'قوة القبضة (كجم)' : 'TARGET GRIP (kg)'}
+            valueText={`${grip} kg`}
+            value={grip}
+            min={5}
+            max={65}
+            step={1}
+            lightBody
+            accentClass="bg-teal-500"
+            onChange={(v) => patchParams({ gripKg: v })}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  // 20) PT DIAGNOSTIC TOOLKIT CART
+  const renderPtToolkitCart = () => {
+    const tool = String(params.tool ?? 'GONIOMETER');
+    const rom = Number(params.romDeg ?? 115);
+    const dtr = String(params.dtrGrade ?? '2+');
+    const headProbe = probes[0];
+
+    return (
+      <div className="w-[min(95vw,27.5rem)] select-none flex items-stretch gap-1.5">
+        <div className="flex-1 rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-slate-200 border-[3px] border-sky-500 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
+          {renderHardwareTopTrim('PT TOOLKIT CART', true, { on: 'STOP', off: isAr ? 'قياس' : 'MEASURE' })}
+          <div className="p-2 space-y-1.5">
+            <div className="grid grid-cols-4 gap-1">
+              {['GONIOMETER', 'REFLEX', 'IASTM', 'TAPE'].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => patchParams({ tool: t })}
+                  className={`py-1 rounded text-[8.5px] font-black border cursor-pointer ${
+                    tool === t ? 'bg-sky-600 border-sky-800 text-white' : 'bg-white border-slate-400 text-slate-700'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            {tool === 'REFLEX' ? (
+              <div className="flex items-center justify-between gap-1 bg-white/80 rounded-lg border border-slate-300 px-2 py-1">
+                <span className="text-[9px] font-black text-slate-700">
+                  {isAr ? 'تقييم المنعكس' : 'DTR GRADE'}
+                </span>
+                <div className="flex gap-1">
+                  {['0', '1+', '2+', '3+', '4+'].map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => patchParams({ dtrGrade: g })}
+                      className={`px-2 py-0.5 rounded text-[9px] font-black border cursor-pointer ${
+                        dtr === g ? 'bg-sky-600 border-sky-800 text-white' : 'bg-white border-slate-300 text-slate-700'
+                      }`}
+                    >
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <HardwareFader
+                label={isAr ? 'المدى الحركي (°)' : 'MEASURED ROM (°)'}
+                valueText={`${rom}°`}
+                value={rom}
+                min={15}
+                max={165}
+                step={5}
+                lightBody
+                accentClass="bg-sky-500"
+                onChange={(v) => patchParams({ romDeg: v })}
+              />
+            )}
+          </div>
+        </div>
+
+        {headProbe && (
+          <button
+            type="button"
+            onClick={() => onSelectProbeToPlace(headProbe.id)}
+            className={`w-16 rounded-2xl border-[3px] p-1 flex flex-col items-center justify-between text-center cursor-pointer shadow-xl ${
+              device.selectedProbeId === headProbe.id
+                ? 'bg-emerald-900 border-emerald-400 text-white'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-500 text-white'
+            }`}
+          >
+            <span className="text-[8px] font-black text-sky-300">{tool.slice(0, 5)}</span>
+            <span className="text-sm font-black text-white">⌖</span>
+            <span
+              className={`w-full py-0.5 rounded text-[8px] font-black ${
+                headProbe.placed ? 'bg-emerald-400 text-slate-950' : 'bg-sky-400 text-slate-950'
+              }`}
+            >
+              {headProbe.placed ? '✓ ON' : isAr ? 'موضع' : 'APPLY'}
+            </span>
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // 21) SWISS GYM BALL RACK
+  const renderBallRack = () => {
+    const drill = String(params.tool ?? 'CORE STABILITY');
+    const ballSz = String(params.ballSize ?? '55cm');
+
+    return (
+      <div className="w-[min(95vw,26.5rem)] select-none rounded-2xl bg-gradient-to-b from-cyan-50 via-slate-100 to-teal-100 border-[3px] border-teal-500 shadow-[0_14px_34px_rgba(0,0,0,0.65)] text-slate-900 overflow-hidden">
+        {renderHardwareTopTrim('SWISS BALL LAB', true)}
+        <div className="p-2 space-y-1.5">
+          <div className="grid grid-cols-3 gap-1">
+            {['CORE STABILITY', 'PELVIC TILT', 'SCAPULAR'].map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => patchParams({ tool: d })}
+                className={`py-1 rounded text-[8.5px] font-black border cursor-pointer ${
+                  drill === d ? 'bg-teal-600 border-teal-800 text-white' : 'bg-white border-slate-400 text-slate-700'
+                }`}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            {['55cm', '65cm'].map((sz) => (
+              <button
+                key={sz}
+                type="button"
+                onClick={() => patchParams({ ballSize: sz })}
+                className={`py-1 rounded text-[10px] font-black border cursor-pointer ${
+                  ballSz === sz ? 'bg-sky-600 border-sky-800 text-white' : 'bg-white border-slate-400 text-slate-700'
+                }`}
+              >
+                {isAr ? `كرة سويسرية ${sz}` : `Swiss Ball ${sz}`}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderChassis = () => {
     switch (device.sprite) {
       case 'tens_unit':
@@ -1607,6 +2068,24 @@ export const PhysicalDeviceController: React.FC<PhysicalDeviceControllerProps> =
         return renderMagnetotherapyConsole();
       case 'tilt_table':
         return renderTiltTableConsole();
+      case 'traction_table':
+        return renderTractionTable();
+      case 'exercise_bike':
+        return renderExerciseBike();
+      case 'treadmill':
+        return renderTreadmill();
+      case 'parallel_bars':
+        return renderParallelBars();
+      case 'wall_bars':
+        return renderWallBars();
+      case 'multi_gym_pulley':
+        return renderPulley();
+      case 'hand_rehab_table':
+        return renderHandRehabTable();
+      case 'pt_toolkit_cart':
+        return renderPtToolkitCart();
+      case 'ball_rack':
+        return renderBallRack();
       default:
         return renderBalanceTrainer();
     }

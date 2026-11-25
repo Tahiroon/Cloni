@@ -1415,19 +1415,44 @@ class SoundEngine {
       return handle;
     }
 
-    if (sprite === 'tilt_table') {
+    if (sprite === 'tilt_table' || sprite === 'traction_table' || sprite === 'treadmill' || sprite === 'exercise_bike') {
       const motorSrc = ctx.createBufferSource();
       motorSrc.buffer = this.getDeviceBuffer(ctx, 'cpm_motor_loop');
       motorSrc.loop = true;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(640, now);
+      lp.frequency.setValueAtTime(
+        sprite === 'treadmill' ? 520 : sprite === 'exercise_bike' ? 460 : 640,
+        now
+      );
       motorSrc.connect(lp);
       lp.connect(masterGain);
       motorSrc.start(now);
       nodes.push(motorSrc, lp);
       handle.src1 = motorSrc;
       handle.filter1 = lp;
+      return handle;
+    }
+
+    if (
+      sprite === 'parallel_bars' ||
+      sprite === 'wall_bars' ||
+      sprite === 'multi_gym_pulley' ||
+      sprite === 'hand_rehab_table' ||
+      sprite === 'pt_toolkit_cart' ||
+      sprite === 'ball_rack'
+    ) {
+      const pulseOsc = ctx.createOscillator();
+      pulseOsc.type = 'sine';
+      pulseOsc.frequency.setValueAtTime(sprite === 'pt_toolkit_cart' ? 760 : 540, now);
+      const pulseGain = ctx.createGain();
+      pulseGain.gain.setValueAtTime(0.0001, now);
+      pulseOsc.connect(pulseGain);
+      pulseGain.connect(out);
+      pulseOsc.start(now);
+      nodes.push(pulseOsc, pulseGain);
+      handle.pulseOsc = pulseOsc;
+      handle.pulseGain = pulseGain;
       return handle;
     }
 
@@ -1566,6 +1591,27 @@ class SoundEngine {
         h.pulseGain.gain.exponentialRampToValueAtTime(0.0003, pt + Math.min(0.085, period * 0.72));
         h.nextPulseAt += period;
       }
+    } else if (
+      (h.sprite === 'parallel_bars' ||
+        h.sprite === 'wall_bars' ||
+        h.sprite === 'multi_gym_pulley' ||
+        h.sprite === 'hand_rehab_table' ||
+        h.sprite === 'pt_toolkit_cart' ||
+        h.sprite === 'ball_rack') &&
+      h.pulseOsc &&
+      h.pulseGain
+    ) {
+      const isReflex = h.sprite === 'pt_toolkit_cart' && p?.tool === 'REFLEX';
+      const period = isReflex ? 0.95 : 2.1;
+      if (h.nextPulseAt < now - 0.25) h.nextPulseAt = now + 0.08;
+      while (h.nextPulseAt <= lookahead) {
+        const pt = h.nextPulseAt;
+        h.pulseOsc.frequency.setValueAtTime(isReflex ? 820 : 520, pt);
+        h.pulseGain.gain.setValueAtTime(0.0002, pt);
+        h.pulseGain.gain.linearRampToValueAtTime(isReflex ? 0.065 : 0.032, pt + 0.01);
+        h.pulseGain.gain.exponentialRampToValueAtTime(0.0002, pt + 0.085);
+        h.nextPulseAt += period;
+      }
     }
   }
 
@@ -1642,6 +1688,20 @@ class SoundEngine {
       const motorActive = Boolean(item.isMoving);
       h.masterGain.gain.setTargetAtTime(motorActive ? 0.075 + spd * 0.028 : 0.0002, now, 0.05);
       h.src1?.playbackRate.setTargetAtTime(0.76 + spd * 0.11, now, 0.05);
+    } else if (h.sprite === 'traction_table') {
+      const kg = Number(p?.tensionKg ?? 22);
+      const isInterm = (p?.mode ?? 'INTERM') === 'INTERM';
+      const wave = isInterm ? Math.abs(Math.sin(timeSec * 1.15)) : 0.35;
+      h.masterGain.gain.setTargetAtTime(0.03 + (kg / 45) * 0.05 * (0.4 + 0.6 * wave), now, 0.05);
+      h.src1?.playbackRate.setTargetAtTime(0.78 + wave * 0.22, now, 0.05);
+    } else if (h.sprite === 'exercise_bike') {
+      const rpm = Number(p?.rpm ?? 62);
+      h.masterGain.gain.setTargetAtTime(0.028 + (rpm / 95) * 0.032, now, 0.05);
+      h.src1?.playbackRate.setTargetAtTime(0.75 + (rpm / 95) * 0.45, now, 0.05);
+    } else if (h.sprite === 'treadmill') {
+      const sp = Number(p?.speed ?? 2.8);
+      h.masterGain.gain.setTargetAtTime(0.035 + (sp / 8) * 0.055, now, 0.05);
+      h.src1?.playbackRate.setTargetAtTime(0.78 + (sp / 8) * 0.52, now, 0.05);
     }
 
     this.schedulePulse(ctx, h, item, timeSec);

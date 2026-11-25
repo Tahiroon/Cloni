@@ -110,6 +110,56 @@ export interface TiltTableRigMeta {
   currentDeg: number;
 }
 
+export interface TractionTableRigMeta {
+  lumbarSlideGroup: THREE.Group;
+  winchDrum: THREE.Mesh;
+  ledMat: THREE.MeshStandardMaterial;
+  consoleAnchor: THREE.Object3D;
+  currentSlideX: number;
+}
+
+export interface BikeStationRigMeta {
+  crankGroup: THREE.Group;
+  wheelMesh: THREE.Mesh;
+  screenMat: THREE.MeshStandardMaterial;
+  consoleAnchor: THREE.Object3D;
+}
+
+export interface TreadmillStationRigMeta {
+  deckTiltGroup: THREE.Group;
+  beltSlats: THREE.Mesh[];
+  screenMat: THREE.MeshStandardMaterial;
+  consoleAnchor: THREE.Object3D;
+  beltPhase: number;
+}
+
+export interface ParallelBarsRigMeta {
+  railsGroup: THREE.Group;
+  consoleAnchor: THREE.Object3D;
+  currentOffsetY: number;
+}
+
+export interface WallBarsRigMeta {
+  bandsGroup: THREE.Group;
+  consoleAnchor: THREE.Object3D;
+}
+
+export interface PulleyRigMeta {
+  stackPlates: THREE.Mesh[];
+  pinMesh: THREE.Mesh;
+  carriageGroup: THREE.Group;
+  handleL: THREE.Mesh;
+  handleR: THREE.Mesh;
+  consoleAnchor: THREE.Object3D;
+}
+
+export interface BalanceStationRigMeta {
+  plateGroup: THREE.Group;
+  ledMat: THREE.MeshStandardMaterial;
+  screenMat: THREE.MeshStandardMaterial;
+  consoleAnchor: THREE.Object3D;
+}
+
 export interface ClinicWorldHandle {
   group: THREE.Group;
   doors: ClinicDoorHandle[];
@@ -3451,24 +3501,24 @@ export function createCatalogMesh3D(
 
     case 'reception_desk': {
       const deskFile = new THREE.Group();
-      deskFile.position.set(RECEPTION_CHAIR_LOCAL_X - 0.3, 0.728, 0.08);
-      deskFile.rotation.y = 0.18;
+      deskFile.position.set(RECEPTION_CHAIR_LOCAL_X - 0.37, 0.728, 0.13);
+      deskFile.rotation.y = 0.16;
       const dfCover = new THREE.Mesh(
-        new THREE.BoxGeometry(0.21, 0.014, 0.27),
+        new THREE.BoxGeometry(0.22, 0.016, 0.28),
         makeMat({ color: 0x0284c7, roughness: 0.48 })
       );
       dfCover.userData.noCastShadow = true;
       const dfSheets = new THREE.Mesh(
-        new THREE.BoxGeometry(0.185, 0.009, 0.245),
+        new THREE.BoxGeometry(0.195, 0.01, 0.255),
         whiteBody
       );
-      dfSheets.position.set(0.006, 0.008, 0.008);
+      dfSheets.position.set(0.006, 0.009, 0.008);
       dfSheets.userData.noCastShadow = true;
       const dfTab = new THREE.Mesh(
-        new THREE.BoxGeometry(0.06, 0.016, 0.028),
+        new THREE.BoxGeometry(0.066, 0.018, 0.032),
         makeMat({ color: 0xf59e0b, roughness: 0.45 })
       );
-      dfTab.position.set(0.065, 0.002, -0.14);
+      dfTab.position.set(0.068, 0.003, -0.145);
       dfTab.userData.noCastShadow = true;
       deskFile.add(dfCover, dfSheets, dfTab);
       deskFile.visible = false;
@@ -3512,15 +3562,71 @@ export function createCatalogMesh3D(
         rotY: Math.PI,
       });
       if (mon) {
-        mon.position.set(RECEPTION_CHAIR_LOCAL_X, 0.715, 0.14);
+        mon.position.set(RECEPTION_CHAIR_LOCAL_X, 0.715, 0.17);
         inner.add(mon);
       } else {
         outer.userData.usesFallbackGlb = true;
-        box(0.16, 0.018, 0.12, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.725, 0.14);
-        box(0.035, 0.09, 0.03, silverMetal, RECEPTION_CHAIR_LOCAL_X, 0.77, 0.14);
-        box(0.38, 0.23, 0.024, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.87, 0.14);
-        box(0.35, 0.195, 0.01, receptionScreenMat, RECEPTION_CHAIR_LOCAL_X, 0.87, 0.128).userData.noCastShadow = true;
+        box(0.16, 0.018, 0.12, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.725, 0.17);
+        box(0.035, 0.09, 0.03, silverMetal, RECEPTION_CHAIR_LOCAL_X, 0.77, 0.17);
+        box(0.38, 0.23, 0.024, darkSlate, RECEPTION_CHAIR_LOCAL_X, 0.87, 0.17);
+        box(0.35, 0.195, 0.01, receptionScreenMat, RECEPTION_CHAIR_LOCAL_X, 0.87, 0.158).userData.noCastShadow = true;
       }
+
+      // Keyboard + Mousepad + Wireless Mouse directly in front of monitor for receptionist typing
+      const kbGroup = new THREE.Group();
+      kbGroup.position.set(RECEPTION_CHAIR_LOCAL_X + 0.02, 0.721, 0.012);
+      kbGroup.rotation.x = 0.065;
+      const kbChassisMat = makeMat({ color: 0x1e293b, roughness: 0.45, metalness: 0.35 });
+      const kbKeyMat = makeMat({ color: 0xe2e8f0, roughness: 0.55 });
+      const kbLedMat = makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.9 });
+      const kbChassis = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.012, 0.108), kbChassisMat);
+      kbChassis.userData.noCastShadow = true;
+      kbGroup.add(kbChassis);
+      for (const rz of [0.028, 0.005, -0.018]) {
+        const keyRow = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.006, 0.015), kbKeyMat);
+        keyRow.position.set(0, 0.007, rz);
+        keyRow.userData.noCastShadow = true;
+        kbGroup.add(keyRow);
+      }
+      const spaceBar = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.006, 0.015), kbKeyMat);
+      spaceBar.position.set(0.01, 0.007, -0.039);
+      spaceBar.userData.noCastShadow = true;
+      const kbLed = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.004, 0.005), kbLedMat);
+      kbLed.position.set(-0.12, 0.007, 0.044);
+      kbLed.userData.noCastShadow = true;
+      kbGroup.add(spaceBar, kbLed);
+      inner.add(kbGroup);
+
+      const mousePad = box(
+        0.115,
+        0.004,
+        0.135,
+        makeMat({ color: 0x0f172a, roughness: 0.85 }),
+        RECEPTION_CHAIR_LOCAL_X - 0.195,
+        0.72,
+        0.01
+      );
+      mousePad.userData.noCastShadow = true;
+      const mouseBody = box(
+        0.044,
+        0.02,
+        0.072,
+        makeMat({ color: 0x334155, roughness: 0.4, metalness: 0.2 }),
+        RECEPTION_CHAIR_LOCAL_X - 0.195,
+        0.731,
+        0.008
+      );
+      mouseBody.userData.noCastShadow = true;
+      const mouseWheel = box(
+        0.008,
+        0.007,
+        0.016,
+        kbKeyMat,
+        RECEPTION_CHAIR_LOCAL_X - 0.195,
+        0.742,
+        0.026
+      );
+      mouseWheel.userData.noCastShadow = true;
 
       const lamp = glbRegistry.cloneNormalized('furn_lamp_desk', {
         targetHeight: 0.26,
@@ -4518,48 +4624,67 @@ export function createCatalogMesh3D(
       bevelBox(1.36, 0.022, 0.70, 0.03, 0.004, trBorder, -0.08, 0.428, 0);
       // Thoracic/head deck (-X): x = -0.43, w = 0.64 -> ends at -0.11; top = 0.475 + 0.045 = 0.520
       bevelBox(0.64, 0.09, 0.68, 0.038, 0.014, trVinyl, -0.43, 0.475, 0);
-      // Moving lumbar decompression deck (+X): x = +0.23, w = 0.62 -> starts at -0.08 (3cm crisp split gap!)
-      bevelBox(0.62, 0.09, 0.68, 0.038, 0.014, trVinyl, 0.23, 0.475, 0);
-      // Rounded plush bolsters along edges (receiveOnly so zero shadow artifact on legs)
+      // Edge bolsters along fixed thoracic section
       for (const mz of [-0.336, 0.336]) {
         const bThor = smoothCyl(0.022, 0.022, 0.60, trVinyl, -0.43, 0.502, mz, 18);
         bThor.rotation.z = Math.PI / 2;
         bThor.userData.receiveOnly = true;
+      }
+      for (const cz of [-0.36, 0.36]) {
+        bevelBox(0.18, 0.024, 0.024, 0.006, 0.003, trChrome, -0.08, 0.42, cz).userData.noCastShadow = true;
+      }
+
+      // Moving lumbar decompression carriage (+X): grouped so lumbar split slides outward under spinal traction!
+      const trLumbarSlide = new THREE.Group();
+      inner.add(trLumbarSlide);
+      const lumbDeck = bevelBox(0.62, 0.09, 0.68, 0.038, 0.014, trVinyl, 0.23, 0.475, 0);
+      trLumbarSlide.add(lumbDeck);
+      for (const mz of [-0.336, 0.336]) {
         const bLumb = smoothCyl(0.022, 0.022, 0.58, trVinyl, 0.23, 0.502, mz, 18);
         bLumb.rotation.z = Math.PI / 2;
         bLumb.userData.receiveOnly = true;
-      }
-      // Subtle belt anchor cleats recessed cleanly below seat line
-      for (const cz of [-0.36, 0.36]) {
-        bevelBox(0.18, 0.024, 0.024, 0.006, 0.003, trChrome, -0.08, 0.42, cz).userData.noCastShadow = true;
-        bevelBox(0.08, 0.022, 0.028, 0.005, 0.003, cyanAccent, 0.22, 0.42, cz).userData.noCastShadow = true;
+        const cleat = bevelBox(0.08, 0.022, 0.028, 0.005, 0.003, cyanAccent, 0.22, 0.42, mz > 0 ? 0.36 : -0.36);
+        cleat.userData.noCastShadow = true;
+        trLumbarSlide.add(bLumb, cleat);
       }
 
-      // Contoured cervical pillow at -X (-0.61) & half-moon orthopedic knee bolster at +X (+0.44, clear of x=0 seat!)
+      // Contoured cervical pillow at -X (-0.61) & half-moon orthopedic knee bolster inside sliding lumbar deck
       const tPillow = bevelBox(0.22, 0.044, 0.42, 0.05, 0.014, trPillow, -0.61, 0.544, 0);
       tPillow.userData.receiveOnly = true;
       const bolster = smoothCyl(0.06, 0.06, 0.48, cyanAccent, 0.44, 0.548, 0, 24);
       bolster.rotation.x = Math.PI / 2;
       bolster.userData.receiveOnly = true;
+      trLumbarSlide.add(bolster);
 
       // 5. Motorized Foot Traction Console Tower (+0.74) with Digital Screen, Winch, Cables & Spreader Bar
       bevelBox(0.22, 0.78, 0.44, 0.024, 0.007, whiteBody, 0.74, 0.78, 0);
       bevelBox(0.06, 0.74, 0.38, 0.016, 0.005, trSlate, 0.83, 0.78, 0);
       bevelBox(0.24, 0.046, 0.46, 0.02, 0.006, cyanAccent, 0.74, 1.18, 0);
 
+      const trLedMat = makeMat({
+        map: textures.ecgScreen,
+        emissive: 0x38bdf8,
+        emissiveIntensity: 0.48,
+      });
       const consoleHead = bevelBox(0.14, 0.24, 0.36, 0.018, 0.005, trSlate, 0.65, 1.04, 0);
       consoleHead.rotation.z = 0.22;
-      const fScreen = box(
-        0.02,
-        0.18,
-        0.29,
-        makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.48 }),
-        0.59,
-        1.05,
-        0
-      );
+      consoleHead.userData.isTractionConsole = true;
+      consoleHead.userData.isDeviceScreen = true;
+      const fScreen = box(0.02, 0.18, 0.29, trLedMat, 0.59, 1.05, 0);
       fScreen.rotation.z = 0.22;
       fScreen.userData.noCastShadow = true;
+      fScreen.userData.isTractionConsole = true;
+      fScreen.userData.isDeviceScreen = true;
+      const trHitProxy = new THREE.Mesh(
+        new THREE.BoxGeometry(0.28, 0.42, 0.42),
+        new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false })
+      );
+      trHitProxy.position.set(0.66, 1.0, 0);
+      trHitProxy.userData.noCastShadow = true;
+      trHitProxy.userData.isTractionConsole = true;
+      trHitProxy.userData.isDeviceScreen = true;
+      inner.add(trHitProxy);
+
       // Rotary tension knob + E-stop button on tower front
       smoothCyl(0.022, 0.024, 0.024, trChrome, 0.62, 0.88, -0.09, 16).rotation.z = Math.PI / 2;
       smoothCyl(0.02, 0.02, 0.022, redAccent, 0.62, 0.88, 0.09, 16).rotation.z = Math.PI / 2;
@@ -4576,6 +4701,14 @@ export function createCatalogMesh3D(
       tube([[0.70, 0.68, 0.22], [0.64, 0.50, 0.34], [0.56, 0.56, 0.34]], 0.007, blackRubber, 8);
       bevelBox(0.075, 0.036, 0.036, 0.008, 0.004, trSlate, 0.55, 0.56, 0.34);
       smoothCyl(0.012, 0.012, 0.018, redAccent, 0.55, 0.582, 0.34, 14).userData.noCastShadow = true;
+
+      outer.userData.tractionRig = {
+        lumbarSlideGroup: trLumbarSlide,
+        winchDrum,
+        ledMat: trLedMat,
+        consoleAnchor: consoleHead,
+        currentSlideX: 0,
+      } as TractionTableRigMeta;
       break;
     }
 
@@ -4618,11 +4751,28 @@ export function createCatalogMesh3D(
     }
 
     case 'treadmill': {
-      // Clinical Gait Rehabilitation Treadmill with cushioned deck, safety tether & full-length medical handrails
-      box(1.74, 0.13, 0.82, darkSlate, 0, 0.07, 0);
-      box(1.42, 0.04, 0.58, blackRubber, -0.08, 0.15, 0);
-      // Textured belt center alignment line & side step strips
-      box(1.36, 0.042, 0.02, cyanAccent, -0.08, 0.152, 0);
+      // Clinical Gait Rehabilitation Treadmill with cushioned incline deck, moving belt slats, safety tether & console
+      box(1.74, 0.09, 0.82, darkSlate, 0, 0.045, 0);
+      const deckTiltGroup = new THREE.Group();
+      deckTiltGroup.position.set(-0.68, 0.08, 0);
+      inner.add(deckTiltGroup);
+      const deckBase = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.04, 0.64), darkSlate);
+      deckBase.position.set(0.62, 0.02, 0);
+      const belt = new THREE.Mesh(new THREE.BoxGeometry(1.40, 0.03, 0.58), blackRubber);
+      belt.position.set(0.62, 0.06, 0);
+      const centerStripe = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.032, 0.02), cyanAccent);
+      centerStripe.position.set(0.62, 0.062, 0);
+      deckTiltGroup.add(deckBase, belt, centerStripe);
+      const beltSlats: THREE.Mesh[] = [];
+      const slatGeom = new THREE.BoxGeometry(0.035, 0.033, 0.54);
+      for (let si = 0; si < 5; si++) {
+        const sl = new THREE.Mesh(slatGeom, silverMetal);
+        sl.position.set(0.04 + si * 0.28, 0.063, 0);
+        sl.userData.noCastShadow = true;
+        deckTiltGroup.add(sl);
+        beltSlats.push(sl);
+      }
+
       box(1.56, 0.055, 0.07, silverMetal, -0.02, 0.155, 0.36);
       box(1.56, 0.055, 0.07, silverMetal, -0.02, 0.155, -0.36);
       box(0.36, 0.17, 0.68, whiteBody, 0.64, 0.18, 0);
@@ -4633,37 +4783,49 @@ export function createCatalogMesh3D(
         const topRail = cyl(0.024, 0.024, 1.02, darkSlate, 0.24, 0.86, sz);
         topRail.rotation.z = Math.PI / 2;
       }
+      const tmScrMat = makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.42 });
       const con = box(0.24, 0.22, 0.76, darkSlate, 0.62, 1.08, 0);
       con.rotation.z = 0.35;
-      const scr = box(
-        0.18,
-        0.03,
-        0.48,
-        makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.42 }),
-        0.6,
-        1.17,
-        0
-      );
+      con.userData.isTreadmillConsole = true;
+      con.userData.isDeviceScreen = true;
+      const scr = box(0.18, 0.03, 0.48, tmScrMat, 0.6, 1.17, 0);
       scr.rotation.z = 0.35;
       scr.userData.noCastShadow = true;
+      scr.userData.isTreadmillConsole = true;
+      scr.userData.isDeviceScreen = true;
       box(0.05, 0.05, 0.05, redAccent, 0.54, 1.06, 0);
       tube([[0.54, 1.05, 0], [0.46, 0.92, 0.06], [0.38, 0.85, 0.02]], 0.006, redAccent, 8);
       inner.scale.set(0.9, 0.82, 0.9);
+      outer.userData.treadmillRig = {
+        deckTiltGroup,
+        beltSlats,
+        screenMat: tmScrMat,
+        consoleAnchor: con,
+        beltPhase: 0,
+      } as TreadmillStationRigMeta;
       break;
     }
 
     case 'exercise_bike': {
-      // Clinical Semi-Recumbent Rehab Ergometer with step-through chassis, crank pedals & ergonomic backrest
+      // Clinical Semi-Recumbent Rehab Ergometer with articulated crank pedals, flywheel & backlit console
       box(0.86, 0.06, 0.48, silverMetal, 0, 0.035, 0);
       box(0.68, 0.14, 0.18, darkSlate, 0, 0.11, 0);
       const wheel = cyl(0.23, 0.23, 0.16, whiteBody, 0.18, 0.31, 0);
       wheel.rotation.x = Math.PI / 2;
       const hub = cyl(0.12, 0.12, 0.18, cyanAccent, 0.18, 0.31, 0);
       hub.rotation.x = Math.PI / 2;
+      const crankGroup = new THREE.Group();
+      crankGroup.position.set(0.18, 0.31, 0);
+      inner.add(crankGroup);
       for (const pz of [-0.14, 0.14]) {
-        box(0.03, 0.15, 0.025, silverMetal, 0.12, pz > 0 ? 0.28 : 0.35, pz * 0.78);
-        box(0.11, 0.03, 0.09, blackRubber, 0.12, pz > 0 ? 0.2 : 0.42, pz);
-        box(0.06, 0.025, 0.09, cyanAccent, 0.12, pz > 0 ? 0.23 : 0.45, pz);
+        const dir = pz > 0 ? -1 : 1;
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.15, 0.025), silverMetal);
+        arm.position.set(0, dir * 0.06, pz * 0.78);
+        const pad = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.03, 0.09), blackRubber);
+        pad.position.set(0, dir * 0.12, pz);
+        const strap = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.025, 0.09), cyanAccent);
+        strap.position.set(0, dir * 0.145, pz);
+        crankGroup.add(arm, pad, strap);
       }
       cyl(0.032, 0.038, 0.52, silverMetal, -0.22, 0.34, 0);
       box(0.24, 0.08, 0.24, blueUpholstery, -0.22, 0.62, 0);
@@ -4672,22 +4834,23 @@ export function createCatalogMesh3D(
       const stem = box(0.08, 0.68, 0.09, whiteBody, 0.24, 0.54, 0);
       stem.rotation.z = 0.22;
       box(0.12, 0.06, 0.46, blackRubber, 0.16, 0.86, 0);
-      const bikeScr = box(
-        0.16,
-        0.12,
-        0.24,
-        makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.4 }),
-        0.18,
-        0.92,
-        0
-      );
+      const bikeScrMat = makeMat({ map: textures.ecgScreen, emissive: 0x38bdf8, emissiveIntensity: 0.4 });
+      const bikeScr = box(0.16, 0.12, 0.24, bikeScrMat, 0.18, 0.92, 0);
       bikeScr.userData.noCastShadow = true;
+      bikeScr.userData.isBikeConsole = true;
+      bikeScr.userData.isDeviceScreen = true;
       inner.scale.setScalar(0.82);
+      outer.userData.bikeRig = {
+        crankGroup,
+        wheelMesh: wheel,
+        screenMat: bikeScrMat,
+        consoleAnchor: bikeScr,
+      } as BikeStationRigMeta;
       break;
     }
 
     case 'wall_bars': {
-      // Swedish Beechwood Stall Bars with protruding top chin-up canopy & draped TheraBands
+      // Swedish Beechwood Stall Bars with protruding top chin-up canopy, draped TheraBands & protocol plaque
       box(0.08, 1.82, 0.11, warmTimber, -0.35, 0.91, -0.28);
       box(0.08, 1.82, 0.11, warmTimber, 0.35, 0.91, -0.28);
       box(0.07, 0.08, 0.28, warmTimber, -0.35, 1.78, -0.16);
@@ -4697,10 +4860,35 @@ export function createCatalogMesh3D(
         const rung = cyl(0.022, 0.022, 0.7, warmTimber, 0, ry, -0.28);
         rung.rotation.z = Math.PI / 2;
       }
-      box(0.09, 0.46, 0.02, redAccent, -0.18, 1.24, -0.25);
-      box(0.09, 0.54, 0.02, emeraldAccent, 0.16, 1.2, -0.25);
-      box(0.09, 0.42, 0.02, cyanAccent, 0, 0.92, -0.25);
+      const wbBandsGroup = new THREE.Group();
+      inner.add(wbBandsGroup);
+      const b1 = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.46, 0.02), redAccent);
+      b1.position.set(-0.18, 1.24, -0.25);
+      const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.02), emeraldAccent);
+      b2.position.set(0.16, 1.2, -0.25);
+      const b3 = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.42, 0.02), cyanAccent);
+      b3.position.set(0, 0.92, -0.25);
+      wbBandsGroup.add(b1, b2, b3);
+      const wbPlaque = box(0.14, 0.22, 0.03, darkSlate, 0.40, 1.12, -0.22);
+      wbPlaque.userData.isWallBarsConsole = true;
+      wbPlaque.userData.isDeviceScreen = true;
+      const wbScr = box(
+        0.10,
+        0.16,
+        0.02,
+        makeMat({ map: textures.ecgScreen, emissive: 0x10b981, emissiveIntensity: 0.42 }),
+        0.40,
+        1.12,
+        -0.20
+      );
+      wbScr.userData.noCastShadow = true;
+      wbScr.userData.isWallBarsConsole = true;
+      wbScr.userData.isDeviceScreen = true;
       inner.scale.set(0.94, 0.9, 0.94);
+      outer.userData.wallBarsRig = {
+        bandsGroup: wbBandsGroup,
+        consoleAnchor: wbPlaque,
+      } as WallBarsRigMeta;
       break;
     }
 
@@ -4744,7 +4932,7 @@ export function createCatalogMesh3D(
     }
 
     case 'parallel_bars': {
-      // Hardwood gait training deck with chamfered ramps, stainless stanchions & center balance line
+      // Hardwood gait training deck with height-adjustable rails & stanchion height-gauge dial
       box(1.52, 0.05, 0.78, woodMat, 0, 0.025, 0);
       box(1.48, 0.052, 0.03, cyanAccent, 0, 0.028, 0);
       const rampL = box(0.24, 0.04, 0.78, woodMat, -0.84, 0.015, 0);
@@ -4754,32 +4942,65 @@ export function createCatalogMesh3D(
       for (const lx of [-0.68, 0.68]) {
         for (const lz of [-0.31, 0.31]) {
           cyl(0.045, 0.055, 0.06, darkSlate, lx, 0.06, lz);
-          cyl(0.026, 0.028, 0.8, silverMetal, lx, 0.44, lz);
-          cyl(0.036, 0.036, 0.06, darkSlate, lx, 0.58, lz);
+          cyl(0.028, 0.03, 0.58, darkSlate, lx, 0.34, lz);
+          cyl(0.036, 0.036, 0.06, cyanAccent, lx, 0.61, lz);
         }
       }
+      const pbRailsGroup = new THREE.Group();
+      inner.add(pbRailsGroup);
       for (const lz of [-0.31, 0.31]) {
-        const rail = cyl(0.03, 0.03, 1.7, warmTimber, 0, 0.84, lz);
+        const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.7, 14), warmTimber);
         rail.rotation.z = Math.PI / 2;
+        rail.position.set(0, 0.84, lz);
+        pbRailsGroup.add(rail);
+        for (const lx of [-0.68, 0.68]) {
+          const innerTube = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.021, 0.28, 12), silverMetal);
+          innerTube.position.set(lx, 0.71, lz);
+          pbRailsGroup.add(innerTube);
+        }
       }
+      const pbConsole = box(0.11, 0.18, 0.05, darkSlate, 0.68, 0.64, 0.36);
+      pbConsole.userData.isParallelBarsConsole = true;
+      pbConsole.userData.isDeviceScreen = true;
+      const pbScr = box(
+        0.08,
+        0.13,
+        0.02,
+        makeMat({ map: textures.ecgScreen, emissive: 0x0ea5e9, emissiveIntensity: 0.45 }),
+        0.68,
+        0.64,
+        0.385
+      );
+      pbScr.userData.noCastShadow = true;
+      pbScr.userData.isParallelBarsConsole = true;
+      pbScr.userData.isDeviceScreen = true;
       inner.scale.set(0.94, 0.82, 0.86);
+      outer.userData.parallelBarsRig = {
+        railsGroup: pbRailsGroup,
+        consoleAnchor: pbConsole,
+        currentOffsetY: 0,
+      } as ParallelBarsRigMeta;
       break;
     }
 
     case 'balance_trainer': {
-      // Computerized Posturography Platform with glowing force-plate ring, stainless U-rail & live monitor
+      // Computerized Posturography Platform with tilting force-plate, glowing LED ring & monitor
       box(0.84, 0.06, 0.84, whiteBody, 0, 0.03, 0);
-      cyl(0.32, 0.34, 0.065, darkSlate, 0, 0.08, -0.04);
-      const ledRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.27, 0.016, 8, 24),
-        makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.75 })
-      );
+      const balPlateGroup = new THREE.Group();
+      balPlateGroup.position.set(0, 0.08, -0.04);
+      inner.add(balPlateGroup);
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.34, 0.065, 22), darkSlate);
+      const ledMat = makeMat({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.75 });
+      const ledRing = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.016, 8, 24), ledMat);
       ledRing.rotation.x = Math.PI / 2;
-      ledRing.position.set(0, 0.115, -0.04);
+      ledRing.position.set(0, 0.035, 0);
       ledRing.userData.noCastShadow = true;
-      inner.add(ledRing);
-      box(0.09, 0.015, 0.22, cyanAccent, -0.1, 0.12, -0.04);
-      box(0.09, 0.015, 0.22, cyanAccent, 0.1, 0.12, -0.04);
+      const fpL = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.015, 0.22), cyanAccent);
+      fpL.position.set(-0.1, 0.04, 0);
+      const fpR = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.015, 0.22), cyanAccent);
+      fpR.position.set(0.1, 0.04, 0);
+      balPlateGroup.add(disc, ledRing, fpL, fpR);
+
       for (const sz of [-0.36, 0.36]) {
         cyl(0.024, 0.026, 0.92, silverMetal, -0.32, 0.48, sz);
         cyl(0.024, 0.026, 0.92, silverMetal, 0.32, 0.48, sz);
@@ -4788,18 +5009,21 @@ export function createCatalogMesh3D(
       cyl(0.03, 0.035, 1.12, silverMetal, 0.34, 0.58, 0);
       const monBox = box(0.14, 0.24, 0.34, darkSlate, 0.3, 1.16, 0);
       monBox.rotation.z = 0.25;
-      const monScr = box(
-        0.02,
-        0.18,
-        0.28,
-        makeMat({ map: textures.ecgScreen, emissive: 0x10b981, emissiveIntensity: 0.45 }),
-        0.23,
-        1.16,
-        0
-      );
+      monBox.userData.isBalanceConsole = true;
+      monBox.userData.isDeviceScreen = true;
+      const balScrMat = makeMat({ map: textures.ecgScreen, emissive: 0x10b981, emissiveIntensity: 0.45 });
+      const monScr = box(0.02, 0.18, 0.28, balScrMat, 0.23, 1.16, 0);
       monScr.rotation.z = 0.25;
       monScr.userData.noCastShadow = true;
+      monScr.userData.isBalanceConsole = true;
+      monScr.userData.isDeviceScreen = true;
       inner.scale.set(0.92, 0.81, 0.92);
+      outer.userData.balanceStationRig = {
+        plateGroup: balPlateGroup,
+        ledMat,
+        screenMat: balScrMat,
+        consoleAnchor: monBox,
+      } as BalanceStationRigMeta;
       break;
     }
 
@@ -5456,28 +5680,53 @@ export function createCatalogMesh3D(
     }
 
     case 'multi_gym_pulley': {
-      // Clinical Cable Column Pulley Machine (1x1) with iron weight stack, yellow pin, pulley sheaves & D-handles
+      // Clinical Cable Column Pulley Machine (1x1) with dynamic weight stack, selector pin, carriage & D-handles
       box(0.58, 0.05, 0.66, darkSlate, 0, 0.025, 0);
       box(0.32, 0.03, 0.42, blackRubber, 0, 0.05, 0.14);
-      // Twin upright steel frame rails + top boom
       box(0.055, 1.78, 0.07, silverMetal, -0.22, 0.92, -0.18);
       box(0.055, 1.78, 0.07, silverMetal, 0.22, 0.92, -0.18);
       box(0.52, 0.07, 0.42, darkSlate, 0, 1.82, -0.04);
-      // 8 Iron resistance weight stack plates + chrome center rod + yellow pin
       cyl(0.014, 0.014, 1.5, silverMetal, 0, 0.92, -0.18);
+      const stackPlates: THREE.Mesh[] = [];
       for (let wi = 0; wi < 8; wi++) {
-        box(0.32, 0.055, 0.16, darkSlate, 0, 0.14 + wi * 0.072, -0.18);
+        const pl = box(0.32, 0.055, 0.16, darkSlate, 0, 0.14 + wi * 0.072, -0.18);
+        stackPlates.push(pl);
       }
-      box(0.05, 0.025, 0.04, amberAccent, 0.02, 0.43, -0.09);
-      // Adjustable front chrome pulley carriage + top pulley wheel
+      const pinMesh = box(0.05, 0.025, 0.04, amberAccent, 0.02, 0.43, -0.09);
       cyl(0.055, 0.055, 0.025, blackRubber, 0, 1.76, 0.11).rotation.z = Math.PI / 2;
-      box(0.12, 0.14, 0.12, cyanAccent, 0, 1.06, -0.12);
-      // Curved steel cables + twin chrome stirrup D-handles
+      const carriageGroup = new THREE.Group();
+      carriageGroup.position.set(0, 1.06, -0.12);
+      inner.add(carriageGroup);
+      const carriageBox = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.12), cyanAccent);
+      carriageGroup.add(carriageBox);
       tube([[0, 1.76, 0.11], [-0.08, 1.48, 0.14], [-0.14, 1.24, 0.17], [-0.15, 1.08, 0.18]], 0.006, blackRubber, 8);
       tube([[0, 1.76, 0.11], [0.08, 1.48, 0.14], [0.14, 1.24, 0.17], [0.15, 1.08, 0.18]], 0.006, blackRubber, 8);
-      box(0.09, 0.02, 0.025, silverMetal, -0.15, 1.04, 0.18);
-      box(0.09, 0.02, 0.025, silverMetal, 0.15, 1.04, 0.18);
+      const handleL = box(0.09, 0.02, 0.025, silverMetal, -0.15, 1.04, 0.18);
+      const handleR = box(0.09, 0.02, 0.025, silverMetal, 0.15, 1.04, 0.18);
+      const pulleyPlaque = box(0.14, 0.2, 0.04, darkSlate, 0.26, 1.15, -0.16);
+      pulleyPlaque.userData.isPulleyConsole = true;
+      pulleyPlaque.userData.isDeviceScreen = true;
+      const pulleyScr = box(
+        0.10,
+        0.14,
+        0.02,
+        makeMat({ map: textures.ecgScreen, emissive: 0xf59e0b, emissiveIntensity: 0.42 }),
+        0.26,
+        1.15,
+        -0.135
+      );
+      pulleyScr.userData.noCastShadow = true;
+      pulleyScr.userData.isPulleyConsole = true;
+      pulleyScr.userData.isDeviceScreen = true;
       inner.scale.set(0.9, 0.86, 0.9);
+      outer.userData.pulleyRig = {
+        stackPlates,
+        pinMesh,
+        carriageGroup,
+        handleL,
+        handleR,
+        consoleAnchor: pulleyPlaque,
+      } as PulleyRigMeta;
       break;
     }
 
@@ -5564,55 +5813,192 @@ export function createCatalogMesh3D(
     // ================ BUILD & ARCHITECTURAL DIVIDERS ================
 
     case 'partition_wall': {
-      box(0.12, 1.15, 0.86, whiteBody, 0, 0.575, 0);
-      const pGlass = box(0.06, 0.78, 0.72, frostGlassMat, 0, 0.65, 0);
+      // Sleek clinical acoustic partition (~0.16m x 1.54m x 0.93m): anodized shoes, solid kick-panel, visible frosted safety glass + horizontal privacy bands
+      for (const fz of [-0.34, 0.34]) {
+        bevelBox(0.16, 0.024, 0.13, 0.025, 0.004, darkSlate, 0, 0.012, fz);
+        box(0.068, 0.022, 0.044, silverMetal, 0, 0.032, fz);
+      }
+      // Aluminum floor track + solid lower acoustic kick-panel + teal accent reveal
+      box(0.068, 0.028, 0.90, silverMetal, 0, 0.034, 0);
+      box(0.056, 0.40, 0.85, whiteBody, 0, 0.248, 0);
+      box(0.060, 0.016, 0.855, cyanAccent, 0, 0.448, 0);
+      // Slim vertical end stanchions + mid transom + top cap header
+      for (const pz of [-0.442, 0.442]) {
+        box(0.066, 1.50, 0.044, silverMetal, 0, 0.78, pz);
+        box(0.070, 0.022, 0.048, darkSlate, 0, 1.54, pz);
+      }
+      box(0.064, 0.034, 0.88, silverMetal, 0, 0.472, 0);
+      box(0.068, 0.038, 0.92, silverMetal, 0, 1.525, 0);
+
+      // Crystal-clear recessed frosted safety glass upper bay + etched privacy stripes (never occluded by opaque core)
+      const pGlass = box(0.020, 1.02, 0.845, frostGlassMat, 0, 0.995, 0);
       pGlass.userData.noCastShadow = true;
+
+      const frostBandMat = makeMat({
+        color: 0xf1f5f9,
+        transparent: true,
+        opacity: 0.78,
+        roughness: 0.18,
+        metalness: 0.04,
+      });
+      const bandMain = box(0.024, 0.15, 0.84, frostBandMat, 0, 0.94, 0);
+      const bandTop = box(0.024, 0.065, 0.84, frostBandMat, 0, 1.12, 0);
+      const bandLow = box(0.024, 0.05, 0.84, frostBandMat, 0, 0.78, 0);
+      bandMain.userData.noCastShadow = true;
+      bandTop.userData.noCastShadow = true;
+      bandLow.userData.noCastShadow = true;
       break;
     }
 
     case 'privacy_screen': {
-      // 3-panel folding chrome medical privacy curtain screen on swivel feet with woven curtain fabric
-      const screenClothMat = new THREE.MeshStandardMaterial({
-        color: 0x3882a6,
+      // Compact 3-bay articulated rolling hospital privacy curtain screen (~0.16m x 1.56m x 0.93m)
+      const curtainFabricMat = makeMat({
+        color: 0x3b8ab0,
+        bumpMap: textures.fabricWeaveBump,
+        bumpScale: 0.012,
+        roughness: 0.86,
+        metalness: 0.02,
+      });
+      const curtainHemMat = makeMat({
+        color: 0x2d7194,
         bumpMap: textures.fabricWeaveBump,
         bumpScale: 0.01,
-        roughness: 0.86,
+        roughness: 0.84,
       });
-      for (const lz of [-0.36, 0, 0.36]) {
-        box(0.16, 0.032, 0.055, silverMetal, 0, 0.034, lz);
-        for (const cx of [-0.06, 0.06]) {
-          cyl(0.018, 0.018, 0.022, blackRubber, cx, 0.012, lz);
-        }
-      }
-      const panels = [
-        { x: -0.04, z: -0.27, rotY: 0.22 },
-        { x: 0.04, z: 0, rotY: -0.22 },
-        { x: -0.04, z: 0.27, rotY: 0.22 },
+      const meshHeaderMat = makeMat({
+        color: 0xe2e8f0,
+        roughness: 0.72,
+        metalness: 0.02,
+      });
+
+      const bayCoords: Array<{ z1: number; x1: number; z2: number; x2: number }> = [
+        { z1: -0.44, x1: -0.022, z2: -0.15, x2: 0.024 },
+        { z1: -0.15, x1: 0.024, z2: 0.15, x2: -0.024 },
+        { z1: 0.15, x1: -0.024, z2: 0.44, x2: 0.022 },
       ];
-      for (const p of panels) {
-        const g = new THREE.Group();
-        g.position.set(p.x, 0, p.z);
-        g.rotation.y = p.rotY;
-        const fr = new THREE.Mesh(new THREE.BoxGeometry(0.034, 1.48, 0.28), silverMetal);
-        fr.position.y = 0.82;
-        fr.userData.sharedGlbMat = true;
-        const cloth = new THREE.Mesh(new THREE.BoxGeometry(0.042, 1.24, 0.24), screenClothMat);
-        cloth.position.y = 0.86;
-        g.add(fr, cloth);
-        inner.add(g);
+      const posts = [
+        { z: -0.44, x: -0.022 },
+        { z: -0.15, x: 0.024 },
+        { z: 0.15, x: -0.024 },
+        { z: 0.44, x: 0.022 },
+      ];
+
+      // Rolling T-bar hospital bases with twin swivel caster wheels + slim stainless uprights
+      for (const post of posts) {
+        box(0.13, 0.022, 0.032, silverMetal, post.x, 0.044, post.z);
+        for (const cx of [-0.05, 0.05]) {
+          cyl(0.014, 0.014, 0.018, blackRubber, post.x + cx, 0.016, post.z);
+          cyl(0.007, 0.009, 0.014, darkSlate, post.x + cx, 0.030, post.z);
+        }
+        cyl(0.014, 0.014, 1.48, silverMetal, post.x, 0.79, post.z);
+        cyl(0.017, 0.017, 0.018, darkSlate, post.x, 1.54, post.z);
       }
-      inner.scale.set(1, 0.9, 1);
+
+      // Articulated pleated curtain bays between uprights (with real bottom floor hygiene gap & top rod/rings)
+      for (const bay of bayCoords) {
+        const dx = bay.x2 - bay.x1;
+        const dz = bay.z2 - bay.z1;
+        const bayLen = Math.hypot(dx, dz);
+        const mx = (bay.x1 + bay.x2) * 0.5;
+        const mz = (bay.z1 + bay.z2) * 0.5;
+        const yaw = Math.atan2(dx, dz);
+
+        const bayGrp = new THREE.Group();
+        bayGrp.position.set(mx, 0, mz);
+        bayGrp.rotation.y = yaw;
+        inner.add(bayGrp);
+
+        // Top & lower crossbars
+        const topRail = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.010, 0.010, bayLen, 8),
+          silverMetal
+        );
+        topRail.rotation.x = Math.PI / 2;
+        topRail.position.y = 1.50;
+        topRail.userData.sharedGlbMat = true;
+        bayGrp.add(topRail);
+
+        const lowRail = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.008, 0.008, bayLen, 8),
+          silverMetal
+        );
+        lowRail.rotation.x = Math.PI / 2;
+        lowRail.position.y = 0.21;
+        lowRail.userData.sharedGlbMat = true;
+        bayGrp.add(lowRail);
+
+        // Breathable top mesh header band + eyelet rings
+        const meshBand = new THREE.Mesh(
+          new THREE.BoxGeometry(0.014, 0.13, bayLen - 0.045),
+          meshHeaderMat
+        );
+        meshBand.position.y = 1.40;
+        meshBand.userData.noCastShadow = true;
+        bayGrp.add(meshBand);
+
+        const ringCount = 5;
+        for (let r = 0; r < ringCount; r++) {
+          const rz = -bayLen * 0.38 + (r * (bayLen * 0.76)) / (ringCount - 1);
+          const ring = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.024, 0.010), silverMetal);
+          ring.position.set(0, 1.49, rz);
+          ring.userData.sharedGlbMat = true;
+          ring.userData.noCastShadow = true;
+          bayGrp.add(ring);
+        }
+
+        // Sinusoidal pleated curtain folds so each panel looks softly draped, never a flat slab
+        const pleatCount = 6;
+        const pleatSpan = (bayLen - 0.045) / pleatCount;
+        for (let k = 0; k < pleatCount; k++) {
+          const pz = -((bayLen - 0.045) * 0.5) + (k + 0.5) * pleatSpan;
+          const pOff = (k % 2 === 0 ? 1 : -1) * 0.011;
+          const pleat = new THREE.Mesh(
+            new THREE.BoxGeometry(0.020, 1.07, pleatSpan * 1.08),
+            curtainFabricMat
+          );
+          pleat.position.set(pOff, 0.80, pz);
+          pleat.rotation.y = (k % 2 === 0 ? 0.24 : -0.24);
+          bayGrp.add(pleat);
+        }
+
+        // Weighted hem strip along bottom of curtain
+        const hem = new THREE.Mesh(
+          new THREE.BoxGeometry(0.028, 0.045, bayLen - 0.042),
+          curtainHemMat
+        );
+        hem.position.y = 0.265;
+        bayGrp.add(hem);
+      }
       break;
     }
 
     case 'wood_slat_divider': {
-      // Modern architectural oak vertical louver screen
-      box(0.16, 0.08, 0.86, darkSlate, 0, 0.04, 0);
-      box(0.16, 0.06, 0.86, darkSlate, 0, 1.62, 0);
-      for (let i = 0; i < 6; i++) {
-        box(0.11, 1.54, 0.065, warmTimber, 0, 0.85, -0.35 + i * 0.14);
+      // Architectural oak acoustic louver partition (~0.16m x 1.56m x 0.92m)
+      // Tapered recessed charcoal floor shoes + lower acoustic dado wainscot
+      for (const fz of [-0.36, 0.36]) {
+        bevelBox(0.16, 0.024, 0.11, 0.02, 0.004, darkSlate, 0, 0.012, fz);
       }
-      inner.scale.set(1, 0.91, 1);
+      box(0.076, 0.042, 0.90, darkSlate, 0, 0.042, 0);
+      // Warm mitered perimeter oak frame
+      for (const pz of [-0.435, 0.435]) {
+        box(0.088, 1.47, 0.042, warmTimber, 0, 0.795, pz);
+      }
+      box(0.094, 0.044, 0.91, warmTimber, 0, 1.54, 0);
+      // Lower charcoal acoustic felt wainscot + warm oak dado bar
+      box(0.050, 0.26, 0.83, darkSlate, 0, 0.19, 0);
+      box(0.086, 0.032, 0.84, warmTimber, 0, 0.335, 0);
+      // Horizontal matte stabilizer tie rods behind slats
+      for (const ry of [0.74, 1.18]) {
+        box(0.016, 0.014, 0.83, darkSlate, 0, ry, 0);
+      }
+      // 10 slender angled vertical oak louvers (rotY = 0.38 rad) catching crisp architectural shadows
+      const slatCount = 10;
+      const slatSpan = 0.78;
+      for (let i = 0; i < slatCount; i++) {
+        const sz = -slatSpan * 0.5 + (i * slatSpan) / (slatCount - 1);
+        const slat = box(0.072, 1.16, 0.020, warmTimber, 0, 0.935, sz);
+        slat.rotation.y = 0.38;
+      }
       break;
     }
 

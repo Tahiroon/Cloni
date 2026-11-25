@@ -12,6 +12,7 @@ interface WaitingQueueModalProps {
   lightingMode?: LightingMode;
   onClose: () => void;
   onCallPatient: (patientId: string) => void;
+  onAssignTreatmentPatient?: (patientId: string) => void;
   onInspectActivePatient?: (patientId: string) => void;
 }
 
@@ -34,6 +35,7 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
   lightingMode = 'day',
   onClose,
   onCallPatient,
+  onAssignTreatmentPatient,
   onInspectActivePatient,
 }) => {
   const isAr = language === 'ar';
@@ -56,6 +58,8 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
       } else if (p.state === 'arriving' || p.state === 'checkin_at_desk') {
         checkin.push(p);
       } else if (
+        p.state === 'walking_to_treatment_wait' ||
+        p.state === 'waiting_in_treatment' ||
         p.state === 'walking_to_station' ||
         p.state === 'ready_for_exam' ||
         p.state === 'in_exam' ||
@@ -336,18 +340,32 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {inTreatmentWing.map((p) => {
                   const c = p.clinicalCase;
+                  const awaitingAssign =
+                    p.state === 'walking_to_treatment_wait' || p.state === 'waiting_in_treatment';
                   const statusLabel =
-                    p.state === 'walking_to_station'
+                    p.state === 'walking_to_treatment_wait'
                       ? isAr
-                        ? 'متجه إلى السرير'
-                        : 'Walking to bed'
-                      : p.state === 'in_treatment'
-                        ? isAr
-                          ? 'جلسة علاج نشطة'
-                          : 'Therapy active'
-                        : isAr
-                          ? 'جالس على السرير بانتظار التقييم'
-                          : 'Seated on bed awaiting exam';
+                        ? 'متجه إلى صالة العلاج...'
+                        : 'Entering treatment hall...'
+                      : p.state === 'waiting_in_treatment'
+                        ? p.isSeatedWait !== false
+                          ? isAr
+                            ? 'جالس في صالة العلاج — اختر له السرير أو الجهاز'
+                            : 'Seated in hall — pick bed or device'
+                          : isAr
+                            ? 'واقف في صالة العلاج — اختر له السرير أو الجهاز'
+                            : 'Standing in hall — pick bed or device'
+                        : p.state === 'walking_to_station'
+                          ? isAr
+                            ? 'متجه إلى الجهاز المحدد'
+                            : 'Walking to chosen station'
+                          : p.state === 'in_treatment'
+                            ? isAr
+                              ? 'جلسة علاج نشطة'
+                              : 'Therapy active'
+                            : isAr
+                              ? 'على الجهاز بانتظار بدء الجلسة'
+                              : 'At station awaiting exam';
                   const canInspect = p.state === 'ready_for_exam' || p.state === 'in_exam';
 
                   return (
@@ -367,6 +385,15 @@ export const WaitingQueueModal: React.FC<WaitingQueueModalProps> = ({
                           {statusLabel}
                         </div>
                       </div>
+                      {awaitingAssign && onAssignTreatmentPatient && (
+                        <button
+                          type="button"
+                          onClick={() => onAssignTreatmentPatient(p.id)}
+                          className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-black shrink-0 cursor-pointer active:scale-95"
+                        >
+                          {isAr ? 'اختر الجهاز' : 'Pick Station'}
+                        </button>
+                      )}
                       {canInspect && onInspectActivePatient && (
                         <button
                           type="button"

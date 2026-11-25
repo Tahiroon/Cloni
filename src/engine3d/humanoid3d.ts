@@ -148,6 +148,21 @@ export interface HumanoidRig {
   hipHeight?: number;
   heightScale?: number;
   bones?: Record<string, SkinnedBoneRef>;
+  smoothedSeated?: {
+    torsoX: number;
+    torsoY: number;
+    torsoZ: number;
+    chestX: number;
+    armLSwing: number;
+    armRSwing: number;
+    armLAdduct: number;
+    armRAdduct: number;
+    elbowL: number;
+    elbowR: number;
+    lookYaw: number;
+    lookPitch: number;
+    init: boolean;
+  };
 }
 
 let cachedIrisTex: THREE.CanvasTexture | null = null;
@@ -4195,6 +4210,13 @@ export function animateHumanoid3D(
     isSelected: boolean;
     inTreatment?: boolean;
     activeGait?: boolean;
+    gaitSpeed?: number;
+    activeBike?: boolean;
+    bikeRpm?: number;
+    activeParallelBars?: boolean;
+    activeWallBars?: boolean;
+    activePulley?: boolean;
+    activeBalance?: boolean;
     isDrinking?: boolean;
     drinkStage?: 'none' | 'filling' | 'sipping' | 'returning';
     drinkElapsedMs?: number;
@@ -4255,6 +4277,13 @@ export function animateHumanoid3D(
     isSelected,
     inTreatment,
     activeGait,
+    gaitSpeed = 1,
+    activeBike = false,
+    bikeRpm = 60,
+    activeParallelBars = false,
+    activeWallBars = false,
+    activePulley = false,
+    activeBalance = false,
     isDrinking,
     drinkStage = isDrinking ? 'sipping' : 'none',
     drinkElapsedMs,
@@ -5511,7 +5540,9 @@ export function animateHumanoid3D(
       0.25
     );
 
-    const phase = gaitActive ? timeSec * 4.2 : walkPhase;
+    const phase = gaitActive
+      ? timeSec * 4.2 * THREE.MathUtils.clamp(gaitSpeed, 0.35, 1.8)
+      : walkPhase;
     const sinP = Math.sin(phase);
     const stride = sinP + 0.075 * Math.sin(phase * 2);
     const armStride = Math.sin(phase - 0.22);
@@ -5653,50 +5684,89 @@ export function animateHumanoid3D(
     let sitLookYaw = easedSitGlance * 0.22 + Math.sin(t * 0.14 + 0.8) * 0.06;
     let sitLookPitch = Math.sin(t * 0.46) * 0.028 + Math.sin(t * 0.19) * 0.018;
 
+    let sitArmLAdduct = isRealScan ? -0.22 : 0;
+    let sitArmRAdduct = isRealScan ? 0.22 : 0;
+
+    const typingCycle = (t + seedMod * 2.7) % 6.6;
+    const typingBurst =
+      seatedActivity === 'typing' && typingCycle < 4.4
+        ? smoothstep01(typingCycle / 0.35) * (typingCycle > 4.05 ? smoothstep01((4.4 - typingCycle) / 0.35) : 1)
+        : 0;
+    const typingMouseBlend =
+      seatedActivity === 'typing' && typingCycle >= 4.4 && typingCycle < 6.1
+        ? Math.sin(((typingCycle - 4.4) / 1.7) * Math.PI)
+        : 0;
+    const typingTapL = typingBurst * Math.sin(timeSec * 14.2);
+    const typingTapR = typingBurst * Math.cos(timeSec * 15.8);
+
     if (seatedActivity === 'typing') {
-      sitTorsoX = 0.085 + breath * 0.35;
-      sitTorsoY = Math.sin(t * 0.7) * 0.022;
-      sitTorsoZ = Math.sin(t * 0.45) * 0.012;
-      sitChestX = 0.045 + breath * 0.7;
-      sitArmLSwing = -0.37 + Math.sin(timeSec * 3.8) * 0.02;
-      sitArmRSwing = -0.37 + Math.cos(timeSec * 4.1) * 0.02;
-      sitElbowLFlex = 1.02 + Math.sin(timeSec * 13.5) * 0.048;
-      sitElbowRFlex = 1.02 + Math.cos(timeSec * 15.2) * 0.048;
-      sitLookYaw = Math.sin(t * 0.9) * 0.075;
-      sitLookPitch = 0.075 + Math.sin(t * 1.55) * 0.022;
+      sitTorsoX = 0.095 + breath * 0.35;
+      sitTorsoY = Math.sin(t * 0.65) * 0.022 - typingMouseBlend * 0.032;
+      sitTorsoZ = Math.sin(t * 0.42) * 0.012;
+      sitChestX = 0.05 + breath * 0.7;
+      sitArmLSwing = -0.49 + typingBurst * Math.sin(timeSec * 4.4) * 0.022 + typingTapL * 0.012;
+      sitArmRSwing =
+        -0.49 +
+        typingBurst * Math.cos(timeSec * 4.7) * 0.022 +
+        typingTapR * 0.012 -
+        typingMouseBlend * 0.03 +
+        typingMouseBlend * Math.sin(timeSec * 3.1) * 0.015;
+      sitArmLAdduct = isRealScan ? -0.16 : -0.06;
+      sitArmRAdduct = (isRealScan ? 0.16 : 0.06) - typingMouseBlend * 0.19;
+      sitElbowLFlex = 1.24 + typingTapL * 0.058;
+      sitElbowRFlex = 1.24 + typingTapR * 0.058 - typingMouseBlend * 0.08;
+      sitLookYaw = Math.sin(t * 0.85) * 0.062 - typingMouseBlend * 0.045;
+      sitLookPitch = 0.048 + Math.sin(t * 1.45) * 0.018;
     } else if (seatedActivity === 'writing') {
       sitTorsoX = 0.115 + breath * 0.3;
-      sitTorsoY = -0.055 + Math.sin(timeSec * 1.9) * 0.012;
+      sitTorsoY = -0.065 + Math.sin(timeSec * 1.9) * 0.014;
       sitTorsoZ = -0.018;
       sitChestX = 0.055 + breath * 0.6;
-      sitArmLSwing = -0.31 + Math.sin(t * 0.9) * 0.015;
-      sitArmRSwing = -0.43 + Math.sin(timeSec * 4.8) * 0.036;
-      sitElbowLFlex = 0.92;
-      sitElbowRFlex = 1.0 + Math.cos(timeSec * 6.4) * 0.052;
-      sitLookYaw = -0.095 + Math.sin(timeSec * 2.3) * 0.032;
+      sitArmLSwing = -0.34 + Math.sin(t * 0.9) * 0.015;
+      sitArmRSwing = -0.47 + Math.sin(timeSec * 4.8) * 0.036;
+      sitArmLAdduct = isRealScan ? -0.14 : -0.04;
+      sitArmRAdduct = isRealScan ? 0.05 : -0.06;
+      sitElbowLFlex = 1.02;
+      sitElbowRFlex = 1.14 + Math.cos(timeSec * 6.4) * 0.052;
+      sitLookYaw = -0.115 + Math.sin(timeSec * 2.3) * 0.032;
       sitLookPitch = 0.19 + Math.sin(t * 1.6) * 0.022;
     } else if (seatedActivity === 'glance') {
-      sitTorsoX = -0.01 + breath * 0.4;
-      sitTorsoY = Math.sin(t * 0.8) * 0.055;
+      sitTorsoX = -0.02 + breath * 0.4;
+      sitTorsoY = Math.sin(t * 0.72) * 0.065;
       sitTorsoZ = Math.sin(t * 0.42) * 0.018;
-      sitChestX = 0.01 + breath * 0.8;
-      sitArmLSwing = -0.2 + Math.sin(t * 0.65) * 0.03;
-      sitArmRSwing = -0.25 + Math.cos(t * 0.72) * 0.045;
-      sitElbowLFlex = 0.78;
-      sitElbowRFlex = 0.84 + Math.sin(t * 1.05) * 0.06;
-      sitLookYaw = Math.sin(t * 0.95) * 0.26;
-      sitLookPitch = -0.03 + Math.sin(t * 0.68) * 0.038;
+      sitChestX = 0.005 + breath * 0.8;
+      sitArmLSwing = -0.22 + Math.sin(t * 0.65) * 0.03;
+      sitArmRSwing = -0.26 + Math.cos(t * 0.72) * 0.04;
+      sitArmLAdduct = isRealScan ? -0.15 : 0.02;
+      sitArmRAdduct = isRealScan ? 0.15 : -0.02;
+      sitElbowLFlex = 0.82;
+      sitElbowRFlex = 0.88 + Math.sin(t * 1.05) * 0.055;
+      sitLookYaw = Math.sin(t * 0.84) * 0.28;
+      sitLookPitch = -0.035 + Math.sin(t * 0.68) * 0.038;
     } else if (seatedActivity === 'rest') {
-      sitTorsoX = -0.085 + breath * 0.5;
-      sitTorsoY = Math.sin(t * 0.35) * 0.036;
-      sitTorsoZ = Math.sin(t * 0.28) * 0.022;
-      sitChestX = -0.04 + breath;
-      sitArmLSwing = -0.1 + Math.sin(t * 0.45) * 0.025;
-      sitArmRSwing = -0.1 + Math.cos(t * 0.41) * 0.025;
-      sitElbowLFlex = 0.54;
-      sitElbowRFlex = 0.54 + Math.sin(t * 0.5) * 0.04;
-      sitLookYaw = Math.sin(t * 0.52) * 0.2;
-      sitLookPitch = -0.02 + Math.sin(t * 0.4) * 0.032;
+      sitTorsoX = -0.095 + breath * 0.5;
+      sitTorsoY = Math.sin(t * 0.35) * 0.04;
+      sitTorsoZ = Math.sin(t * 0.28) * 0.024;
+      sitChestX = -0.045 + breath;
+      sitArmLSwing = -0.10 + Math.sin(t * 0.45) * 0.025;
+      sitArmRSwing = -0.10 + Math.cos(t * 0.41) * 0.025;
+      sitArmLAdduct = isRealScan ? -0.18 : 0.05;
+      sitArmRAdduct = isRealScan ? 0.18 : -0.05;
+      sitElbowLFlex = 0.56;
+      sitElbowRFlex = 0.56 + Math.sin(t * 0.5) * 0.04;
+      sitLookYaw = Math.sin(t * 0.52) * 0.22;
+      sitLookPitch = -0.025 + Math.sin(t * 0.4) * 0.032;
+    } else if (activeBike && lie < 0.05) {
+      // Lean forward gently to grip ergometer handlebars while cycling
+      sitTorsoX = 0.14 + breath * 0.45;
+      sitTorsoY = Math.sin(timeSec * 1.1) * 0.018;
+      sitChestX = 0.06 + breath * 0.7;
+      sitArmLSwing = -0.78 + Math.sin(timeSec * 2.2) * 0.025;
+      sitArmRSwing = -0.78 + Math.cos(timeSec * 2.2) * 0.025;
+      sitElbowLFlex = 0.46;
+      sitElbowRFlex = 0.46;
+      sitLookYaw = Math.sin(t * 0.5) * 0.06;
+      sitLookPitch = 0.08;
     } else if (!inTreatment && lie < 0.05 && !isRealScan) {
       // Waiting room / courtyard seated subtle hand adjustment
       const gestCycle = Math.sin(t * 0.39 + 0.5);
@@ -5704,6 +5774,72 @@ export function animateHumanoid3D(
       const smoothGest = sitGest * sitGest * (3 - 2 * sitGest);
       sitArmRSwing -= smoothGest * 0.22;
       sitElbowRFlex += smoothGest * 0.36;
+    }
+
+    // Smoothly blend between seated activities so transitions (typing -> glancing -> resting) never snap
+    if (!rig.smoothedSeated) {
+      rig.smoothedSeated = {
+        torsoX: sitTorsoX,
+        torsoY: sitTorsoY,
+        torsoZ: sitTorsoZ,
+        chestX: sitChestX,
+        armLSwing: sitArmLSwing,
+        armRSwing: sitArmRSwing,
+        armLAdduct: sitArmLAdduct,
+        armRAdduct: sitArmRAdduct,
+        elbowL: sitElbowLFlex,
+        elbowR: sitElbowRFlex,
+        lookYaw: sitLookYaw,
+        lookPitch: sitLookPitch,
+        init: false,
+      };
+    }
+    const ss = rig.smoothedSeated;
+    if (sit > 0.2 && lie < 0.1) {
+      if (!ss.init) {
+        ss.torsoX = sitTorsoX;
+        ss.torsoY = sitTorsoY;
+        ss.torsoZ = sitTorsoZ;
+        ss.chestX = sitChestX;
+        ss.armLSwing = sitArmLSwing;
+        ss.armRSwing = sitArmRSwing;
+        ss.armLAdduct = sitArmLAdduct;
+        ss.armRAdduct = sitArmRAdduct;
+        ss.elbowL = sitElbowLFlex;
+        ss.elbowR = sitElbowRFlex;
+        ss.lookYaw = sitLookYaw;
+        ss.lookPitch = sitLookPitch;
+        ss.init = true;
+      } else {
+        const sRate = 6.8;
+        const armRate = seatedActivity === 'typing' ? 12.5 : 6.8;
+        ss.torsoX = THREE.MathUtils.damp(ss.torsoX, sitTorsoX, sRate, frameDt);
+        ss.torsoY = THREE.MathUtils.damp(ss.torsoY, sitTorsoY, sRate, frameDt);
+        ss.torsoZ = THREE.MathUtils.damp(ss.torsoZ, sitTorsoZ, sRate, frameDt);
+        ss.chestX = THREE.MathUtils.damp(ss.chestX, sitChestX, sRate, frameDt);
+        ss.armLSwing = THREE.MathUtils.damp(ss.armLSwing, sitArmLSwing, armRate, frameDt);
+        ss.armRSwing = THREE.MathUtils.damp(ss.armRSwing, sitArmRSwing, armRate, frameDt);
+        ss.armLAdduct = THREE.MathUtils.damp(ss.armLAdduct, sitArmLAdduct, sRate, frameDt);
+        ss.armRAdduct = THREE.MathUtils.damp(ss.armRAdduct, sitArmRAdduct, sRate, frameDt);
+        ss.elbowL = THREE.MathUtils.damp(ss.elbowL, sitElbowLFlex, armRate, frameDt);
+        ss.elbowR = THREE.MathUtils.damp(ss.elbowR, sitElbowRFlex, armRate, frameDt);
+        ss.lookYaw = THREE.MathUtils.damp(ss.lookYaw, sitLookYaw, sRate, frameDt);
+        ss.lookPitch = THREE.MathUtils.damp(ss.lookPitch, sitLookPitch, sRate, frameDt);
+      }
+      sitTorsoX = ss.torsoX;
+      sitTorsoY = ss.torsoY;
+      sitTorsoZ = ss.torsoZ;
+      sitChestX = ss.chestX;
+      sitArmLSwing = ss.armLSwing;
+      sitArmRSwing = ss.armRSwing;
+      sitArmLAdduct = ss.armLAdduct;
+      sitArmRAdduct = ss.armRAdduct;
+      sitElbowLFlex = ss.elbowL;
+      sitElbowRFlex = ss.elbowR;
+      sitLookYaw = ss.lookYaw;
+      sitLookPitch = ss.lookPitch;
+    } else if (sit <= 0.1) {
+      ss.init = false;
     }
 
     const hsArmBlend = THREE.MathUtils.clamp(handshakeBlend, 0, 1) * (1 - lie);
@@ -5835,8 +5971,10 @@ export function animateHumanoid3D(
       )
     );
 
-    // Legs transition seamlessly between gait, stance, grounded chair sit (or low floor mat sit), and relaxed lying
-    const pedal = sit > 0.7 && inTreatment && lie < 0.05 ? Math.sin(timeSec * 5.2) * 0.32 : 0;
+    // Legs transition seamlessly between gait, stance, seated pedaling, grounded chair sit (or low floor mat sit), and relaxed lying
+    const bikeActive = Boolean(activeBike) && sit > 0.7 && lie < 0.05;
+    const bikeRadRate = (THREE.MathUtils.clamp(bikeRpm, 25, 110) / 60) * Math.PI * 2;
+    const pedal = bikeActive ? Math.sin(timeSec * bikeRadRate) * 0.34 : 0;
     const sitLegFidget =
       sit > 0.7 && !inTreatment && seatedActivity === 'idle' && lie < 0.05
         ? Math.sin(t * 0.31) * 0.028
@@ -6162,8 +6300,11 @@ export function animateHumanoid3D(
       : THREE.MathUtils.lerp(armStandR, sitArmRSwing - gestFade * (0.24 + 0.06 * gestWaveR), sit);
 
     const drinkAdductSip = isRealScan ? 0.62 : 0.49;
-    const realSitAdductR = isRealScan ? THREE.MathUtils.lerp(0.22, 0.08, gestFade) * sit : gestFade * 0.16 * sit;
     const standAdductR = idleArmRAdductOff + fppCalmStandRAdduct - gestFade * 0.06;
+    const effSitAdductR =
+      seatedActivity === 'idle'
+        ? THREE.MathUtils.lerp(sitArmRAdduct, isRealScan ? 0.08 : 0.16, gestFade)
+        : sitArmRAdduct;
     let rightArmAdductY = activeDrink
       ? THREE.MathUtils.lerp(0.14 * drinkFillReach + 0.14 * (1 - drinkFillReach), drinkAdductSip + drinkSipAmt * 0.03, drinkRaise)
       : activePickFile
@@ -6172,7 +6313,7 @@ export function animateHumanoid3D(
           ? placeArmAdduct
           : carryFileArm
             ? 0.24
-            : THREE.MathUtils.lerp(standAdductR, realSitAdductR, sit);
+            : THREE.MathUtils.lerp(standAdductR, effSitAdductR, sit);
 
     let rightArmDropZ = (activeDrink
       ? THREE.MathUtils.lerp(1.45, 1.38, drinkRaise)
@@ -6205,6 +6346,32 @@ export function animateHumanoid3D(
       ? THREE.MathUtils.lerp(drinkElbowReady, drinkElbowSip, drinkRaise)
       : THREE.MathUtils.lerp(standElbowR, sitElbowConversationalR, sit);
 
+    // Active rehab equipment standing arm patterns (parallel bars grip, wall bar overhead stretch, pulley rows, balance steady)
+    if (lie < 0.05 && sit < 0.25 && !activeDrink && !hsActive && !activePickFile && !activePlaceFile) {
+      if (activeParallelBars) {
+        rightArmSwingX = -0.34 + Math.cos(phase) * 0.06;
+        rightArmAdductY = -0.08;
+        rightArmDropZ = THREE.MathUtils.lerp(rightArmDropZ, isRealScan ? 1.24 : 1.26, 0.85);
+        rightElbowFlex = 0.58 + Math.sin(phase) * 0.05;
+      } else if (activeWallBars) {
+        const wbPhase = timeSec * 1.45;
+        const reachAmt = 0.5 + 0.5 * Math.sin(wbPhase);
+        rightArmSwingX = -0.95 - reachAmt * 0.42;
+        rightArmAdductY = 0.06;
+        rightElbowFlex = 0.34 + (1 - reachAmt) * 0.28;
+      } else if (activePulley) {
+        const pullWave = Math.sin(timeSec * 2.1);
+        rightArmSwingX = -0.78 + pullWave * 0.28;
+        rightArmAdductY = 0.10;
+        rightElbowFlex = 0.62 - pullWave * 0.38;
+      } else if (activeBalance) {
+        const balSway = Math.sin(timeSec * 1.8) * 0.14;
+        rightArmSwingX = -0.22 + balSway * 0.3;
+        rightArmDropZ = (isRealScan ? 1.18 : 1.20) - rbArmOffset;
+        rightElbowFlex = 0.42;
+      }
+    }
+
     // Patient right arm reaches naturally out for clinician handshake with gentle vertical pump
     if (hsActive) {
       const hsArmTargetSwing = THREE.MathUtils.lerp(-0.62, -0.68, sit) - handshakeOsc * 0.055;
@@ -6220,19 +6387,42 @@ export function animateHumanoid3D(
 
     const stimArmBraceL = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperL * 0.08;
     const stimArmBraceR = highDiscomfort * 0.16 + sSpike * 0.12 + absTwitch * twUpperR * 0.08;
-    const baseArmDropL = THREE.MathUtils.lerp(
+    let baseArmDropL = THREE.MathUtils.lerp(
       (isRocketbox ? -1.35 : isRealScan ? -1.385 : -1.40) - idleArmLDropOff + gestFade * 0.02,
       isRealScan ? -1.38 : -1.41,
       sit
     ) + rbArmOffset;
-    const baseArmSwingL =
+    let baseArmSwingL =
       THREE.MathUtils.lerp(armStandL, sitArmLSwing - gestFade * (0.09 + 0.03 * gestWaveL), sit) -
       stimArmBraceL * 0.45;
-    const baseArmAdductL = THREE.MathUtils.lerp(
+    const effSitAdductL =
+      seatedActivity === 'idle' && isRealScan
+        ? THREE.MathUtils.lerp(sitArmLAdduct, -0.14, gestFade * 0.6)
+        : sitArmLAdduct;
+    let baseArmAdductL = THREE.MathUtils.lerp(
       idleArmLAdductOff + gestFade * 0.03,
-      isRealScan ? THREE.MathUtils.lerp(-0.22, -0.14, gestFade * 0.6) : 0,
+      effSitAdductL,
       sit
     );
+
+    if (lie < 0.05 && sit < 0.25 && !activeDrink && !activePickFile && !activePlaceFile) {
+      if (activeParallelBars) {
+        baseArmSwingL = -0.34 - Math.cos(phase) * 0.06;
+        baseArmAdductL = 0.08;
+        baseArmDropL = THREE.MathUtils.lerp(baseArmDropL, isRealScan ? -1.24 : -1.26, 0.85);
+      } else if (activeWallBars) {
+        const reachAmtL = 0.5 - 0.5 * Math.sin(timeSec * 1.45);
+        baseArmSwingL = -0.95 - reachAmtL * 0.42;
+        baseArmAdductL = -0.06;
+      } else if (activePulley) {
+        const pullWaveL = Math.sin(timeSec * 2.1);
+        baseArmSwingL = -0.78 - pullWaveL * 0.28;
+        baseArmAdductL = -0.10;
+      } else if (activeBalance) {
+        baseArmSwingL = -0.22 - Math.sin(timeSec * 1.8) * 0.04;
+        baseArmDropL = (isRealScan ? -1.18 : -1.20) + rbArmOffset;
+      }
+    }
 
     applyArmSagittal(
       b['UpperArmL'],
@@ -6247,13 +6437,19 @@ export function animateHumanoid3D(
       THREE.MathUtils.lerp(rightArmAdductY, lieArmAdductR, lie)
     );
 
-    const elbowStandL =
+    let elbowStandL =
       (isRealScan ? 0.20 : 0.24) +
       (Math.max(0, -armStride) * 0.28 + Math.max(0, armStride) * 0.07) * activeBlend +
       Math.sin(t * 0.47) * 0.025 * standIdleAmt +
       idleElbowLOff +
       fppCalmStandLElbow +
       gestFade * (0.28 + gestWaveL * 0.07);
+    if (lie < 0.05 && sit < 0.25 && !activeDrink && !activePickFile && !activePlaceFile) {
+      if (activeParallelBars) elbowStandL = 0.58 - Math.sin(phase) * 0.05;
+      else if (activeWallBars) elbowStandL = 0.34 + (0.5 + 0.5 * Math.sin(timeSec * 1.45)) * 0.28;
+      else if (activePulley) elbowStandL = 0.62 + Math.sin(timeSec * 2.1) * 0.38;
+      else if (activeBalance) elbowStandL = 0.42;
+    }
     const sitElbowConversationalL = sitElbowLFlex + gestFade * (0.18 + gestWaveL * 0.06);
     const baseElbowL = THREE.MathUtils.lerp(elbowStandL, sitElbowConversationalL, sit) + stimArmBraceL;
     applyLocalElbowFlex(
@@ -6300,6 +6496,15 @@ export function animateHumanoid3D(
       handExtX = THREE.MathUtils.lerp(-0.16 * sit + fppSitMicro * 0.05, 0, lie);
       handPronY = THREE.MathUtils.lerp(-1.15 * sit + fppSitMicro * 0.10, -lieHandPronGoal, lie);
       handLatZ = THREE.MathUtils.lerp(-0.08 * sit, 0, lie);
+    } else if (!useFppPoise && sit >= 0.5 && lie < 0.1 && (seatedActivity === 'typing' || seatedActivity === 'writing')) {
+      const deskHandBlend = smoothstep01((sit - 0.5) / 0.4);
+      if (seatedActivity === 'typing') {
+        handExtX = (-0.08 + typingTapR * 0.06) * deskHandBlend;
+        handPronY = -1.25 * deskHandBlend;
+      } else {
+        handExtX = -0.12 * deskHandBlend;
+        handPronY = -1.1 * deskHandBlend;
+      }
     }
     if (hsActive) {
       const hsHandExtX = (isRealScan ? 0.05 : -0.04) + handshakeOsc * 0.04;
@@ -6310,6 +6515,16 @@ export function animateHumanoid3D(
       handLatZ = THREE.MathUtils.lerp(handLatZ, hsHandLatZ, hsArmBlend);
     }
     applyLocalHandPose(b['HandR'], handExtX, handPronY, handLatZ, isRocketbox);
+    if (!useFppPoise && sit >= 0.5 && lie < 0.1 && seatedActivity === 'typing') {
+      const deskHandBlendL = smoothstep01((sit - 0.5) / 0.4);
+      applyLocalHandPose(
+        b['HandL'],
+        (-0.08 + typingTapL * 0.06) * deskHandBlendL,
+        1.25 * deskHandBlendL,
+        0,
+        isRocketbox
+      );
+    }
     if (useFppPoise) {
       const sitPronRestL = 1.15 * sit;
       const sitExtRestL = -0.16 * sit;
@@ -6361,18 +6576,40 @@ export function animateHumanoid3D(
       applyNaturalHandFingers(b, 'L', Math.min(0.92, relaxedCurlL), true, isRocketbox, fingerLife, t);
       applyNaturalHandFingers(b, 'R', Math.min(0.92, rightCurl), true, isRocketbox, fingerLife, t);
     } else {
-      const f1Curl = -0.68 * effStdGrip;
-      const f2Curl = -0.56 * effStdGrip;
+      const typingFingerR =
+        sit >= 0.5 && lie < 0.1 && seatedActivity === 'typing' && typingBurst > 0.1
+          ? 0.28 + Math.max(0, Math.sin(timeSec * 19.5)) * 0.24 * typingBurst
+          : 0;
+      const typingFingerR2 =
+        sit >= 0.5 && lie < 0.1 && seatedActivity === 'typing' && typingBurst > 0.1
+          ? 0.24 + Math.max(0, Math.cos(timeSec * 22.1)) * 0.24 * typingBurst
+          : 0;
+      const f1Curl = -0.68 * Math.max(effStdGrip, typingFingerR);
+      const f2Curl = -0.56 * Math.max(effStdGrip, typingFingerR2);
       applyLocalHandPose(b['Index1R'], f1Curl, 0, 0);
       applyLocalHandPose(b['Index2R'], f2Curl, 0, 0);
-      applyLocalHandPose(b['Middle1R'], f1Curl, 0, 0);
-      applyLocalHandPose(b['Middle2R'], f2Curl, 0, 0);
-      applyLocalHandPose(b['Ring1R'], f1Curl, 0, 0);
-      applyLocalHandPose(b['Ring2R'], f2Curl, 0, 0);
-      applyLocalHandPose(b['Pinky1R'], f1Curl, 0, 0);
-      applyLocalHandPose(b['Pinky2R'], f2Curl, 0, 0);
+      applyLocalHandPose(b['Middle1R'], f2Curl, 0, 0);
+      applyLocalHandPose(b['Middle2R'], f1Curl * 0.85, 0, 0);
+      applyLocalHandPose(b['Ring1R'], -0.68 * effStdGrip, 0, 0);
+      applyLocalHandPose(b['Ring2R'], -0.56 * effStdGrip, 0, 0);
+      applyLocalHandPose(b['Pinky1R'], -0.68 * effStdGrip, 0, 0);
+      applyLocalHandPose(b['Pinky2R'], -0.56 * effStdGrip, 0, 0);
       applyLocalHandPose(b['Thumb1R'], 0.14 * effStdGrip, 0.22 * effStdGrip, 0.34 * effStdGrip);
       applyLocalHandPose(b['Thumb2R'], 0.18 * effStdGrip, 0, 0.24 * effStdGrip);
+      if (sit >= 0.5 && lie < 0.1 && seatedActivity === 'typing') {
+        const tfL =
+          typingBurst > 0.1
+            ? 0.28 + Math.max(0, Math.cos(timeSec * 18.4)) * 0.24 * typingBurst
+            : 0.12;
+        const tfL2 =
+          typingBurst > 0.1
+            ? 0.24 + Math.max(0, Math.sin(timeSec * 21.0)) * 0.24 * typingBurst
+            : 0.12;
+        applyLocalHandPose(b['Index1L'], -0.62 * tfL, 0, 0);
+        applyLocalHandPose(b['Index2L'], -0.52 * tfL2, 0, 0);
+        applyLocalHandPose(b['Middle1L'], -0.62 * tfL2, 0, 0);
+        applyLocalHandPose(b['Middle2L'], -0.52 * tfL, 0, 0);
+      }
     }
 
     // Natural head stabilization during walk & calm punctuated glances while standing idle

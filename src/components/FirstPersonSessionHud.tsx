@@ -614,6 +614,10 @@ function getProbePromptCopy(
         return isAr
           ? `وضع الكمادة الساخنة على: ${z}`
           : `Place Hot Pack on: ${z}`;
+      case 'paraffin_bath':
+        return isAr
+          ? `تطبيق قفاز الشمع الدافئ على: ${z}`
+          : `Apply Paraffin Mitt to: ${z}`;
       case 'swd_unit':
         return isAr
           ? `توجيه قرص التردد الحراري فوق: ${z}`
@@ -662,6 +666,10 @@ function getProbePromptCopy(
       return isAr
         ? 'اختر العضلة المتشنجة لوضع الكمادة الساخنة'
         : 'Choose tense muscle to place Hot Pack';
+    case 'paraffin_bath':
+      return isAr
+        ? 'اختر اليد أو المفصل المتيبس لتطبيق قفاز شمع البارافين'
+        : 'Select stiff hand or joint to apply warm Paraffin Mitt';
     case 'swd_unit':
       return isAr
         ? 'حدد المنطقة العلاجية لتوجيه قرص التردد الحراري'
@@ -2022,7 +2030,14 @@ export const FirstPersonSessionHud: React.FC<FirstPersonSessionHudProps> = React
             ));
           })()}
 
-          {activeDevice.sprite !== 'magnetotherapy' && activeDevice.sprite !== 'tilt_table' && (
+          {activeDevice.sprite !== 'magnetotherapy' &&
+            activeDevice.sprite !== 'tilt_table' &&
+            activeDevice.sprite !== 'traction_table' &&
+            activeDevice.sprite !== 'exercise_bike' &&
+            activeDevice.sprite !== 'treadmill' &&
+            activeDevice.sprite !== 'parallel_bars' &&
+            activeDevice.sprite !== 'wall_bars' &&
+            activeDevice.sprite !== 'multi_gym_pulley' && (
             <>
               <button
                 type="button"

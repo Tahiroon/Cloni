@@ -43,6 +43,8 @@ import {
   HumanoidRig,
 } from '../engine3d/humanoid3d';
 import {
+  BalanceStationRigMeta,
+  BikeStationRigMeta,
   buildClinicWorld3D,
   ClinicDoorHandle,
   ClinicWorldHandle,
@@ -51,11 +53,16 @@ import {
   DoorActorInput,
   FountainRigMeta,
   MagnetoRigMeta,
+  ParallelBarsRigMeta,
+  PulleyRigMeta,
   ReceptionDeskRigMeta,
   SmartLightMeta,
   TiltTableRigMeta,
+  TractionTableRigMeta,
+  TreadmillStationRigMeta,
   updateDoors3D,
   updateFoliageWindTime,
+  WallBarsRigMeta,
   WaterCoolerRigMeta,
   WORLD_TREES,
   WorldTreeDef,
@@ -167,6 +174,8 @@ interface ClinicCanvasProps {
   fppCommandRef?: React.MutableRefObject<FppDeviceCommandApi | null>;
   speakingPatientId?: string | null;
   selectedBedPatientId?: string | null;
+  selectedTreatmentWaitPatientId?: string | null;
+  pendingStationIdForPick?: string | null;
   onTapPatient: (patient: PatientEntity) => void;
   onTapLockedRoom: (room: ClinicRoom) => void;
   onTapPlacedItem: (item: PlacedItem) => void;
@@ -264,13 +273,27 @@ function computeDoorPushTarget(
   return THREE.MathUtils.clamp(best, 0, 1);
 }
 
-const MIN_ZOOM = 1.06;
-const MAX_ZOOM = 2.4;
+const MIN_ZOOM = 0.66;
+const MAX_ZOOM = 2.95;
 const DEFAULT_ZOOM = 1.12;
+const CLINIC_CENTER_X = 13.2;
+const CLINIC_CENTER_Z = 12.8;
 const PAN_MIN_X = 1.5;
 const PAN_MAX_X = 21.5;
 const PAN_MIN_Z = 4.0;
 const PAN_MAX_Z = 19.5;
+const clampPanX = (x: number, zoom: number): number => {
+  const shrink = zoom >= 1 ? 0 : Math.min(0.62, ((1 - zoom) / (1 - MIN_ZOOM)) * 0.62);
+  const minX = PAN_MIN_X + (CLINIC_CENTER_X - PAN_MIN_X) * shrink;
+  const maxX = PAN_MAX_X - (PAN_MAX_X - CLINIC_CENTER_X) * shrink;
+  return x < minX ? minX : x > maxX ? maxX : x;
+};
+const clampPanZ = (z: number, zoom: number): number => {
+  const shrink = zoom >= 1 ? 0 : Math.min(0.62, ((1 - zoom) / (1 - MIN_ZOOM)) * 0.62);
+  const minZ = PAN_MIN_Z + (CLINIC_CENTER_Z - PAN_MIN_Z) * shrink;
+  const maxZ = PAN_MAX_Z - (PAN_MAX_Z - CLINIC_CENTER_Z) * shrink;
+  return z < minZ ? minZ : z > maxZ ? maxZ : z;
+};
 const snapFine = (v: number): number => Math.round(v * 20) / 20;
 
 export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
@@ -296,6 +319,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
   fppCommandRef,
   speakingPatientId = null,
   selectedBedPatientId = null,
+  selectedTreatmentWaitPatientId = null,
+  pendingStationIdForPick = null,
   onTapPatient,
   onTapLockedRoom,
   onTapPlacedItem,
@@ -537,6 +562,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     fppActiveDevice,
     speakingPatientId,
     selectedBedPatientId,
+    selectedTreatmentWaitPatientId,
+    pendingStationIdForPick,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -577,6 +604,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     fppActiveDevice,
     speakingPatientId,
     selectedBedPatientId,
+    selectedTreatmentWaitPatientId,
+    pendingStationIdForPick,
     catalogMap,
     isPlacementValid,
     onTapPatient,
@@ -1264,6 +1293,30 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       deviceParams: getDefaultDeviceParams('tilt_table'),
     };
     const _tiltConsoleWorld = new THREE.Vector3();
+    const GYM_STATION_SPRITES = new Set<SpriteKind>([
+      'traction_table',
+      'exercise_bike',
+      'treadmill',
+      'parallel_bars',
+      'wall_bars',
+      'multi_gym_pulley',
+      'balance_trainer',
+    ]);
+    const stationGymMap = new Map<
+      string,
+      { isRunning: boolean; deviceParams: DeviceConsoleParams }
+    >();
+    const fppStationGymState = {
+      stationId: null as string | null,
+      catalogId: 'exercise_bike',
+      sprite: 'exercise_bike' as SpriteKind,
+      nameEn: 'Exercise Bike',
+      nameAr: 'دراجة تمارين',
+      isRunning: false,
+      wasActiveWhileRunning: false,
+      deviceParams: getDefaultDeviceParams('exercise_bike'),
+    };
+    const _gymConsoleWorld = new THREE.Vector3();
 
     const ensureFppBoneCache = (rig: HumanoidRig, pid: string) => {
       if (fppBoneCachePid === pid && fppBoneCacheMap.size > 0) return;
@@ -2079,6 +2132,39 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       };
     };
 
+    const buildGymStationPayload = (screenTapped = false): FppActiveDeviceState | null => {
+      if (!fppStationGymState.stationId) return null;
+      const fpp = fppCamRef.current;
+      const effYaw =
+        fpp.focusBlend > 0.3
+          ? Math.atan2(-(fpp.focusTargetX - fpp.focusPosX), -(fpp.focusTargetZ - fpp.focusPosZ))
+          : fpp.yaw;
+      const visualRightSign: 1 | -1 = Math.cos(effYaw - fpp.patientFacing) >= 0 ? 1 : -1;
+      return {
+        instanceId: fppStationGymState.stationId,
+        catalogId: fppStationGymState.catalogId,
+        sprite: fppStationGymState.sprite,
+        nameEn: fppStationGymState.nameEn,
+        nameAr: fppStationGymState.nameAr,
+        region: fppStationGymState.sprite === 'traction_table' ? 'lumbar' : 'knee',
+        side: 'front',
+        closeRange: true,
+        isRunning: fppStationGymState.isRunning,
+        placementMode: 'bed',
+        hasScreen: true,
+        screenTapped,
+        supportsProbes: false,
+        probeAnchors: [],
+        selectedProbeId: null,
+        visualRightSign,
+        irIntensity: 0.85,
+        irHeightOffset: 0,
+        irLateralOffset: 0,
+        irDistance: 0.55,
+        deviceParams: { ...fppStationGymState.deviceParams },
+      };
+    };
+
     const openStationConsole = (deviceId: string) => {
       if (
         fppStationMagState.stationId &&
@@ -2102,6 +2188,20 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         setProbeReticlePose(null);
         fppCamRef.current.consoleTapPulse = 1.0;
         latestRef.current.onFppActiveBedDeviceChange?.(buildTiltStationPayload(true));
+        return;
+      }
+      if (
+        fppStationGymState.stationId &&
+        (deviceId === fppStationGymState.stationId ||
+          deviceId === fppStationGymState.sprite ||
+          deviceId === fppStationGymState.catalogId)
+      ) {
+        for (const eq of fppEquipBayMap.values()) {
+          eq.selectedProbeId = null;
+        }
+        setProbeReticlePose(null);
+        fppCamRef.current.consoleTapPulse = 1.0;
+        latestRef.current.onFppActiveBedDeviceChange?.(buildGymStationPayload(true));
       }
     };
 
@@ -2367,6 +2467,88 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         return;
       }
 
+      if (
+        fppStationGymState.stationId &&
+        (next.instanceId === fppStationGymState.stationId ||
+          next.sprite === fppStationGymState.sprite)
+      ) {
+        if (next.deviceParams) {
+          const fallbackMin =
+            getDefaultDeviceParams(fppStationGymState.sprite).timerMin ?? 12;
+          const prevTimerMin = fppStationGymState.deviceParams.timerMin ?? fallbackMin;
+          const merged = { ...fppStationGymState.deviceParams, ...next.deviceParams };
+          if (
+            typeof next.deviceParams.timerMin === 'number' &&
+            next.deviceParams.timerMin !== prevTimerMin &&
+            next.deviceParams.timerRemainingSec === undefined &&
+            !next.isRunning
+          ) {
+            merged.timerRemainingSec = Math.max(60, next.deviceParams.timerMin * 60);
+          }
+          if (typeof merged.tensionKg === 'number') {
+            merged.tensionKg = THREE.MathUtils.clamp(Math.round(merged.tensionKg), 5, 45);
+          }
+          if (typeof merged.rpm === 'number') {
+            merged.rpm = THREE.MathUtils.clamp(Math.round(merged.rpm), 25, 95);
+          }
+          if (typeof merged.resistance === 'number') {
+            merged.resistance = THREE.MathUtils.clamp(Math.round(merged.resistance), 1, 10);
+          }
+          if (typeof merged.speed === 'number') {
+            merged.speed = Number(THREE.MathUtils.clamp(merged.speed, 0.5, 8.0).toFixed(1));
+          }
+          if (typeof merged.inclinePct === 'number') {
+            merged.inclinePct = THREE.MathUtils.clamp(Math.round(merged.inclinePct), 0, 12);
+          }
+          if (typeof merged.barHeightCm === 'number') {
+            merged.barHeightCm = THREE.MathUtils.clamp(Math.round(merged.barHeightCm), 70, 105);
+          }
+          if (typeof merged.weightKg === 'number') {
+            merged.weightKg = Number(THREE.MathUtils.clamp(merged.weightKg, 2.5, 20).toFixed(1));
+          }
+          if (typeof merged.intensity === 'number') {
+            merged.intensity = THREE.MathUtils.clamp(Math.round(merged.intensity), 1, 5);
+          }
+          fppStationGymState.deviceParams = merged;
+        }
+        const prevRunning = fppStationGymState.isRunning;
+        const fallbackMin =
+          getDefaultDeviceParams(fppStationGymState.sprite).timerMin ?? 12;
+        if (next.isRunning && (fppStationGymState.deviceParams.timerRemainingSec ?? 0) <= 0) {
+          fppStationGymState.deviceParams.timerRemainingSec = Math.max(
+            60,
+            (fppStationGymState.deviceParams.timerMin ?? fallbackMin) * 60
+          );
+        }
+        fppStationGymState.isRunning = next.isRunning;
+        if (next.isRunning && !prevRunning) {
+          fppStationGymState.wasActiveWhileRunning = false;
+          if (fppStationGymState.sprite === 'traction_table') {
+            const curPostureNow: FppPatientPosture = latestRef.current.fppPosture ?? 'sitting';
+            if (curPostureNow === 'sitting' || curPostureNow === 'standing') {
+              latestRef.current.onFppRequirePosture?.('supine');
+            }
+          }
+        }
+        if (!next.isRunning) {
+          fppStationGymState.wasActiveWhileRunning = false;
+        }
+        stationGymMap.set(fppStationGymState.stationId, {
+          isRunning: fppStationGymState.isRunning,
+          deviceParams: { ...fppStationGymState.deviceParams },
+        });
+        if (next.screenTapped || prevRunning !== fppStationGymState.isRunning) {
+          fppCamRef.current.consoleTapPulse = 1.0;
+        }
+        if (prevRunning !== fppStationGymState.isRunning) {
+          soundFx.deviceToggle(fppStationGymState.isRunning);
+        }
+        latestRef.current.onFppActiveBedDeviceChange?.(
+          buildGymStationPayload(next.screenTapped)
+        );
+        return;
+      }
+
       const entry = next.instanceId
         ? fppEquipBayMap.get(next.instanceId) ?? resolveBayEntry(next.catalogId)
         : resolveBayEntry(next.catalogId);
@@ -2620,6 +2802,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         recDrinkTimer?: number;
         recCabinetTimer?: number;
         recPlaceTimer?: number;
+        recGreetTimer?: number;
+        recGreetPatientId?: string;
         recCoolerId?: string;
         recCoolerFacing?: number;
         recCabinetId?: string;
@@ -3247,7 +3431,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         draftPadMesh.visible = false;
       } else {
         draftPadMesh.visible = true;
-        draftPadMesh.scale.set(effW - 0.08, 1, effD - 0.08);
+        const padInsetX = effW < 0.4 ? 0.03 : 0.08;
+        const padInsetZ = effD < 0.4 ? 0.03 : 0.08;
+        draftPadMesh.scale.set(
+          Math.max(0.08, effW - padInsetX),
+          1,
+          Math.max(0.08, effD - padInsetZ)
+        );
         draftPadMesh.position.set(
           draft.hoverX + effW / 2,
           0.092 + indoorElev,
@@ -3458,9 +3648,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       if (b <= 0.001) {
         camera.position.copy(_fppIsoPos);
         camera.lookAt(cs.curX, 0.45, cs.curZ);
-        if (Math.abs(camera.fov - 30) > 0.02 || Math.abs(camera.near - 0.5) > 0.002) {
+        const targetNear = dist > 44 ? 0.85 : 0.5;
+        if (Math.abs(camera.fov - 30) > 0.02 || Math.abs(camera.near - targetNear) > 0.01) {
           camera.fov = 30;
-          camera.near = 0.5;
+          camera.near = targetNear;
           projDirty = true;
         }
       } else {
@@ -4508,6 +4699,63 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
       }
 
+      // Check stationary rehab/gym consoles (traction table, exercise bike, treadmill, parallel bars, wall bars, pulley, balance)
+      if (fppStationGymState.stationId) {
+        const stEntry = itemMeshes.get(fppStationGymState.stationId);
+        const stUd = stEntry?.mesh.userData;
+        const consoleAnchor =
+          (stUd?.tractionRig as TractionTableRigMeta | undefined)?.consoleAnchor ??
+          (stUd?.bikeRig as BikeStationRigMeta | undefined)?.consoleAnchor ??
+          (stUd?.treadmillRig as TreadmillStationRigMeta | undefined)?.consoleAnchor ??
+          (stUd?.parallelBarsRig as ParallelBarsRigMeta | undefined)?.consoleAnchor ??
+          (stUd?.wallBarsRig as WallBarsRigMeta | undefined)?.consoleAnchor ??
+          (stUd?.pulleyRig as PulleyRigMeta | undefined)?.consoleAnchor ??
+          (stUd?.balanceStationRig as BalanceStationRigMeta | undefined)?.consoleAnchor;
+        if (stEntry && stEntry.mesh.visible && consoleAnchor) {
+          const gymHits = _raycaster.intersectObject(stEntry.mesh, true);
+          for (const hit of gymHits) {
+            let obj: THREE.Object3D | null = hit.object;
+            let hitConsole = false;
+            while (obj && obj !== stEntry.mesh) {
+              const ud = obj.userData;
+              if (
+                ud?.isTractionConsole ||
+                ud?.isBikeConsole ||
+                ud?.isTreadmillConsole ||
+                ud?.isParallelBarsConsole ||
+                ud?.isWallBarsConsole ||
+                ud?.isPulleyConsole ||
+                ud?.isBalanceConsole
+              ) {
+                hitConsole = true;
+                break;
+              }
+              obj = obj.parent;
+            }
+            if (hitConsole) {
+              consoleAnchor.getWorldPosition(_gymConsoleWorld);
+              const distToConsole = Math.hypot(
+                _gymConsoleWorld.x - fpp.posX,
+                _gymConsoleWorld.z - fpp.posZ
+              );
+              if (distToConsole <= 1.85 || fpp.focusBlend > 0.25) {
+                for (const eq of fppEquipBayMap.values()) {
+                  eq.selectedProbeId = null;
+                }
+                setProbeReticlePose(null);
+                fpp.consoleTapPulse = 1.0;
+                soundFx.tap();
+                latestRef.current.onFppActiveBedDeviceChange?.(
+                  buildGymStationPayload(true)
+                );
+                return;
+              }
+              break;
+            }
+          }
+        }
+      }
+
       for (const eq of fppEquipBayMap.values()) {
         eq.selectedProbeId = null;
       }
@@ -4537,6 +4785,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
         if (lastFppNearKey.startsWith('tilt_') && fppStationTiltState.stationId) {
           openStationConsole(fppStationTiltState.stationId);
+          return;
+        }
+        if (lastFppNearKey.startsWith('gym_') && fppStationGymState.stationId) {
+          openStationConsole(fppStationGymState.stationId);
           return;
         }
         const nearId = lastFppNearKey.split('|')[0];
@@ -4707,6 +4959,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fppPosture: curFppPosture,
         speakingPatientId: curSpeakId,
         selectedBedPatientId: curSelBedId,
+        selectedTreatmentWaitPatientId: curSelTreatWaitId,
       } = latestRef.current;
       placedItemByIdScratch.clear();
       cachedDeskItem = undefined;
@@ -5011,6 +5264,163 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 ? 0.92
                 : 0.48;
         }
+
+        // Articulated Traction & Rehab Gym Rigs (clinic 2.5D + FPP)
+        const tr = entryItem.mesh.userData.tractionRig as TractionTableRigMeta | undefined;
+        if (tr) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const running = isFppStation ? fppStationGymState.isRunning : Boolean(stState?.isRunning);
+          const isLying = Boolean(occ && occ.bedPhase === 'lying' && occ.lieBlend >= 0.88);
+          const isActive = isFppStation
+            ? running && isLying
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || running) && isLying);
+          const ap = isFppStation ? fppStationGymState.deviceParams : stState?.deviceParams;
+          const tensionKg = Number(ap?.tensionKg ?? 22);
+          const isInterm = (ap?.mode ?? 'INTERM') === 'INTERM';
+          const pullWave = isInterm ? 0.5 + 0.5 * Math.sin(timeSec * 1.15) : 1;
+          const targetSlide = isActive ? (tensionKg / 45) * 0.085 * pullWave : 0;
+          tr.currentSlideX = THREE.MathUtils.damp(tr.currentSlideX, targetSlide, 7.0, dt);
+          tr.lumbarSlideGroup.position.x = tr.currentSlideX;
+          if (isActive) {
+            tr.winchDrum.rotation.z += dt * (0.8 + pullWave * 1.4);
+            actorsOrEquipMoving = true;
+          }
+          const ledHex = isActive ? 0x10b981 : isFppStation && running ? 0xf59e0b : 0x38bdf8;
+          tr.ledMat.color.setHex(ledHex);
+          tr.ledMat.emissive.setHex(ledHex);
+          tr.ledMat.emissiveIntensity = isActive ? 1.05 : 0.45;
+        }
+
+        const bk = entryItem.mesh.userData.bikeRig as BikeStationRigMeta | undefined;
+        if (bk) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const running = isFppStation ? fppStationGymState.isRunning : Boolean(stState?.isRunning);
+          const isActive = isFppStation
+            ? running
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || occ.patient.state === 'in_exam' || running));
+          const ap = isFppStation ? fppStationGymState.deviceParams : stState?.deviceParams;
+          const rpm = Number(ap?.rpm ?? 62);
+          if (isActive) {
+            const omega = (rpm / 60) * Math.PI * 2;
+            bk.crankGroup.rotation.z -= dt * omega;
+            bk.wheelMesh.rotation.z -= dt * omega * 2.2;
+            actorsOrEquipMoving = true;
+          }
+          bk.screenMat.emissiveIntensity = isActive ? 0.92 : 0.35;
+        }
+
+        const tm = entryItem.mesh.userData.treadmillRig as TreadmillStationRigMeta | undefined;
+        if (tm) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const running = isFppStation ? fppStationGymState.isRunning : Boolean(stState?.isRunning);
+          const isActive = isFppStation
+            ? running
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || occ.patient.state === 'in_exam' || running));
+          const ap = isFppStation ? fppStationGymState.deviceParams : stState?.deviceParams;
+          const spd = Number(ap?.speed ?? 2.8);
+          const incPct = Number(ap?.inclinePct ?? 2);
+          const targetTilt = incPct * 0.0085;
+          tm.deckTiltGroup.rotation.z = THREE.MathUtils.damp(tm.deckTiltGroup.rotation.z, targetTilt, 6.0, dt);
+          if (isActive) {
+            tm.beltPhase = (tm.beltPhase + dt * spd * 0.32) % 1;
+            const span = 1.12;
+            for (let si = 0; si < tm.beltSlats.length; si++) {
+              const frac = (tm.beltPhase + si / tm.beltSlats.length) % 1;
+              tm.beltSlats[si].position.x = -0.10 - (frac - 0.5) * span;
+            }
+            actorsOrEquipMoving = true;
+          }
+          tm.screenMat.emissiveIntensity = isActive ? 0.95 : 0.35;
+        }
+
+        const pb = entryItem.mesh.userData.parallelBarsRig as ParallelBarsRigMeta | undefined;
+        if (pb) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const ap = isFppStation ? fppStationGymState.deviceParams : stState?.deviceParams;
+          const barH = Number(ap?.barHeightCm ?? 85);
+          const targetOffY = THREE.MathUtils.clamp((barH - 85) * 0.006, -0.10, 0.14);
+          pb.currentOffsetY = THREE.MathUtils.damp(pb.currentOffsetY, targetOffY, 8.0, dt);
+          pb.railsGroup.position.y = pb.currentOffsetY;
+        }
+
+        const wb = entryItem.mesh.userData.wallBarsRig as WallBarsRigMeta | undefined;
+        if (wb) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const running = isFppStation ? fppStationGymState.isRunning : Boolean(stState?.isRunning);
+          const isActive = isFppStation
+            ? running
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || running));
+          const sy = isActive ? 1.0 + 0.12 * Math.sin(timeSec * 2.2) : 1.0;
+          wb.bandsGroup.scale.y = THREE.MathUtils.damp(wb.bandsGroup.scale.y, sy, 8.0, dt);
+        }
+
+        const pl = entryItem.mesh.userData.pulleyRig as PulleyRigMeta | undefined;
+        if (pl) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const running = isFppStation ? fppStationGymState.isRunning : Boolean(stState?.isRunning);
+          const isActive = isFppStation
+            ? running
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || running));
+          const ap = isFppStation ? fppStationGymState.deviceParams : stState?.deviceParams;
+          const wKg = Number(ap?.weightKg ?? 7.5);
+          const modeStr = String(ap?.mode ?? 'ROW PULL');
+          const plateIdx = Math.max(0, Math.min(pl.stackPlates.length - 1, Math.round(wKg / 2.5) - 1));
+          const liftAmt = isActive ? (0.5 - 0.5 * Math.cos(timeSec * 2.5)) * 0.14 : 0;
+          for (let wi = 0; wi < pl.stackPlates.length; wi++) {
+            const moves = wi >= plateIdx;
+            pl.stackPlates[wi].position.y = 0.24 + wi * 0.048 + (moves ? liftAmt : 0);
+          }
+          pl.pinMesh.position.y = 0.24 + plateIdx * 0.048 + liftAmt;
+          const targetCarriageY = modeStr === 'LAT PULL' ? 1.56 : modeStr === 'PRESS' ? 1.24 : 0.96;
+          pl.carriageGroup.position.y = THREE.MathUtils.damp(pl.carriageGroup.position.y, targetCarriageY, 7.0, dt);
+          const pullPull = isActive ? (0.5 - 0.5 * Math.cos(timeSec * 2.5)) * 0.10 : 0;
+          pl.handleL.position.x = 0.21 + pullPull;
+          pl.handleR.position.x = 0.21 + pullPull;
+          if (isActive) actorsOrEquipMoving = true;
+        }
+
+        const bs = entryItem.mesh.userData.balanceStationRig as BalanceStationRigMeta | undefined;
+        if (bs) {
+          const occ = stationOccupantMap.get(itemId);
+          if (!occ && !pureFppId) stationGymMap.delete(itemId);
+          const isFppStation = Boolean(pureFppId && occ && occ.patient.id === pureFppId);
+          const stState = stationGymMap.get(itemId);
+          const running = isFppStation ? fppStationGymState.isRunning : Boolean(stState?.isRunning);
+          const isActive = isFppStation
+            ? running
+            : Boolean(occ && (occ.patient.state === 'in_treatment' || running));
+          const ap = isFppStation ? fppStationGymState.deviceParams : stState?.deviceParams;
+          const lvl = Number(ap?.intensity ?? 2);
+          if (isActive) {
+            const amp = 0.015 + lvl * 0.012;
+            bs.plateGroup.rotation.x = Math.sin(timeSec * 2.1) * amp;
+            bs.plateGroup.rotation.z = Math.cos(timeSec * 1.7) * amp;
+            actorsOrEquipMoving = true;
+          } else {
+            bs.plateGroup.rotation.x = THREE.MathUtils.damp(bs.plateGroup.rotation.x, 0, 8.0, dt);
+            bs.plateGroup.rotation.z = THREE.MathUtils.damp(bs.plateGroup.rotation.z, 0, 8.0, dt);
+          }
+          bs.ledMat.emissiveIntensity = isActive ? 0.95 : 0.35;
+          bs.screenMat.emissiveIntensity = isActive ? 0.92 : 0.30;
+        }
       }
 
       activePatientIds.clear();
@@ -5178,17 +5588,23 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           isAtStation && station && (spr === 'treadmill' || spr === 'parallel_bars')
         );
 
-        const isSeatedWait = p.state === 'waiting_checkin' && p.isSeatedWait !== false;
+        const isSeatedWait =
+          (p.state === 'waiting_checkin' || p.state === 'waiting_in_treatment') &&
+          p.isSeatedWait !== false;
         const seatItemId = p.waitingSeatKey
           ? p.waitingSeatKey.slice(0, p.waitingSeatKey.lastIndexOf('_'))
           : undefined;
         const anchorSeatX =
-          (isSeatedWait || (p.state === 'walking_to_wait' && p.isSeatedWait !== false)) &&
+          (isSeatedWait ||
+            ((p.state === 'walking_to_wait' || p.state === 'walking_to_treatment_wait') &&
+              p.isSeatedWait !== false)) &&
           p.targetX !== undefined
             ? p.targetX
             : p.gridX;
         const anchorSeatY =
-          (isSeatedWait || (p.state === 'walking_to_wait' && p.isSeatedWait !== false)) &&
+          (isSeatedWait ||
+            ((p.state === 'walking_to_wait' || p.state === 'walking_to_treatment_wait') &&
+              p.isSeatedWait !== false)) &&
           p.targetY !== undefined
             ? p.targetY
             : p.gridY;
@@ -5223,7 +5639,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         // Chair turn-around-before-sitting: rotate to face outward at the approach tile BEFORE backing onto the cushion
         const headingToChair =
-          (p.state === 'walking_to_wait' || p.state === 'waiting_checkin') &&
+          (p.state === 'walking_to_wait' ||
+            p.state === 'waiting_checkin' ||
+            p.state === 'walking_to_treatment_wait' ||
+            p.state === 'waiting_in_treatment') &&
           p.isSeatedWait !== false &&
           p.seatApproachX !== undefined &&
           p.seatApproachY !== undefined &&
@@ -5535,7 +5954,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         // Enforce world-space wall & furniture non-clipping on the interpolated visual position while walking
         const nearChairFinal =
-          p.state === 'walking_to_wait' &&
+          (p.state === 'walking_to_wait' || p.state === 'walking_to_treatment_wait') &&
           p.path.length <= 1 &&
           Math.hypot(targetX - prevVisX, targetZ - prevVisZ) < 1.35;
         const visualIgnoreId =
@@ -5807,7 +6226,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               : 0;
             const seatAngle = p.seatFacingRad !== undefined ? p.seatFacingRad : fallbackAngle;
             entry.facingRad = lerpAngle(entry.facingRad, seatAngle, Math.min(1, dt * 14));
-          } else if (p.state === 'waiting_checkin' && p.isSeatedWait === false) {
+          } else if (
+            (p.state === 'waiting_checkin' || p.state === 'waiting_in_treatment') &&
+            p.isSeatedWait === false
+          ) {
             const subtleSway = Math.sin(timeSec * 0.42 + entry.actorSeed) * 0.14;
             const lookAngle =
               p.headingRad !== undefined
@@ -5861,6 +6283,36 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           }
         }
 
+        const gymStState =
+          isAtStation && station
+            ? isFppTarget && fppStationGymState.stationId === station.instanceId
+              ? fppStationGymState
+              : stationGymMap.get(station.instanceId)
+            : undefined;
+        const isStationActiveInSession = Boolean(
+          isAtStation &&
+            station &&
+            (isFppTarget
+              ? gymStState?.isRunning
+              : p.state === 'in_treatment' || gymStState?.isRunning)
+        );
+        const isBikeActiveNow = Boolean(isBikeStation && isStationActiveInSession);
+        const isGaitActiveNow = Boolean(isActiveGaitStation && isStationActiveInSession);
+        const bikeRpmNow = Number(gymStState?.deviceParams?.rpm ?? 62);
+        const gaitSpeedNow = Number(gymStState?.deviceParams?.speed ?? 2.8);
+        const isParallelActiveNow = Boolean(
+          isAtStation && station && spr === 'parallel_bars' && isStationActiveInSession
+        );
+        const isWallBarsActiveNow = Boolean(
+          isAtStation && station && spr === 'wall_bars' && isStationActiveInSession
+        );
+        const isPulleyActiveNow = Boolean(
+          isAtStation && station && spr === 'multi_gym_pulley' && isStationActiveInSession
+        );
+        const isBalanceActiveNow = Boolean(
+          isAtStation && station && spr === 'balance_trainer' && isStationActiveInSession
+        );
+
         animateHumanoid3D(entry.rig, {
           pose,
           walkPhase: entry.walkPhase,
@@ -5880,9 +6332,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           facingRad: entry.facingRad,
           turnLean: entry.turnLean,
           timeSec,
-          isSelected: fppSmoothNow < 0.35 && curSelBedId === p.id,
+          isSelected:
+            fppSmoothNow < 0.35 &&
+            (curSelBedId === p.id || curSelTreatWaitId === p.id),
           inTreatment: p.state === 'in_treatment',
-          activeGait: p.state === 'in_treatment' && isActiveGaitStation,
+          activeGait: isGaitActiveNow,
+          gaitSpeed: isGaitActiveNow ? gaitSpeedNow : undefined,
+          activeBike: isBikeActiveNow,
+          bikeRpm: isBikeActiveNow ? bikeRpmNow : undefined,
+          activeParallelBars: isParallelActiveNow,
+          activeWallBars: isWallBarsActiveNow,
+          activePulley: isPulleyActiveNow,
+          activeBalance: isBalanceActiveNow,
           isDrinking: p.state === 'drinking_water',
           drinkStage,
           drinkElapsedMs: p.state === 'drinking_water' ? p.waitTimer : undefined,
@@ -6060,6 +6521,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         let recSeatHeight = 0.38;
         let recDrinkStage: 'none' | 'filling' | 'sipping' | 'returning' = 'none';
         let recDrinkElapsedMs: number | undefined;
+        let recLookTargetWorld: { x: number; y: number; z: number } | null = null;
         let isMoving = false;
 
         if (s.role === 'receptionist') {
@@ -6120,13 +6582,100 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           }
 
           const checkinPatient = curPatients.find((pt) => pt.state === 'checkin_at_desk');
-          const incomingPatient = curPatients.find(
+          const approachingPatient = curPatients.find(
             (pt) =>
+              pt.state === 'arriving' &&
               !entry!.recHandledPatients!.has(pt.id) &&
-              (pt.state === 'checkin_at_desk' ||
-                (pt.state === 'arriving' &&
-                  Math.hypot(pt.gridX + 0.5 - seatX, pt.gridY + 0.5 - seatZ) < 2.8))
+              Math.hypot(pt.gridX + 0.5 - seatX, pt.gridY + 0.5 - seatZ) < 4.0
           );
+
+          const startCabinetRunForPatient = (targetPt: PatientEntity, fromDeskSeat: boolean) => {
+            entry!.recHandledPatients!.add(targetPt.id);
+            entry!.recTargetPatientId = targetPt.id;
+            entry!.recGreetTimer = 0;
+            entry!.recGreetPatientId = undefined;
+            entry!.recCoolerId = undefined;
+
+            const startPt = fromDeskSeat
+              ? findDeskApproach(entry!.gx, entry!.gy)
+              : { x: entry!.gx, y: entry!.gy };
+            let bestCab: {
+              id: string;
+              approachX: number;
+              approachY: number;
+              facing: number;
+              path: Array<{ x: number; y: number }>;
+              len: number;
+            } | null = null;
+
+            for (const cab of curItems) {
+              if (cab.catalogId !== 'file_cabinet') continue;
+              const rm = curRooms.find(
+                (r) =>
+                  cab.gridX >= r.minX - 0.05 &&
+                  cab.gridX < r.maxX + 1 &&
+                  cab.gridY >= r.minY - 0.05 &&
+                  cab.gridY < r.maxY + 1
+              );
+              if (rm && !rm.unlocked) continue;
+
+              const approach = fromDeskSeat ? findDeskApproach(cab.gridX, cab.gridY) : startPt;
+              const spots = getCabinetApproachPoints(cab);
+              for (const sp of spots) {
+                if (!isTileWalkable(sp.x, sp.y, 0.21, obstacles)) continue;
+                const pTest = findGridPath(
+                  approach.x,
+                  approach.y,
+                  sp.x,
+                  sp.y,
+                  curRooms,
+                  curItems,
+                  walkerFootprints,
+                  obstacles
+                );
+                if (pTest.length > 0 || Math.hypot(sp.x - approach.x, sp.y - approach.y) < 0.45) {
+                  const estLen =
+                    Math.hypot(approach.x - entry!.gx, approach.y - entry!.gy) +
+                    pTest.reduce(
+                      (sum, n, idx) =>
+                        sum +
+                        Math.hypot(
+                          n.x - (idx === 0 ? approach.x : pTest[idx - 1].x),
+                          n.y - (idx === 0 ? approach.y : pTest[idx - 1].y)
+                        ),
+                      0
+                    );
+                  if (!bestCab || estLen < bestCab.len) {
+                    bestCab = {
+                      id: cab.instanceId,
+                      approachX: approach.x,
+                      approachY: approach.y,
+                      facing: sp.facingRad,
+                      path: pTest,
+                      len: estLen,
+                    };
+                  }
+                }
+              }
+            }
+
+            if (bestCab) {
+              entry!.recMode = fromDeskSeat ? 'leaving_seat' : 'to_cabinet';
+              entry!.recPurpose = 'cabinet';
+              entry!.recHoldingFile = false;
+              entry!.recDeskFileTimer = 0;
+              entry!.recDeskApproachX = bestCab.approachX;
+              entry!.recDeskApproachY = bestCab.approachY;
+              entry!.recCabinetId = bestCab.id;
+              entry!.recCabinetFacing = bestCab.facing;
+              entry!.path = bestCab.path;
+              entry!.stuckTimer = 0;
+            } else {
+              entry!.recDeskFileTimer = 3.5;
+              latestRef.current.onReceptionCheckinDone?.(targetPt.id);
+              entry!.recTargetPatientId = undefined;
+            }
+          };
 
           const mode = entry.recMode || 'desk';
 
@@ -6136,107 +6685,47 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             targetX = seatX;
             targetZ = seatZ;
 
-            if (entry.recDeskFileTimer && entry.recDeskFileTimer > 0) {
+            // Priority 1: Wait for the patient to reach the reception desk, greet them briefly, then get up to fetch their file
+            if (checkinPatient && !entry.recHandledPatients.has(checkinPatient.id) && deskItem) {
+              entry.recSeatedActivity = 'glance';
+              if (entry.recGreetPatientId !== checkinPatient.id) {
+                entry.recGreetPatientId = checkinPatient.id;
+                entry.recGreetTimer = 0;
+              } else {
+                entry.recGreetTimer = (entry.recGreetTimer ?? 0) + dt;
+              }
+              if ((entry.recGreetTimer ?? 0) >= 0.45) {
+                startCabinetRunForPatient(checkinPatient, true);
+              }
+            } else if (approachingPatient) {
+              // Patient is walking up to the desk: pause typing and watch them approach
+              entry.recSeatedActivity = 'glance';
+              entry.recGreetTimer = 0;
+              entry.recGreetPatientId = undefined;
+            } else if (entry.recDeskFileTimer && entry.recDeskFileTimer > 0) {
               entry.recDeskFileTimer = Math.max(0, entry.recDeskFileTimer - dt);
               entry.recSeatedActivity = 'writing';
-            } else if (checkinPatient) {
-              entry.recSeatedActivity = 'glance';
             } else {
-              entry.recActivityTimer = (entry.recActivityTimer ?? 4.0) - dt;
+              entry.recGreetTimer = 0;
+              entry.recGreetPatientId = undefined;
+              entry.recActivityTimer = (entry.recActivityTimer ?? 4.5) - dt;
               if (entry.recActivityTimer <= 0) {
                 const r = Math.random();
-                entry.recSeatedActivity =
-                  r < 0.44 ? 'typing' : r < 0.7 ? 'writing' : r < 0.86 ? 'glance' : 'rest';
-                entry.recActivityTimer = 3.8 + Math.random() * 4.4;
+                const nextAct: 'typing' | 'writing' | 'glance' | 'rest' =
+                  r < 0.58 ? 'typing' : r < 0.76 ? 'glance' : r < 0.88 ? 'writing' : 'rest';
+                entry.recSeatedActivity = nextAct;
+                entry.recActivityTimer =
+                  nextAct === 'typing' ? 5.2 + Math.random() * 4.6 : 2.6 + Math.random() * 2.4;
               }
             }
 
-            // Priority 1: When a patient arrives/checks in, get up cleanly and fetch their clinical file from the nearest file cabinet
-            if (incomingPatient && deskItem) {
-              entry.recHandledPatients.add(incomingPatient.id);
-              entry.recTargetPatientId = incomingPatient.id;
-              let bestCab: {
-                id: string;
-                approachX: number;
-                approachY: number;
-                facing: number;
-                path: Array<{ x: number; y: number }>;
-                len: number;
-              } | null = null;
-
-              for (const cab of curItems) {
-                if (cab.catalogId !== 'file_cabinet') continue;
-                const rm = curRooms.find(
-                  (r) =>
-                    cab.gridX >= r.minX - 0.05 &&
-                    cab.gridX < r.maxX + 1 &&
-                    cab.gridY >= r.minY - 0.05 &&
-                    cab.gridY < r.maxY + 1
-                );
-                if (rm && !rm.unlocked) continue;
-
-                const approach = findDeskApproach(cab.gridX, cab.gridY);
-                const spots = getCabinetApproachPoints(cab);
-                for (const sp of spots) {
-                  if (!isTileWalkable(sp.x, sp.y, 0.21, obstacles)) continue;
-                  const pTest = findGridPath(
-                    approach.x,
-                    approach.y,
-                    sp.x,
-                    sp.y,
-                    curRooms,
-                    curItems,
-                    walkerFootprints,
-                    obstacles
-                  );
-                  if (pTest.length > 0 || Math.hypot(sp.x - approach.x, sp.y - approach.y) < 0.45) {
-                    const estLen =
-                      Math.hypot(approach.x - entry.gx, approach.y - entry.gy) +
-                      pTest.reduce(
-                        (sum, n, idx) =>
-                          sum +
-                          Math.hypot(
-                            n.x - (idx === 0 ? approach.x : pTest[idx - 1].x),
-                            n.y - (idx === 0 ? approach.y : pTest[idx - 1].y)
-                          ),
-                        0
-                      );
-                    if (!bestCab || estLen < bestCab.len) {
-                      bestCab = {
-                        id: cab.instanceId,
-                        approachX: approach.x,
-                        approachY: approach.y,
-                        facing: sp.facingRad,
-                        path: pTest,
-                        len: estLen,
-                      };
-                    }
-                  }
-                }
-              }
-
-              if (bestCab) {
-                entry.recMode = 'leaving_seat';
-                entry.recPurpose = 'cabinet';
-                entry.recHoldingFile = false;
-                entry.recDeskFileTimer = 0;
-                entry.recDeskApproachX = bestCab.approachX;
-                entry.recDeskApproachY = bestCab.approachY;
-                entry.recCabinetId = bestCab.id;
-                entry.recCabinetFacing = bestCab.facing;
-                entry.path = bestCab.path;
-                entry.stuckTimer = 0;
-              } else {
-                entry.recDeskFileTimer = 3.2;
-                latestRef.current.onReceptionCheckinDone?.(incomingPatient.id);
-                entry.recTargetPatientId = undefined;
-              }
-            } else {
+            if (entry.recMode === 'desk') {
               // Priority 2: Occasional natural hydration break at the water cooler when lobby is calm
               entry.recStateTimer = (entry.recStateTimer ?? 18.0) - dt;
               if (
                 entry.recStateTimer <= 0 &&
                 !checkinPatient &&
+                !approachingPatient &&
                 !curPatients.some((pt) => pt.state === 'arriving') &&
                 deskItem
               ) {
@@ -6524,14 +7013,19 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             targetX = entry.gx + 0.5;
             targetZ = entry.gy + 0.5;
           } else if (mode === 'to_cooler') {
-            const coolerStillFree =
-              entry.recCoolerId &&
-              curItems.some((it) => it.instanceId === entry.recCoolerId) &&
-              !curPatients.some(
-                (pt) => pt.state === 'drinking_water' && pt.waterCoolerId === entry.recCoolerId
-              );
+            if (checkinPatient && !entry.recHandledPatients.has(checkinPatient.id) && deskItem) {
+              startCabinetRunForPatient(checkinPatient, false);
+              targetX = entry.gx + 0.5;
+              targetZ = entry.gy + 0.5;
+            } else {
+              const coolerStillFree =
+                entry.recCoolerId &&
+                curItems.some((it) => it.instanceId === entry.recCoolerId) &&
+                !curPatients.some(
+                  (pt) => pt.state === 'drinking_water' && pt.waterCoolerId === entry.recCoolerId
+                );
 
-            if (!coolerStillFree) {
+              if (!coolerStillFree) {
               const app = findDeskApproach(entry.gx, entry.gy);
               entry.recDeskApproachX = app.x;
               entry.recDeskApproachY = app.y;
@@ -6639,6 +7133,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               entry.recMode = 'drinking';
               entry.recDrinkTimer = 0;
             }
+            }
             targetX = entry.gx + 0.5;
             targetZ = entry.gy + 0.5;
           } else if (mode === 'drinking') {
@@ -6700,7 +7195,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               entry.recPlaceTimer = (entry.recPlaceTimer ?? 0) + dt;
               if (entry.recPlaceTimer >= 0.52 && entry.recHoldingFile) {
                 entry.recHoldingFile = false;
-                entry.recDeskFileTimer = 6.2;
+                entry.recDeskFileTimer = 8.0;
                 if (entry.recTargetPatientId) {
                   latestRef.current.onReceptionCheckinDone?.(entry.recTargetPatientId);
                   entry.recTargetPatientId = undefined;
@@ -6726,8 +7221,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             targetX = entry.gx + 0.5;
             targetZ = entry.gy + 0.5;
           } else {
-            // recMode === 'to_desk': walk to file placement spot if carrying file, else return smoothly to chair
+            // recMode === 'to_desk': walk to file placement spot if carrying file, else return smoothly to chair (or pivot to cabinet if a patient just checked in)
             const carryingForPlace = Boolean(entry.recHoldingFile && deskItem && deskPose);
+            if (!carryingForPlace && checkinPatient && !entry.recHandledPatients.has(checkinPatient.id) && deskItem) {
+              startCabinetRunForPatient(checkinPatient, false);
+              targetX = entry.gx + 0.5;
+              targetZ = entry.gy + 0.5;
+            } else {
             const latestApp = carryingForPlace
               ? findPlaceApproach()
               : findDeskApproach(entry.gx, entry.gy);
@@ -6852,6 +7352,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               }
               targetX = entry.gx + 0.5;
               targetZ = entry.gy + 0.5;
+            }
             }
           }
         } else {
@@ -7138,6 +7639,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               const checkinPt = curPatients.find((pt) => pt.state === 'checkin_at_desk');
               let glanceTarget = checkinPt;
               if (!glanceTarget) {
+                glanceTarget = curPatients.find(
+                  (pt) =>
+                    pt.state === 'arriving' &&
+                    Math.hypot(pt.gridX + 0.5 - entry!.visX, pt.gridY + 0.5 - entry!.visZ) < 4.0
+                );
+              }
+              if (!glanceTarget && entry.recSeatedActivity === 'glance') {
                 let bestD = 4.6;
                 for (const pt of curPatients) {
                   if (pt.state !== 'waiting_checkin' && pt.state !== 'walking_to_wait') continue;
@@ -7156,11 +7664,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 const ptRig = patientRigs.get(glanceTarget.id);
                 const px = ptRig ? ptRig.visX : glanceTarget.gridX + 0.5;
                 const pz = ptRig ? ptRig.visZ : glanceTarget.gridY + 0.5;
+                const py = (ptRig ? ptRig.groundY : entry.groundY) + 1.38;
+                recLookTargetWorld = { x: px, y: py, z: pz };
                 const rawAng = Math.atan2(px - entry.visX, pz - entry.visZ);
                 let delta = rawAng - recSeatFacing;
                 while (delta > Math.PI) delta -= Math.PI * 2;
                 while (delta < -Math.PI) delta += Math.PI * 2;
-                desiredFacing = recSeatFacing + THREE.MathUtils.clamp(delta, -0.58, 0.58);
+                desiredFacing = recSeatFacing + THREE.MathUtils.clamp(delta, -0.52, 0.52);
               }
               entry.facingRad = lerpAngle(entry.facingRad, desiredFacing, Math.min(1, dt * 8));
             }
@@ -7230,6 +7740,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             s.role === 'receptionist' && shouldStaffSit
               ? entry.recSeatedActivity || 'typing'
               : 'idle',
+          lookTargetWorld: s.role === 'receptionist' ? recLookTargetWorld : null,
           stairClimb: entry.stairClimb,
         });
       };
@@ -7266,11 +7777,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       const {
         rooms: curRooms,
         placedItems: curItems,
+        patients: curPatients,
         placementDraft: curDraft,
         editMode: isEdit,
         floatingFeedbacks: fbs,
         language: lang,
         selectedTreeId: selTreeId,
+        selectedTreatmentWaitPatientId: selTreatWaitId,
+        pendingStationIdForPick: pendStationId,
+        catalogMap: curCatMap,
         isPlacementValid: checkValid,
       } = latestRef.current;
 
@@ -7282,9 +7797,25 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           lockedSig += curRooms[i].id + ',';
         }
       }
+      let hasTreatWaitPts = false;
+      let treatWaitSig = '';
+      for (let i = 0; i < curPatients.length; i++) {
+        const pt = curPatients[i];
+        if (pt.state === 'waiting_in_treatment' || pt.state === 'walking_to_treatment_wait') {
+          hasTreatWaitPts = true;
+          treatWaitSig += `${pt.id}:${pt.state}:${pt.gridX.toFixed(1)},${pt.gridY.toFixed(1)},`;
+        }
+      }
       const isEmptyOverlay =
         !sceneAssetsInitialized ||
-        (!curDraft && !isEdit && !selTreeId && fbs.length === 0 && !hasLockedRooms);
+        (!curDraft &&
+          !isEdit &&
+          !selTreeId &&
+          fbs.length === 0 &&
+          !hasLockedRooms &&
+          !hasTreatWaitPts &&
+          !selTreatWaitId &&
+          !pendStationId);
 
       if (isEmptyOverlay && !overlayWasNonEmpty) {
         return;
@@ -7297,8 +7828,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       const draftSig = curDraft
         ? `${curDraft.catalogItem.id}_${curDraft.hoverX}_${curDraft.hoverY}_${curDraft.rotation}_${draggingDraftActiveRef.current ? 1 : 0}`
         : '';
-      const fbBucket = fbs.length > 0 ? Math.floor(Date.now() / 36) : 0;
-      const ovSig = `${w}x${h}|${fppActiveNow ? 1 : 0}|${csNow.curX.toFixed(3)},${csNow.curZ.toFixed(3)},${csNow.curZoom.toFixed(3)},${csNow.curYaw.toFixed(3)}|${isEdit ? (hoveredEditItemIdRef.current || '_') : ''}|${curItems.length}|${selTreeId || ''}|${lang}|${lockedSig}|${draftSig}|${sceneAssetsInitialized ? 1 : 0}|${fbBucket}`;
+      const animBucket =
+        fbs.length > 0 || selTreatWaitId || pendStationId || hasTreatWaitPts
+          ? Math.floor(Date.now() / 42)
+          : 0;
+      const ovSig = `${w}x${h}|${fppActiveNow ? 1 : 0}|${csNow.curX.toFixed(3)},${csNow.curZ.toFixed(3)},${csNow.curZoom.toFixed(3)},${csNow.curYaw.toFixed(3)}|${isEdit ? (hoveredEditItemIdRef.current || '_') : ''}|${curItems.length}|${selTreeId || ''}|${selTreatWaitId || ''}|${pendStationId || ''}|${treatWaitSig}|${lang}|${lockedSig}|${draftSig}|${sceneAssetsInitialized ? 1 : 0}|${animBucket}`;
       if (ovSig === lastOverlaySig) {
         return;
       }
@@ -7587,6 +8121,90 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
       }
 
+      // 3c. Treatment Hall Assignment Indicators (free stations highlight when choosing + subtle badge over waiting patients)
+      if (!isEdit && !curDraft) {
+        const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.006);
+        if (selTreatWaitId || pendStationId) {
+          ctx.save();
+          for (let i = 0; i < curItems.length; i++) {
+            const it = curItems[i];
+            if (pendStationId && it.instanceId !== pendStationId) continue;
+            const cat = curCatMap.get(it.catalogId);
+            if (!cat?.isTreatmentStation) continue;
+            if (
+              cat.sprite !== 'treatment_bed' &&
+              cat.sprite !== 'traction_table' &&
+              cat.sprite !== 'magnetotherapy' &&
+              cat.sprite !== 'tilt_table' &&
+              cat.sprite !== 'exercise_mat' &&
+              cat.sprite !== 'exercise_bike' &&
+              cat.sprite !== 'treadmill' &&
+              cat.sprite !== 'parallel_bars' &&
+              cat.sprite !== 'balance_trainer' &&
+              cat.sprite !== 'wall_bars' &&
+              cat.sprite !== 'multi_gym_pulley'
+            ) {
+              continue;
+            }
+            const rm = curRooms.find((r) => r.id === it.roomId);
+            if (rm && !rm.unlocked) continue;
+            const occupied = curPatients.some(
+              (pt) => pt.state !== 'treated_leaving' && pt.assignedStationId === it.instanceId
+            );
+            if (occupied) continue;
+
+            const effW = it.rotation % 2 === 0 ? cat.width : cat.depth;
+            const effD = it.rotation % 2 === 0 ? cat.depth : cat.width;
+            const strokeCol = pendStationId
+              ? `rgba(16, 185, 129, ${(0.72 + pulse * 0.28).toFixed(2)})`
+              : `rgba(14, 165, 233, ${(0.62 + pulse * 0.32).toFixed(2)})`;
+            const fillCol = pendStationId
+              ? 'rgba(16, 185, 129, 0.14)'
+              : 'rgba(14, 165, 233, 0.09)';
+            drawFloorCornerBrackets(it.gridX, it.gridY, effW, effD, strokeCol, fillCol, 2.7);
+          }
+          ctx.restore();
+        }
+
+        if (hasTreatWaitPts) {
+          for (let i = 0; i < curPatients.length; i++) {
+            const pt = curPatients[i];
+            if (pt.state !== 'waiting_in_treatment') continue;
+            const pEntry = patientRigs.get(pt.id);
+            const wx = pEntry ? pEntry.visX : pt.gridX + 0.5;
+            const wz = pEntry ? pEntry.visZ : pt.gridY + 0.5;
+            const wy = (pEntry ? pEntry.groundY : CLINIC_FLOOR_ELEV) + (pt.isSeatedWait ? 1.56 : 1.92);
+            const sp = projectToScreen(wx, wy, wz);
+            const isSel = selTreatWaitId === pt.id;
+            ctx.save();
+            ctx.fillStyle = isSel ? 'rgba(16, 185, 129, 0.94)' : 'rgba(14, 165, 233, 0.90)';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.6;
+            const bw = isSel ? 88 : 74;
+            ctx.beginPath();
+            ctx.roundRect(sp.x - bw / 2, sp.y - 11, bw, 20, 8);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '800 9.5px "Cairo", "Plus Jakarta Sans", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(
+              isSel
+                ? lang === 'ar'
+                  ? 'اختر الجهاز الآن'
+                  : 'Tap Station'
+                : lang === 'ar'
+                  ? 'بانتظار التوجيه'
+                  : 'Needs Station',
+              sp.x,
+              sp.y - 0.5
+            );
+            ctx.restore();
+          }
+        }
+      }
+
       // 4. Floating Coins/Stars Feedbacks
       const now = Date.now();
       for (const fb of fbs) {
@@ -7742,6 +8360,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
     let perfAvgDt = 0.016;
     let perfWindowStartMs = 0;
+    let overviewWindFlip = false;
 
     const tick = () => {
       if (disposed) return;
@@ -7978,13 +8597,6 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
 
         const surfPt = getSurfaceElevation(px, pz);
-        const pfX = Math.sin(facing);
-        const pfZ = Math.cos(facing);
-
-        // Universal enclosed FPP bay: responsive anchor distance frames patient & full specialized bed/device cleanly
-        const anchorDist = camera.aspect < 0.85 ? 1.62 : 1.44;
-        const anchorX = px + pfX * anchorDist;
-        const anchorZ = pz + pfZ * anchorDist;
 
         const curStationItem = pObj?.assignedStationId
           ? latestRef.current.placedItems.find((it) => it.instanceId === pObj.assignedStationId)
@@ -7992,6 +8604,21 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         const curStationCat = curStationItem
           ? latestRef.current.catalogMap.get(curStationItem.catalogId)
           : undefined;
+
+        if (curStationItem && curStationCat?.sprite === 'exercise_bike' && pRig) {
+          pRig.sitBlend = 1;
+          pRig.walkBlend = 0;
+          pRig.lieBlend = 0;
+        }
+
+        // Universal enclosed FPP bay: responsive anchor distance frames patient & full specialized bed/device cleanly
+        const isWallFacingGym =
+          curStationCat?.sprite === 'wall_bars' || curStationCat?.sprite === 'multi_gym_pulley';
+        const backdropFacing = isWallFacingGym ? facing + Math.PI : facing;
+        const anchorDist = camera.aspect < 0.85 ? 1.64 : 1.46;
+        const anchorAngle = isWallFacingGym ? backdropFacing + 0.34 : facing;
+        const anchorX = px + Math.sin(anchorAngle) * anchorDist;
+        const anchorZ = pz + Math.cos(anchorAngle) * anchorDist;
 
         if (curStationItem && curStationCat?.sprite === 'magnetotherapy') {
           const prevSaved = stationMagMap.get(curStationItem.instanceId);
@@ -8051,9 +8678,35 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           fppStationTiltState.lastUiDeg = -1;
         }
 
+        if (curStationItem && curStationCat && GYM_STATION_SPRITES.has(curStationCat.sprite)) {
+          const prevSaved = stationGymMap.get(curStationItem.instanceId);
+          const startRunning = prevSaved
+            ? prevSaved.isRunning
+            : pObj?.state === 'in_treatment';
+          const startParams = prevSaved
+            ? { ...prevSaved.deviceParams }
+            : getDefaultDeviceParams(curStationCat.sprite);
+          fppStationGymState.stationId = curStationItem.instanceId;
+          fppStationGymState.catalogId = curStationCat.id;
+          fppStationGymState.sprite = curStationCat.sprite;
+          fppStationGymState.nameEn = curStationCat.nameEn;
+          fppStationGymState.nameAr = curStationCat.nameAr;
+          fppStationGymState.isRunning = startRunning;
+          fppStationGymState.wasActiveWhileRunning = false;
+          fppStationGymState.deviceParams = startParams;
+          stationGymMap.set(curStationItem.instanceId, {
+            isRunning: startRunning,
+            deviceParams: { ...startParams },
+          });
+        } else {
+          fppStationGymState.stationId = null;
+          fppStationGymState.isRunning = false;
+          fppStationGymState.wasActiveWhileRunning = false;
+        }
+
         fpp.patientX = px;
         fpp.patientZ = pz;
-        fpp.patientFacing = facing;
+        fpp.patientFacing = backdropFacing;
         fpp.patientEdgeSign = (pRig?.bedEdgeSign ?? 1) as 1 | -1;
         fpp.patientStationSprite = curStationCat?.sprite ?? 'treatment_bed';
         fpp.anchorX = anchorX;
@@ -8107,7 +8760,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fpp.focusTargetZ = pz;
 
         fppBackdrop.group.position.set(px, surfPt.floorY, pz);
-        fppBackdrop.group.rotation.set(0, facing, 0);
+        fppBackdrop.group.rotation.set(0, backdropFacing, 0);
 
         lastFppEquipSig = '';
         lastFppNearKey = '';
@@ -8165,6 +8818,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         fppStationTiltState.wasLyingWhileRunning = false;
         fppStationTiltState.isMotorMoving = false;
         fppStationTiltState.lastUiDeg = -1;
+        if (fppStationGymState.stationId) {
+          stationGymMap.set(fppStationGymState.stationId, {
+            isRunning: fppStationGymState.isRunning,
+            deviceParams: { ...fppStationGymState.deviceParams },
+          });
+        }
+        fppStationGymState.stationId = null;
+        fppStationGymState.isRunning = false;
+        fppStationGymState.wasActiveWhileRunning = false;
         fpp.activeId = null;
         fpp.blend = 0;
         fppDropRingGroup.visible = false;
@@ -8913,6 +9575,23 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
               } else if (eq.sprite === 'emg_biofeedback' && placedCount >= 1) {
                 contrib = 0.04;
                 pulseW = 0;
+              } else if (eq.sprite === 'paraffin_bath' && placedCount >= 1) {
+                const tempC = Number(dp.tempC ?? 53);
+                contrib =
+                  tempC <= 54
+                    ? THREE.MathUtils.clamp((tempC - 46) / 40, 0.05, 0.22)
+                    : THREE.MathUtils.clamp(0.22 + ((tempC - 54) / 3) * 0.72, 0.22, 0.94);
+                pulseW = 0.16;
+                rKind = 'thermal';
+              } else if (eq.sprite === 'hand_rehab_table' || eq.sprite === 'ball_rack') {
+                contrib = 0.05;
+                pulseW = 0.08 * Math.sin(tSec * 2.2);
+                rKind = 'stretch';
+              } else if (eq.sprite === 'pt_toolkit_cart' && placedCount >= 1) {
+                const tool = String(dp.tool ?? 'GONIOMETER');
+                contrib = tool === 'REFLEX' ? 0.14 : tool === 'IASTM' ? 0.18 : 0.04;
+                pulseW = tool === 'REFLEX' ? Math.pow(Math.max(0, Math.sin(tSec * 6.5)), 4) : 0.08;
+                rKind = tool === 'REFLEX' ? 'percussion' : 'stretch';
               }
 
               totalStim += contrib;
@@ -9063,6 +9742,85 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           ) {
             fppStationTiltState.lastUiDeg = liveDeg;
             shouldPushTiltUi = true;
+          }
+        }
+
+        // Traction & Rehab Gym Stations (traction_table, exercise_bike, treadmill, parallel_bars, wall_bars, multi_gym_pulley, balance_trainer)
+        let shouldPushGymTimerUi = false;
+        if (fppStationGymState.stationId && fppStationGymState.isRunning) {
+          const occRigGym = curFppId ? patientRigs.get(curFppId) : undefined;
+          const isTraction = fppStationGymState.sprite === 'traction_table';
+          const isReady = isTraction
+            ? Boolean(occRigGym && occRigGym.bedPhase === 'lying' && occRigGym.lieBlend >= 0.88)
+            : true;
+          if (isReady) {
+            fppStationGymState.wasActiveWhileRunning = true;
+            const prevRem =
+              fppStationGymState.deviceParams.timerRemainingSec ??
+              (fppStationGymState.deviceParams.timerMin ?? 12) * 60;
+            const nextRem = Math.max(0, prevRem - dt);
+            fppStationGymState.deviceParams.timerRemainingSec = nextRem;
+            if (nextRem <= 0) {
+              fppStationGymState.isRunning = false;
+              fppStationGymState.wasActiveWhileRunning = false;
+              soundFx.deviceToggle(false);
+              if (curActiveDevice?.instanceId === fppStationGymState.stationId) {
+                shouldPushGymTimerUi = true;
+              }
+            } else {
+              if (sync1HzTick && curActiveDevice?.instanceId === fppStationGymState.stationId) {
+                shouldPushGymTimerUi = true;
+              }
+              fppAudioDevicesScratch.push({
+                instanceId: fppStationGymState.stationId,
+                sprite: fppStationGymState.sprite,
+                isRunning: true,
+                placedCount: 1,
+                deviceParams: fppStationGymState.deviceParams,
+              });
+              let gymContrib = 0.06;
+              if (fppStationGymState.sprite === 'traction_table') {
+                const kg = Number(fppStationGymState.deviceParams.tensionKg ?? 22);
+                gymContrib = THREE.MathUtils.clamp((kg - 5) / 80, 0.05, 0.55);
+              } else if (fppStationGymState.sprite === 'multi_gym_pulley') {
+                const kg = Number(fppStationGymState.deviceParams.weightKg ?? 7.5);
+                gymContrib = THREE.MathUtils.clamp(kg / 55, 0.04, 0.25);
+              } else if (fppStationGymState.sprite === 'treadmill') {
+                const sp = Number(fppStationGymState.deviceParams.speed ?? 2.8);
+                gymContrib = THREE.MathUtils.clamp(sp / 24, 0.05, 0.22);
+              } else if (fppStationGymState.sprite === 'exercise_bike') {
+                const res = Number(fppStationGymState.deviceParams.resistance ?? 4);
+                gymContrib = THREE.MathUtils.clamp(0.04 + res * 0.02, 0.05, 0.24);
+              }
+              totalStim += gymContrib;
+              if (gymContrib > domStimScore) {
+                domStimScore = gymContrib;
+                domPulseVal = 0.14;
+                domKind = 'stretch';
+                domRegion =
+                  fppStationGymState.sprite === 'traction_table'
+                    ? 'torso'
+                    : fppStationGymState.sprite === 'multi_gym_pulley' ||
+                        fppStationGymState.sprite === 'wall_bars'
+                      ? 'upper_l'
+                      : 'shin_l';
+              }
+            }
+            stationGymMap.set(fppStationGymState.stationId, {
+              isRunning: fppStationGymState.isRunning,
+              deviceParams: { ...fppStationGymState.deviceParams },
+            });
+          } else if (isTraction && fppStationGymState.wasActiveWhileRunning) {
+            fppStationGymState.isRunning = false;
+            fppStationGymState.wasActiveWhileRunning = false;
+            stationGymMap.set(fppStationGymState.stationId, {
+              isRunning: false,
+              deviceParams: { ...fppStationGymState.deviceParams },
+            });
+            soundFx.deviceToggle(false);
+            if (curActiveDevice?.instanceId === fppStationGymState.stationId) {
+              shouldPushGymTimerUi = true;
+            }
           }
         }
 
@@ -9302,6 +10060,15 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                 buildTiltStationPayload(curActiveDevice.screenTapped)
               );
             }
+          } else if (
+            fppStationGymState.stationId &&
+            curActiveDevice.instanceId === fppStationGymState.stationId
+          ) {
+            if (shouldPushGymTimerUi) {
+              latestRef.current.onFppActiveBedDeviceChange?.(
+                buildGymStationPayload(curActiveDevice.screenTapped)
+              );
+            }
           } else {
             const activeEntry = curActiveDevice.instanceId
               ? fppEquipBayMap.get(curActiveDevice.instanceId) ?? resolveBayEntry(curActiveDevice.catalogId)
@@ -9463,6 +10230,47 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
                     nameAr: fppStationTiltState.nameAr,
                     canDeploy: false,
                     isActive: fppStationTiltState.isRunning,
+                    isAdjustable: false,
+                    supportsDistance: false,
+                    isStationConsole: true,
+                  });
+                }
+                handledMagNear = true;
+              }
+            }
+          }
+
+          if (!handledMagNear && !nearestEntry && !curActiveDevice && fppStationGymState.stationId) {
+            const stEntry = itemMeshes.get(fppStationGymState.stationId);
+            const stUd = stEntry?.mesh.userData;
+            const gymAnchor =
+              (stUd?.tractionRig as TractionTableRigMeta | undefined)?.consoleAnchor ??
+              (stUd?.bikeRig as BikeStationRigMeta | undefined)?.consoleAnchor ??
+              (stUd?.treadmillRig as TreadmillStationRigMeta | undefined)?.consoleAnchor ??
+              (stUd?.parallelBarsRig as ParallelBarsRigMeta | undefined)?.consoleAnchor ??
+              (stUd?.wallBarsRig as WallBarsRigMeta | undefined)?.consoleAnchor ??
+              (stUd?.pulleyRig as PulleyRigMeta | undefined)?.consoleAnchor ??
+              (stUd?.balanceStationRig as BalanceStationRigMeta | undefined)?.consoleAnchor;
+            if (stEntry && stEntry.mesh.visible && gymAnchor) {
+              gymAnchor.getWorldPosition(_gymConsoleWorld);
+              const cdx = _gymConsoleWorld.x - fpp.posX;
+              const cdz = _gymConsoleWorld.z - fpp.posZ;
+              const cDist = Math.hypot(cdx, cdz);
+              const cFwdX = -Math.sin(fpp.yaw);
+              const cFwdZ = -Math.cos(fpp.yaw);
+              const cDot = cDist < 0.25 ? 1 : (cdx * cFwdX + cdz * cFwdZ) / cDist;
+              if (cDist <= 1.65 && cDot >= 0.08) {
+                const gymNearKey = `gym_${fppStationGymState.stationId}|${fppStationGymState.isRunning ? 1 : 0}`;
+                if (gymNearKey !== lastFppNearKey) {
+                  lastFppNearKey = gymNearKey;
+                  latestRef.current.onFppNearbyDeviceChange?.({
+                    instanceId: fppStationGymState.stationId,
+                    catalogId: fppStationGymState.catalogId,
+                    sprite: fppStationGymState.sprite,
+                    nameEn: fppStationGymState.nameEn,
+                    nameAr: fppStationGymState.nameAr,
+                    canDeploy: false,
+                    isActive: fppStationGymState.isRunning,
                     isAdjustable: false,
                     supportsDistance: false,
                     isStationConsole: true,
@@ -9801,20 +10609,14 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           const fwdZ = -Math.cos(cs.curYaw);
           const rightX = Math.cos(cs.curYaw);
           const rightZ = -Math.sin(cs.curYaw);
-          const keyPanSpeed = ((ik.shift ? 18 : 11.5) * dt) / Math.max(0.85, cs.curZoom);
-          cs.targetX = Math.max(
-            PAN_MIN_X,
-            Math.min(PAN_MAX_X, cs.targetX + (rightX * nx + fwdX * nz) * keyPanSpeed)
-          );
-          cs.targetZ = Math.max(
-            PAN_MIN_Z,
-            Math.min(PAN_MAX_Z, cs.targetZ + (rightZ * nx + fwdZ * nz) * keyPanSpeed)
-          );
+          const keyPanSpeed = ((ik.shift ? 18 : 11.5) * dt) / Math.max(0.66, cs.curZoom);
+          cs.targetX = clampPanX(cs.targetX + (rightX * nx + fwdX * nz) * keyPanSpeed, cs.targetZoom);
+          cs.targetZ = clampPanZ(cs.targetZ + (rightZ * nx + fwdZ * nz) * keyPanSpeed, cs.targetZoom);
           cs.panVelX = 0;
           cs.panVelZ = 0;
         } else if (Math.abs(cs.panVelX) > 0.005 || Math.abs(cs.panVelZ) > 0.005) {
-          cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + cs.panVelX * dt));
-          cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + cs.panVelZ * dt));
+          cs.targetX = clampPanX(cs.targetX + cs.panVelX * dt, cs.targetZoom);
+          cs.targetZ = clampPanZ(cs.targetZ + cs.panVelZ * dt, cs.targetZoom);
           cs.panVelX = THREE.MathUtils.damp(cs.panVelX, 0, 6.5, dt);
           cs.panVelZ = THREE.MathUtils.damp(cs.panVelZ, 0, 6.5, dt);
         } else {
@@ -9822,8 +10624,16 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           cs.panVelZ = 0;
         }
         if (ik.plus || ik.minus) {
-          const zDelta = ((ik.plus ? 1 : 0) - (ik.minus ? 1 : 0)) * 1.15 * dt;
-          cs.targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cs.targetZoom + zDelta));
+          const prevZoom = cs.targetZoom;
+          const nextZoom = Math.max(
+            MIN_ZOOM,
+            Math.min(MAX_ZOOM, prevZoom * Math.exp(((ik.plus ? 1 : 0) - (ik.minus ? 1 : 0)) * 1.1 * dt))
+          );
+          cs.targetZoom = nextZoom;
+          if (nextZoom < prevZoom) {
+            cs.targetX = clampPanX(cs.targetX, nextZoom);
+            cs.targetZ = clampPanZ(cs.targetZ, nextZoom);
+          }
         }
         cs.curX = THREE.MathUtils.damp(cs.curX, cs.targetX, 9.5, dt);
         cs.curZ = THREE.MathUtils.damp(cs.curZ, cs.targetZ, 9.5, dt);
@@ -9839,8 +10649,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
 
         const effectiveLodZoom = cs.curZoom;
         if (worldHandle) {
-          textures.waterNormal.offset.x = (tSec * 0.045) % 1;
-          textures.waterNormal.offset.y = (tSec * 0.032) % 1;
+          if (effectiveLodZoom >= 0.85) {
+            textures.waterNormal.offset.x = (tSec * 0.045) % 1;
+            textures.waterNormal.offset.y = (tSec * 0.032) % 1;
+          }
           worldHandle.setZoomLod(effectiveLodZoom);
         }
         if (animatedFountains.length > 0 && effectiveLodZoom >= 0.85) {
@@ -9860,7 +10672,10 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             }
           }
         }
-        updateFoliageWindTime(textures, tSec);
+        overviewWindFlip = !overviewWindFlip;
+        if (effectiveLodZoom >= 0.88 || overviewWindFlip) {
+          updateFoliageWindTime(textures, tSec);
+        }
 
         const showItemMicro = effectiveLodZoom >= 0.98;
         if (showItemMicro !== lastShowItemMicro) {
@@ -10138,7 +10953,8 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
         }
 
         if (renderer.shadowMap.enabled) {
-          if (shadowsDirty || (actorsOrEquipMoving && nowMs - lastShadowUpdateMs >= shadowIntervalMs)) {
+          const isoShadowCadence = effectiveLodZoom < 0.86 ? Math.max(shadowIntervalMs, 110) : shadowIntervalMs;
+          if (shadowsDirty || (actorsOrEquipMoving && nowMs - lastShadowUpdateMs >= isoShadowCadence)) {
             renderer.shadowMap.needsUpdate = true;
             lastShadowUpdateMs = nowMs;
             shadowsDirty = false;
@@ -10461,6 +11277,26 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       return;
     }
 
+    const hitItemEarly = itemHit?.item || null;
+    if (!editMode && hitItemEarly) {
+      const hitCat = catalogMap.get(hitItemEarly.catalogId);
+      const hasHallWaiter =
+        Boolean(latestRef.current.selectedTreatmentWaitPatientId) ||
+        patients.some(
+          (p) => p.state === 'waiting_in_treatment' || p.state === 'walking_to_treatment_wait'
+        );
+      if (
+        hasHallWaiter &&
+        hitCat?.isTreatmentStation &&
+        !patients.some(
+          (p) => p.state !== 'treated_leaving' && p.assignedStationId === hitItemEarly.instanceId
+        )
+      ) {
+        onInspectItem?.(hitItemEarly);
+        return;
+      }
+    }
+
     let nearPatient: PatientEntity | null = null;
     let bestDist = 1.05;
     for (const p of patients) {
@@ -10475,7 +11311,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       return;
     }
 
-    const hitItem = itemHit?.item || findHitItemAt(rawX, rawZ);
+    const hitItem = hitItemEarly || findHitItemAt(rawX, rawZ);
 
     if (editMode) {
       if (hitItem) {
@@ -10730,10 +11566,13 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
       const ratio = dist / pinchRef.current.dist;
-      camStateRef.current.targetZoom = Math.max(
+      const nextZoom = Math.max(
         MIN_ZOOM,
         Math.min(MAX_ZOOM, pinchRef.current.startZoom * ratio)
       );
+      camStateRef.current.targetZoom = nextZoom;
+      camStateRef.current.targetX = clampPanX(camStateRef.current.targetX, nextZoom);
+      camStateRef.current.targetZ = clampPanZ(camStateRef.current.targetZ, nextZoom);
       return;
     }
 
@@ -10849,8 +11688,9 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
       const { right, forward, scale } = hooks.getPanVectors();
       const moveX = -dx * scale * right.x + dy * scale * 1.65 * forward.x;
       const moveZ = -dx * scale * right.z + dy * scale * 1.65 * forward.z;
-      camStateRef.current.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, dragRef.current.camStartX + moveX));
-      camStateRef.current.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, dragRef.current.camStartZ + moveZ));
+      const zNow = camStateRef.current.targetZoom;
+      camStateRef.current.targetX = clampPanX(dragRef.current.camStartX + moveX, zNow);
+      camStateRef.current.targetZ = clampPanZ(dragRef.current.camStartZ + moveZ, zNow);
 
       const now = performance.now();
       const dtPan = (now - panVelocityRef.current.lastT) / 1000;
@@ -10948,14 +11788,18 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
     if (firstPersonPatientId) return;
     const cs = camStateRef.current;
     const curZoom = cs.targetZoom;
-    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZoom - e.deltaY * 0.0008));
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZoom * Math.exp(-e.deltaY * 0.0011)));
     if (Math.abs(nextZoom - curZoom) > 1e-4) {
       const hooks = sceneHooksRef.current;
       if (hooks && nextZoom > curZoom) {
         const { rawX, rawZ } = hooks.screenToGrid(e.clientX, e.clientY);
         const pull = (1 - curZoom / nextZoom) * 0.72;
-        cs.targetX = Math.max(PAN_MIN_X, Math.min(PAN_MAX_X, cs.targetX + (rawX - cs.targetX) * pull));
-        cs.targetZ = Math.max(PAN_MIN_Z, Math.min(PAN_MAX_Z, cs.targetZ + (rawZ - cs.targetZ) * pull));
+        cs.targetX = clampPanX(cs.targetX + (rawX - cs.targetX) * pull, nextZoom);
+        cs.targetZ = clampPanZ(cs.targetZ + (rawZ - cs.targetZ) * pull, nextZoom);
+      } else if (nextZoom < curZoom) {
+        const recenterPull = nextZoom < 1.05 ? Math.min(0.45, (1 - nextZoom / curZoom) * 1.1) : 0;
+        cs.targetX = clampPanX(cs.targetX + (CLINIC_CENTER_X - cs.targetX) * recenterPull, nextZoom);
+        cs.targetZ = clampPanZ(cs.targetZ + (CLINIC_CENTER_Z - cs.targetZ) * recenterPull, nextZoom);
       }
       cs.targetZoom = nextZoom;
     }
@@ -11082,10 +11926,11 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
           <button
             type="button"
             onClick={() => {
-              camStateRef.current.targetZoom = Math.max(
-                MIN_ZOOM,
-                camStateRef.current.targetZoom - 0.18
-              );
+              const cs = camStateRef.current;
+              const nextZoom = Math.max(MIN_ZOOM, cs.targetZoom / 1.18);
+              cs.targetZoom = nextZoom;
+              cs.targetX = clampPanX(cs.targetX + (CLINIC_CENTER_X - cs.targetX) * 0.28, nextZoom);
+              cs.targetZ = clampPanZ(cs.targetZ + (CLINIC_CENTER_Z - cs.targetZ) * 0.28, nextZoom);
             }}
             title={language === 'ar' ? 'تصغير (-)' : 'Zoom Out (-)'}
             aria-label="Zoom Out"
@@ -11098,7 +11943,7 @@ export const ClinicCanvas: React.FC<ClinicCanvasProps> = React.memo(({
             onClick={() => {
               camStateRef.current.targetZoom = Math.min(
                 MAX_ZOOM,
-                camStateRef.current.targetZoom + 0.18
+                camStateRef.current.targetZoom * 1.18
               );
             }}
             title={language === 'ar' ? 'تكبير (+)' : 'Zoom In (+)'}

@@ -64,6 +64,15 @@ const DEVICE_SCREEN_SPRITES = new Set<SpriteKind>([
   'balance_trainer',
   'magnetotherapy',
   'tilt_table',
+  'traction_table',
+  'exercise_bike',
+  'treadmill',
+  'parallel_bars',
+  'wall_bars',
+  'multi_gym_pulley',
+  'hand_rehab_table',
+  'pt_toolkit_cart',
+  'ball_rack',
 ]);
 
 const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
@@ -76,6 +85,7 @@ const DEVICE_PROBE_SPRITES = new Set<SpriteKind>([
   'swd_unit',
   'infrared_lamp',
   'hydro_sink',
+  'paraffin_bath',
   'pt_toolkit_cart',
 ]);
 
@@ -127,6 +137,8 @@ export function getDefaultProbeAnchors(sprite: SpriteKind): FppProbeAnchor[] {
       return [{ id: 'head', label: 'IR Beam', bayX: 0, bayY: 0, bayZ: 0, nx: 0, ny: 1, nz: 0, placed: false }];
     case 'hydro_sink':
       return [{ id: 'head', label: 'Hot Pack', bayX: 0, bayY: 0, bayZ: 0, nx: 0, ny: 1, nz: 0, placed: false }];
+    case 'paraffin_bath':
+      return [{ id: 'head', label: 'Paraffin Mitt', bayX: 0, bayY: 0, bayZ: 0, nx: 0, ny: 1, nz: 0, placed: false }];
     case 'pt_toolkit_cart':
       return [{ id: 'head', label: 'PT Tool', bayX: 0, bayY: 0, bayZ: 0, nx: 0, ny: 1, nz: 0, placed: false }];
     default:
@@ -170,11 +182,23 @@ export function getDefaultDeviceParams(sprite: SpriteKind): DeviceConsoleParams 
     case 'infrared_lamp':
       return { timerMin: 15, timerRemainingSec: 15 * 60 };
     case 'hand_rehab_table':
-      return { tool: 'PEGBOARD', timerMin: 15, timerRemainingSec: 15 * 60 };
+      return { tool: 'PEGBOARD', gripKg: 28, timerMin: 15, timerRemainingSec: 15 * 60 };
     case 'pt_toolkit_cart':
-      return { tool: 'GONIOMETER', timerMin: 10, timerRemainingSec: 10 * 60 };
+      return { tool: 'GONIOMETER', romDeg: 115, dtrGrade: '2+', timerMin: 10, timerRemainingSec: 10 * 60 };
     case 'ball_rack':
-      return { tool: 'CORE STABILITY', timerMin: 12, timerRemainingSec: 12 * 60 };
+      return { tool: 'CORE STABILITY', ballSize: '55cm', timerMin: 12, timerRemainingSec: 12 * 60 };
+    case 'traction_table':
+      return { tensionKg: 22, mode: 'INTERM', timerMin: 15, timerRemainingSec: 15 * 60 };
+    case 'exercise_bike':
+      return { resistance: 4, rpm: 62, timerMin: 15, timerRemainingSec: 15 * 60 };
+    case 'treadmill':
+      return { speed: 2.8, inclinePct: 2, timerMin: 12, timerRemainingSec: 12 * 60 };
+    case 'parallel_bars':
+      return { barHeightCm: 85, mode: 'ALTERNATING', timerMin: 12, timerRemainingSec: 12 * 60 };
+    case 'wall_bars':
+      return { mode: 'SPINAL HANG', resistance: 2, timerMin: 10, timerRemainingSec: 10 * 60 };
+    case 'multi_gym_pulley':
+      return { weightKg: 7.5, mode: 'ROW PULL', timerMin: 12, timerRemainingSec: 12 * 60 };
     case 'magnetotherapy':
       return {
         intensity: 45,
@@ -2477,9 +2501,11 @@ export function createFppEquipment3D(
 
     const pegBase = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.18, 0.018, 0.14)), woodOakMat);
     pegBase.position.set(-0.14, 0.783, 0);
+    const handPegs: THREE.Mesh[] = [];
     for (let px = -2; px <= 2; px++) {
       const peg = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.005, 0.005, 0.048, 8)), cyanAccentMat);
       peg.position.set(-0.14 + px * 0.028, 0.812, -0.02 + (px % 2) * 0.04);
+      handPegs.push(peg);
       group.add(peg);
     }
 
@@ -2487,15 +2513,77 @@ export function createFppEquipment3D(
     puttyTub1.position.set(0.08, 0.79, 0.06);
     const puttyTub2 = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.036, 0.036, 0.034, 12)), amberAccentMat);
     puttyTub2.position.set(0.17, 0.79, 0.06);
+    const puttyMound = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(0.032, 12, 10)), emeraldAccentMat);
+    puttyMound.position.set(0.08, 0.812, 0.06);
 
     const dynaBody = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.04, 0.09, 0.08)), aluminumMat);
     dynaBody.position.set(0.12, 0.82, -0.07);
     const dynaGauge = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.028, 0.028, 0.015, 14)), bodyWhiteMat);
     dynaGauge.rotation.z = Math.PI / 2;
     dynaGauge.position.set(0.12, 0.86, -0.07);
+    const dynaNeedle = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.004, 0.024, 0.004)), redAccentMat);
+    dynaNeedle.position.set(0.132, 0.866, -0.07);
 
-    group.add(cFootL, cFootR, cBack, col, topDeck, edgeBand, pegBase, puttyTub1, puttyTub2, dynaBody, dynaGauge);
+    const hrScreen = createLiveDeviceScreen('HAND REHAB', '#14b8a6', ['PEGBOARD', '28 KG', 'FINE MOTOR', '15:00'], 'grid');
+    trackTex(hrScreen.texture);
+    const hrScreenMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        map: hrScreen.texture,
+        emissiveMap: hrScreen.texture,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.22,
+        roughness: 0.22,
+      })
+    );
+    const hrBezel = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.18, 0.11, 0.016)), slateFrameMat);
+    hrBezel.position.set(-0.15, 0.84, -0.14);
+    hrBezel.rotation.x = -0.35;
+    const hrFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(0.158, 0.092)), hrScreenMat);
+    hrFace.position.set(-0.15, 0.842, -0.131);
+    hrFace.rotation.x = -0.35;
+    markDeviceScreen(hrBezel);
+    markDeviceScreen(hrFace);
+
+    group.add(
+      cFootL, cFootR, cBack, col, topDeck, edgeBand, pegBase,
+      puttyTub1, puttyTub2, puttyMound, dynaBody, dynaGauge, dynaNeedle, hrBezel, hrFace
+    );
     addRearPushHandle(group, 0.22, -0.17, -0.25, 0.75, 0.81, 0.16);
+
+    updateMotion = (input) => {
+      const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
+      const running = Boolean(input.isRunning ?? a > 0.25);
+      const p = input.deviceParams;
+      const tool = String(p?.tool ?? 'PEGBOARD');
+      const grip = Math.round(Number(p?.gripKg ?? 28));
+      const tm = formatTimerMmSs(p, 15);
+      hrScreen.updateDisplay(
+        running,
+        `${tool}|${grip}|${tm}`,
+        [tool.slice(0, 10), `${grip} KG`, tool === 'PEGBOARD' ? 'DEXTERITY' : tool === 'PUTTY' ? 'PINCH' : 'GRIP TEST', tm]
+      );
+      hrScreenMat.emissiveIntensity = 0.15 + a * 0.85;
+
+      for (let i = 0; i < handPegs.length; i++) {
+        const lift =
+          running && tool === 'PEGBOARD'
+            ? Math.max(0, Math.sin(input.timeSec * 3.4 - i * 1.15)) * 0.042
+            : 0;
+        handPegs[i].position.y = 0.812 + lift;
+      }
+      if (running && tool === 'PUTTY') {
+        const sq = 0.72 + 0.35 * Math.sin(input.timeSec * 2.8);
+        puttyMound.scale.set(1.18 - sq * 0.15, sq, 1.18 - sq * 0.15);
+      } else {
+        puttyMound.scale.set(1, 0.85, 1);
+      }
+      if (running && tool === 'DYNAMOMETER') {
+        const targetAng = 0.4 + (grip / 60) * 1.4 + Math.sin(input.timeSec * 4.0) * 0.16;
+        dynaNeedle.rotation.x = targetAng;
+      } else {
+        dynaNeedle.rotation.x = 0.25;
+      }
+    };
   } else if (sprite === 'paraffin_bath' || sprite === 'hydro_sink') {
     colliderHalfW = 0.23;
     colliderHalfD = 0.21;
@@ -2585,8 +2673,22 @@ export function createFppEquipment3D(
       shelfBot.position.y = 0.10;
       const shelfMid = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.36, 0.02, 0.30)), bodyWhiteMat);
       shelfMid.position.y = 0.30;
-      const mittBlue = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.12, 0.044, 0.16)), blueUpholsteryMat);
-      mittBlue.position.set(-0.08, 0.335, 0);
+      const mittMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          color: 0x0284c7,
+          emissive: 0xf59e0b,
+          emissiveIntensity: 0,
+          roughness: 0.72,
+        })
+      );
+      const mittGroup = new THREE.Group();
+      mittGroup.position.set(-0.08, 0.335, 0);
+      const mittBlue = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.12, 0.044, 0.16)), mittMat);
+      const mittCuff = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.126, 0.016, 0.045)), bodyWhiteMat);
+      mittCuff.position.set(0, 0.016, -0.05);
+      mittGroup.add(mittBlue, mittCuff);
+      markDraggableProbe(mittGroup, 'head');
+
       const mittWhite = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.12, 0.044, 0.16)), bodyWhiteMat);
       mittWhite.position.set(0.08, 0.335, 0);
       const shelfTop = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.38, 0.022, 0.32)), aluminumMat);
@@ -2637,11 +2739,12 @@ export function createFppEquipment3D(
 
       markDeviceScreen(scrBezel);
       markDeviceScreen(scrFace);
-      group.add(shelfBot, shelfMid, mittBlue, mittWhite, shelfTop, tub, tubRim, waxPool, scrBezel, scrFace);
+      group.add(shelfBot, shelfMid, mittGroup, mittWhite, shelfTop, tub, tubRim, waxPool, scrBezel, scrFace);
       addRearPushHandle(group, 0.17, -0.14, -0.23, 0.56, 0.78, 0.13);
 
       updateMotion = (input) => {
         const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
+        const onBed = THREE.MathUtils.clamp(input.onBedBlend ?? a, 0, 1);
         const running = Boolean(input.isRunning ?? a > 0.25);
         const p = input.deviceParams;
         const tC = `${p?.tempC ?? 53} C`;
@@ -2650,6 +2753,17 @@ export function createFppEquipment3D(
         pScreen.updateDisplay(running, `${tC}|${mStr}|${tmStr}`, [tC, mStr, tmStr, 'WAX']);
         pScreenMat.emissiveIntensity = 0.14 + a * 0.85;
         waxMat.emissiveIntensity = 0.03 + a * 0.72;
+        mittMat.emissiveIntensity = a * (0.24 + Math.sin(input.timeSec * 2.2) * 0.08);
+
+        const target = findProbeTarget(input.probeWorldTargets, 'head');
+        if (target && (target.placed || target.holding) && onBed > 0.05) {
+          const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.052;
+          applyPlacedProbeTransform(mittGroup, group, target, 0.012 + lift, 'Y');
+          writeGripWorld(mittGroup, 0, 0.025, 0, target);
+        } else {
+          mittGroup.position.set(-0.08, 0.335, 0);
+          mittGroup.rotation.set(0, 0, 0);
+        }
       };
     }
   } else if (sprite === 'pt_toolkit_cart') {
@@ -2680,8 +2794,27 @@ export function createFppEquipment3D(
       group.add(p);
     }
 
+    const ptScreen = createLiveDeviceScreen('PT DIAGNOSTICS', '#0ea5e9', ['GONIOMETER', 'ROM 115', 'DTR 2+', '10:00'], 'gauge');
+    trackTex(ptScreen.texture);
+    const ptScreenMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        map: ptScreen.texture,
+        emissiveMap: ptScreen.texture,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.22,
+        roughness: 0.22,
+      })
+    );
+    const ptBezel = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.24, 0.135, 0.018)), slateFrameMat);
+    ptBezel.position.set(0, 0.61, 0.155);
+    const ptFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(0.21, 0.108)), ptScreenMat);
+    ptFace.position.set(0, 0.61, 0.168);
+    markDeviceScreen(ptBezel);
+    markDeviceScreen(ptFace);
+
     const activeToolGroup = new THREE.Group();
     activeToolGroup.position.set(-0.08, 0.764, 0.04);
+    const goniSub = new THREE.Group();
     const dialMat = trackMat(
       new THREE.MeshStandardMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.78, roughness: 0.2 })
     );
@@ -2693,10 +2826,39 @@ export function createFppEquipment3D(
     armSwingPivot.position.set(0, 0.011, 0);
     const armMoving = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.015, 0.005, 0.14)), cyanAccentMat);
     armMoving.position.set(0, 0, -0.068);
+    armSwingPivot.add(armMoving);
+    goniSub.add(dialFace, armFixed, armSwingPivot);
+
+    const reflexSub = new THREE.Group();
+    reflexSub.visible = false;
+    const rShaft = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.005, 0.006, 0.16, 8)), chromeMat);
+    rShaft.rotation.z = Math.PI / 2;
+    rShaft.position.set(0, 0.014, 0);
+    const rTri = new THREE.Mesh(trackGeom(new THREE.ConeGeometry(0.022, 0.052, 6)), redAccentMat);
+    rTri.rotation.x = Math.PI / 2;
+    rTri.position.set(0.075, 0.014, 0);
+    reflexSub.add(rShaft, rTri);
+
+    const iastmSub = new THREE.Group();
+    iastmSub.visible = false;
+    const blade = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.125, 0.008, 0.046)), chromeMat);
+    blade.position.y = 0.008;
+    const bladeGrip = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.05, 0.018, 0.02)), cyanAccentMat);
+    bladeGrip.position.y = 0.02;
+    iastmSub.add(blade, bladeGrip);
+
+    const tapeSub = new THREE.Group();
+    tapeSub.visible = false;
+    const tapeStrip = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.14, 0.004, 0.038)), cyanAccentMat);
+    tapeStrip.position.y = 0.004;
+    const tapeRoll = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.024, 0.024, 0.038, 12)), cyanAccentMat);
+    tapeRoll.rotation.x = Math.PI / 2;
+    tapeRoll.position.set(-0.04, 0.026, 0);
+    tapeSub.add(tapeStrip, tapeRoll);
+
     const toolGripHub = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.013, 0.015, 0.046, 12)), darkRubberMat);
     toolGripHub.position.set(0, 0.025, 0);
-    armSwingPivot.add(armMoving);
-    activeToolGroup.add(dialFace, armFixed, armSwingPivot, toolGripHub);
+    activeToolGroup.add(goniSub, reflexSub, iastmSub, tapeSub, toolGripHub);
     markDraggableProbe(activeToolGroup, 'head');
 
     const hammerHandle = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.005, 0.005, 0.16, 8)), chromeMat);
@@ -2713,23 +2875,50 @@ export function createFppEquipment3D(
     );
     goni.rotation.x = -Math.PI / 2;
     goni.position.set(-0.1, 0.756, -0.06);
-    group.add(activeToolGroup, hammerHandle, hammerHead, iastm, goni);
+    group.add(ptBezel, ptFace, activeToolGroup, hammerHandle, hammerHead, iastm, goni);
     addRearPushHandle(group, 0.20, -0.13, -0.23, 0.74, 0.78, 0.13);
 
     updateMotion = (input) => {
       const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
       const onBed = THREE.MathUtils.clamp(input.onBedBlend ?? a, 0, 1);
       const running = Boolean(input.isRunning ?? a > 0.25);
+      const p = input.deviceParams;
+      const tool = String(p?.tool ?? 'GONIOMETER');
+      const rom = Math.round(Number(p?.romDeg ?? 115));
+      const dtr = String(p?.dtrGrade ?? '2+');
+      const tm = formatTimerMmSs(p, 10);
+
+      goniSub.visible = tool === 'GONIOMETER';
+      reflexSub.visible = tool === 'REFLEX';
+      iastmSub.visible = tool === 'IASTM';
+      tapeSub.visible = tool === 'TAPE';
+
+      ptScreen.updateDisplay(
+        running,
+        `${tool}|${rom}|${dtr}|${tm}`,
+        [tool.slice(0, 10), tool === 'REFLEX' ? `DTR ${dtr}` : `ROM ${rom}d`, tool === 'TAPE' ? 'KINESIO' : 'CLINICAL', tm]
+      );
+      ptScreenMat.emissiveIntensity = 0.15 + a * 0.85;
+
       const target = findProbeTarget(input.probeWorldTargets, 'head');
       if (target && (target.placed || target.holding) && onBed > 0.05) {
         const lift = target.placed ? 0 : (1 - (target.attachBlend ?? 0)) * 0.048;
         applyPlacedProbeTransform(activeToolGroup, group, target, 0.008 + lift, 'Y');
-        armSwingPivot.rotation.y = target.placed && running ? 0.35 + Math.sin(input.timeSec * 1.4) * 0.32 : 0.45;
+        if (tool === 'GONIOMETER') {
+          const baseRad = THREE.MathUtils.degToRad(rom) * 0.55;
+          armSwingPivot.rotation.y = target.placed && running ? baseRad + Math.sin(input.timeSec * 1.6) * 0.26 : baseRad;
+        } else if (tool === 'REFLEX') {
+          reflexSub.rotation.z = target.placed && running ? Math.sin(input.timeSec * 6.5) * 0.42 : 0.15;
+        } else if (tool === 'IASTM') {
+          iastmSub.position.x = target.placed && running ? Math.sin(input.timeSec * 4.2) * 0.032 : 0;
+        }
         writeGripWorld(activeToolGroup, 0, 0.025, 0, target, 0, 1, 0);
       } else {
         activeToolGroup.position.set(-0.08, 0.764, 0.04);
         activeToolGroup.rotation.set(0, 0, 0);
         armSwingPivot.rotation.y = 0.2;
+        reflexSub.rotation.z = 0;
+        iastmSub.position.x = 0;
       }
     };
   } else if (sprite === 'ball_rack') {
@@ -2749,15 +2938,11 @@ export function createFppEquipment3D(
     const rHigh = new THREE.Mesh(ringGeom, slateFrameMat);
     rHigh.position.set(0, 0.84, 0.02);
 
-    const ball1 = new THREE.Mesh(
-      trackGeom(new THREE.SphereGeometry(0.24, 20, 16)),
-      trackMat(new THREE.MeshStandardMaterial({ color: 0x0ea5e9, roughness: 0.38 }))
-    );
+    const ball1Mat = trackMat(new THREE.MeshStandardMaterial({ color: 0x0ea5e9, roughness: 0.38, emissive: 0x0284c7, emissiveIntensity: 0 }));
+    const ball1 = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(0.24, 20, 16)), ball1Mat);
     ball1.position.set(0, 0.34, 0.02);
-    const ball2 = new THREE.Mesh(
-      trackGeom(new THREE.SphereGeometry(0.21, 20, 16)),
-      trackMat(new THREE.MeshStandardMaterial({ color: 0x14b8a6, roughness: 0.38 }))
-    );
+    const ball2Mat = trackMat(new THREE.MeshStandardMaterial({ color: 0x14b8a6, roughness: 0.38, emissive: 0x0d9488, emissiveIntensity: 0 }));
+    const ball2 = new THREE.Mesh(trackGeom(new THREE.SphereGeometry(0.21, 20, 16)), ball2Mat);
     ball2.position.set(0, 0.94, 0.02);
     const rackGripGeom = trackGeom(new THREE.CylinderGeometry(0.017, 0.017, 0.11, 10));
     rackGripGeom.rotateX(Math.PI / 2);
@@ -2765,7 +2950,46 @@ export function createFppEquipment3D(
     rackGripL.position.set(-0.18, 0.84, 0.02);
     const rackGripR = new THREE.Mesh(rackGripGeom, darkRubberMat);
     rackGripR.position.set(0.18, 0.84, 0.02);
-    group.add(baseRing, upright, rLow, rHigh, rackGripL, rackGripR, ball1, ball2);
+
+    const ballScreen = createLiveDeviceScreen('SWISS BALL', '#14b8a6', ['CORE STAB', '55 cm', 'ACTIVE', '12:00'], 'bars');
+    trackTex(ballScreen.texture);
+    const ballScreenMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        map: ballScreen.texture,
+        emissiveMap: ballScreen.texture,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.22,
+        roughness: 0.22,
+      })
+    );
+    const ballPlaque = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.22, 0.125, 0.016)), slateFrameMat);
+    ballPlaque.position.set(0, 1.14, -0.17);
+    const ballScrFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(0.19, 0.10)), ballScreenMat);
+    ballScrFace.position.set(0, 1.14, -0.158);
+    markDeviceScreen(ballPlaque);
+    markDeviceScreen(ballScrFace);
+
+    group.add(baseRing, upright, rLow, rHigh, rackGripL, rackGripR, ball1, ball2, ballPlaque, ballScrFace);
+
+    updateMotion = (input) => {
+      const a = THREE.MathUtils.clamp(input.activeBlend, 0, 1);
+      const onBed = THREE.MathUtils.clamp(input.onBedBlend ?? a, 0, 1);
+      const running = Boolean(input.isRunning ?? a > 0.25);
+      const p = input.deviceParams;
+      const drill = String(p?.tool ?? 'CORE STABILITY');
+      const sz = String(p?.ballSize ?? '55cm');
+      const tm = formatTimerMmSs(p, 12);
+      ballScreen.updateDisplay(running, `${drill}|${sz}|${tm}`, [drill.slice(0, 10), sz, running ? 'TRAINING' : 'READY', tm]);
+      ballScreenMat.emissiveIntensity = 0.15 + a * 0.82;
+
+      const use65 = sz === '65cm';
+      const bounce = running && onBed > 0.05 ? Math.abs(Math.sin(input.timeSec * 2.2)) * 0.035 : 0;
+      const pullFwd = onBed > 0.05 && running ? 0.34 : 0;
+      ball1.position.set(0, use65 ? 0.24 + bounce : 0.34, use65 ? 0.02 + pullFwd : 0.02);
+      ball2.position.set(0, !use65 && running && onBed > 0.05 ? 0.21 + bounce : 0.94, !use65 ? 0.02 + pullFwd : 0.02);
+      ball1Mat.emissiveIntensity = use65 && running ? 0.24 : 0;
+      ball2Mat.emissiveIntensity = !use65 && running ? 0.24 : 0;
+    };
   } else if (sprite === 'balance_trainer') {
     colliderHalfW = 0.26;
     colliderHalfD = 0.24;
@@ -2846,15 +3070,15 @@ export function createFppEquipment3D(
     const consoleBox = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.26, 0.14, 0.04)), slateFrameMat);
     consoleBox.position.set(0, 1.0, 0.28);
     consoleBox.rotation.x = -0.35;
-    const bikeScreen = createLiveDeviceScreen('ERGO BIKE', '#38bdf8', ['62 RPM', '85 W', 'HR 108', '15:00'], 'bars');
+    const bikeScreen = createLiveDeviceScreen('ERGO BIKE', '#38bdf8', ['62 RPM', 'RES L4', '85 W', '15:00'], 'bars');
     trackTex(bikeScreen.texture);
-    const bikeScrFace = new THREE.Mesh(
-      trackGeom(new THREE.PlaneGeometry(0.22, 0.11)),
-      trackMat(new THREE.MeshStandardMaterial({ map: bikeScreen.texture, emissiveMap: bikeScreen.texture, emissive: 0xffffff, emissiveIntensity: 0.4 }))
-    );
+    const bikeScrMat = trackMat(new THREE.MeshStandardMaterial({ map: bikeScreen.texture, emissiveMap: bikeScreen.texture, emissive: 0xffffff, emissiveIntensity: 0.4 }));
+    const bikeScrFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(0.22, 0.11)), bikeScrMat);
     bikeScrFace.position.set(0, 1.005, 0.258);
     bikeScrFace.rotation.x = -0.35;
     bikeScrFace.rotation.y = Math.PI;
+    markDeviceScreen(consoleBox);
+    markDeviceScreen(bikeScrFace);
     const barL = new THREE.Mesh(trackGeom(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8)), darkRubberMat);
     barL.rotation.z = Math.PI / 2;
     barL.position.set(-0.18, 0.95, 0.27);
@@ -2862,6 +3086,16 @@ export function createFppEquipment3D(
     barR.rotation.z = Math.PI / 2;
     barR.position.set(0.18, 0.95, 0.27);
     group.add(base, shroud, seatPost, saddle, stemPost, consoleBox, bikeScrFace, barL, barR);
+
+    updateMotion = (input) => {
+      const p = input.deviceParams;
+      const rpm = Math.round(Number(p?.rpm ?? 62));
+      const res = Math.round(Number(p?.resistance ?? 4));
+      const tm = formatTimerMmSs(p, 15);
+      const running = Boolean(input.isRunning);
+      bikeScreen.updateDisplay(running, `${rpm}|${res}|${tm}`, [`${rpm} RPM`, `RES L${res}`, `${Math.round(rpm * res * 0.35)} W`, tm]);
+      bikeScrMat.emissiveIntensity = running ? 0.85 : 0.25;
+    };
   } else if (sprite === 'treadmill') {
     colliderHalfW = 0.38;
     colliderHalfD = 0.78;
@@ -2886,16 +3120,26 @@ export function createFppEquipment3D(
     const consoleHead = new THREE.Mesh(trackGeom(new THREE.BoxGeometry(0.62, 0.18, 0.09)), slateFrameMat);
     consoleHead.position.set(0, 1.06, 0.56);
     consoleHead.rotation.x = 0.35;
-    const tmScreen = createLiveDeviceScreen('GAIT TREADMILL', '#0ea5e9', ['3.2 km/h', '2.0 %', 'HR 102', '12:00'], 'wave');
+    const tmScreen = createLiveDeviceScreen('GAIT TREADMILL', '#0ea5e9', ['2.8 km/h', '2.0 %', 'HR 102', '12:00'], 'wave');
     trackTex(tmScreen.texture);
-    const tmFace = new THREE.Mesh(
-      trackGeom(new THREE.PlaneGeometry(0.46, 0.13)),
-      trackMat(new THREE.MeshStandardMaterial({ map: tmScreen.texture, emissiveMap: tmScreen.texture, emissive: 0xffffff, emissiveIntensity: 0.42 }))
-    );
+    const tmScrMat = trackMat(new THREE.MeshStandardMaterial({ map: tmScreen.texture, emissiveMap: tmScreen.texture, emissive: 0xffffff, emissiveIntensity: 0.42 }));
+    const tmFace = new THREE.Mesh(trackGeom(new THREE.PlaneGeometry(0.46, 0.13)), tmScrMat);
     tmFace.position.set(0, 1.075, 0.512);
     tmFace.rotation.x = -0.35;
     tmFace.rotation.y = Math.PI;
+    markDeviceScreen(consoleHead);
+    markDeviceScreen(tmFace);
     group.add(deckFrame, belt, motorHood, consoleHead, tmFace);
+
+    updateMotion = (input) => {
+      const p = input.deviceParams;
+      const spd = Number(p?.speed ?? 2.8).toFixed(1);
+      const inc = Number(p?.inclinePct ?? 2).toFixed(1);
+      const tm = formatTimerMmSs(p, 12);
+      const running = Boolean(input.isRunning);
+      tmScreen.updateDisplay(running, `${spd}|${inc}|${tm}`, [`${spd} km/h`, `INC ${inc}%`, 'GAIT OK', tm]);
+      tmScrMat.emissiveIntensity = running ? 0.88 : 0.25;
+    };
   } else if (sprite === 'parallel_bars') {
     colliderHalfW = 0.38;
     colliderHalfD = 0.82;

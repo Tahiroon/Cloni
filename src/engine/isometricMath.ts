@@ -477,6 +477,24 @@ export function buildObstacleBoxes(
       });
       continue;
     }
+    if (
+      item.catalogId === 'partition_wall' ||
+      item.catalogId === 'privacy_screen' ||
+      item.catalogId === 'wood_slat_divider'
+    ) {
+      // Slim 0.20m x 0.95m dividers keep tight thickness matching their architectural profile
+      const thinAlongX = item.rotation % 2 === 0;
+      const insetX = thinAlongX ? 0.03 : 0.065;
+      const insetZ = thinAlongX ? 0.065 : 0.03;
+      boxes.push({
+        minX: item.gridX + insetX,
+        maxX: item.gridX + w - insetX,
+        minZ: item.gridY + insetZ,
+        maxZ: item.gridY + d - insetZ,
+        itemId: item.instanceId,
+      });
+      continue;
+    }
     const inset =
       item.catalogId === 'exercise_mat'
         ? 0.24
@@ -662,8 +680,8 @@ export function getReceptionDeskPose(desk: PlacedItem): ReceptionDeskPose {
     desk,
     2,
     1,
-    RECEPTION_CHAIR_LOCAL_X - 0.3,
-    0.08
+    RECEPTION_CHAIR_LOCAL_X - 0.37,
+    0.13
   );
   const deskFrontPt = rotateItemLocalPoint(desk, 2, 1, 0, 1.35);
   const seatFacingRad = (-desk.rotation * Math.PI) / 2;
@@ -678,6 +696,7 @@ export function getReceptionDeskPose(desk: PlacedItem): ReceptionDeskPose {
   const localPlaceSpots: Array<[number, number]> = [
     [-1.12, 0.06],
     [-1.12, -0.26],
+    [-0.60, -0.78],
     [-0.48, -0.78],
     [-0.23, -0.78],
     [1.12, 0.06],
@@ -907,6 +926,39 @@ export function buildWaitSeatSlots(
         approachTileY: chosenApp.z - 0.5,
         facingRad,
         seatHeight: isLux ? 0.396 : 0.377,
+        isOutdoor: !room,
+      });
+    } else if (item.catalogId === 'doctor_stool') {
+      const cx = item.gridX + 0.5;
+      const cz = item.gridY + 0.5;
+      const facingRad = (-item.rotation * Math.PI) / 2;
+      let chosenApp = rotateLocalSeatPoint(cx, cz, item.rotation, 0, 0.58);
+      if (obstacleBoxes) {
+        const offsets: Array<[number, number]> = [
+          [0, 0.58],
+          [0, 0.70],
+          [0.58, 0],
+          [-0.58, 0],
+          [0, -0.58],
+        ];
+        for (const [lx, lz] of offsets) {
+          const cand = rotateLocalSeatPoint(cx, cz, item.rotation, lx, lz);
+          if (isApproachOk(cand.x, cand.z, room, item.instanceId)) {
+            chosenApp = cand;
+            break;
+          }
+        }
+      }
+      seats.push({
+        seatKey: `${item.instanceId}_0`,
+        itemId: item.instanceId,
+        catalogId: item.catalogId,
+        seatTileX: cx - 0.5,
+        seatTileY: cz - 0.5,
+        approachTileX: chosenApp.x - 0.5,
+        approachTileY: chosenApp.z - 0.5,
+        facingRad,
+        seatHeight: 0.426,
         isOutdoor: !room,
       });
     }

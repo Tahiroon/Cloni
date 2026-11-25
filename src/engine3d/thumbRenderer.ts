@@ -29,7 +29,7 @@ interface PersistedThumbRecord {
 const THUMB_DB_NAME = 'therason_thumb_cache_v1';
 const THUMB_DB_VERSION = 1;
 const THUMB_STORE = 'thumbs';
-const THUMB_SCHEMA_VERSION = 1;
+const THUMB_SCHEMA_VERSION = 2;
 
 const thumbCache = new Map<string, string>();
 const glbRenderedKeys = new Set<string>();

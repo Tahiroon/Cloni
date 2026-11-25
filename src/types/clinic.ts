@@ -230,6 +230,8 @@ type PatientState =
   | 'drinking_water'
   | 'walking_to_wait'
   | 'waiting_checkin'
+  | 'walking_to_treatment_wait'
+  | 'waiting_in_treatment'
   | 'walking_to_station'
   | 'ready_for_exam'
   | 'in_exam'
@@ -291,6 +293,17 @@ export interface DeviceConsoleParams {
   ringPosCm?: number;
   tiltDeg?: number;
   currentTiltDeg?: number;
+  tensionKg?: number;
+  rpm?: number;
+  resistance?: number;
+  inclinePct?: number;
+  barHeightCm?: number;
+  weightKg?: number;
+  exercise?: string;
+  ballSize?: string;
+  gripKg?: number;
+  romDeg?: number;
+  dtrGrade?: string;
 }
 
 export interface PatientAttachedDevice {
